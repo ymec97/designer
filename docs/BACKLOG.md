@@ -38,6 +38,16 @@ evaluate (not decided):
   content whose scale differs a lot from the implied creation scale;
 - optional reference grid whose density communicates zoom level ambiently.
 
+### P2. Proportional group resize for multi-selection
+*Requested 2026-07-12 by Yarden. Post-MVP.*
+When multiple items are selected, show a bounding box with handles that
+resizes ALL selected elements proportionally — enlarge/shrink while
+preserving each item's internal proportions and their relative positions
+(scale positions and sizes about the box anchor). Applies to nodes, notes,
+ink strokes, and edge waypoints. Should be one undo step (batch operation —
+the operation layer already supports this). UI: replace the current
+single-selection-only handle box with a multi-selection variant.
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input
