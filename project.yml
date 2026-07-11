@@ -1,0 +1,61 @@
+name: Designer
+options:
+  bundleIdPrefix: com.yarden
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  DesignerKit:
+    path: DesignerKit
+targets:
+  Designer:
+    type: application
+    platform: macOS
+    sources:
+      - DesignerKit/Sources/Designer
+    dependencies:
+      - package: DesignerKit
+        product: DesignerModel
+      - package: DesignerKit
+        product: DesignerPersistence
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleName: Designer
+        CFBundleDisplayName: Designer
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        NSPrincipalClass: NSApplication
+        NSSupportsAutomaticTermination: true
+        NSSupportsSuddenTermination: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Designer Board
+            CFBundleTypeRole: Editor
+            LSItemContentTypes: [com.yarden.designer.board]
+            LSHandlerRank: Owner
+            LSTypeIsPackage: true
+            NSDocumentClass: Designer.BoardDocument
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.yarden.designer.board
+            UTTypeDescription: Designer Board
+            UTTypeConformsTo: [com.apple.package]
+            UTTypeTagSpecification:
+              public.filename-extension: [designerboard]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.yarden.designer
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: false
+        COMBINE_HIDPI_IMAGES: true
+        DEAD_CODE_STRIPPING: true
+schemes:
+  Designer:
+    build:
+      targets:
+        Designer: all
+    run:
+      config: Debug
