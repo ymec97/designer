@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import DesignerModel
 
 public protocol CanvasViewDelegate: AnyObject {
@@ -15,7 +16,14 @@ public final class CanvasView: NSView {
 
     public var board = Board(title: "") {
         didSet {
-            spatialIndex = SpatialIndex(board: board)
+            routeCache = SpatialIndex.resolveRoutes(for: board)
+            spatialIndex = SpatialIndex(board: board, edgeRoutes: routeCache)
+            edgeBatchCache = nil
+            boardRevision += 1
+            inkElementIDs = zOrderedElements.compactMap {
+                if case .ink = $0.content { return $0.id }
+                return nil
+            }
             zOrderedElements = board.elementsInZOrder
             selection.formIntersection(Set(board.elements.keys))
             needsDisplay = true
@@ -24,6 +32,73 @@ public final class CanvasView: NSView {
 
     /// Cached draw order — rebuilt on board changes, never per frame.
     private var zOrderedElements: [Element] = []
+    /// Resolved edge routes — rebuilt on board changes; only edges touched by
+    /// an in-flight drag are re-resolved per frame.
+    private var routeCache: [ElementID: EdgeGeometry.Route] = [:]
+    /// One world-space path holding every edge except `excluded` — stroked in
+    /// a single CG call through the CTM. Rebuilt when the exclusion set
+    /// changes (once per drag gesture), not per frame.
+    private var edgeBatchCache: (excluded: Set<ElementID>, path: CGPath)?
+
+    /// Bumped on every board change; keys the renderer's edge-layer cache.
+    private var boardRevision = 0
+
+    private func edgeBatchPath(excluding excluded: Set<ElementID>) -> CGPath {
+        if let cache = edgeBatchCache, cache.excluded == excluded {
+            return cache.path
+        }
+        let path = CGMutablePath()
+        for (id, route) in routeCache where !excluded.contains(id) {
+            guard let first = route.points.first else { continue }
+            path.move(to: CGPoint(x: first.x, y: first.y))
+            for point in route.points.dropFirst() {
+                path.addLine(to: CGPoint(x: point.x, y: point.y))
+            }
+        }
+        edgeBatchCache = (excluded, path)
+        return path
+    }
+
+    /// World-space node rect paths grouped by fill color, cached per board
+    /// revision (and per drag-exclusion set, rebuilt once per gesture).
+    private var nodeBatchCache: (revision: Int, excluded: Set<ElementID>, paths: [(color: CGColor, path: CGPath)])?
+    /// Ink elements are rare; they draw individually on the fast path.
+    private var inkElementIDs: [ElementID] = []
+
+    private func nodeBatchPaths(excluding excluded: Set<ElementID>) -> [(color: CGColor, path: CGPath)] {
+        if let cache = nodeBatchCache, cache.revision == boardRevision, cache.excluded == excluded {
+            return cache.paths
+        }
+        let hiddenLayers = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        var byColor: [CGColor: CGMutablePath] = [:]
+        for element in zOrderedElements {
+            guard !excluded.contains(element.id),
+                  let node = element.node,
+                  element.layerIDs.contains(where: { !hiddenLayers.contains($0) }) else { continue }
+            let color: CGColor
+            if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
+                color = parsed.cgColor
+            } else {
+                color = renderer.resolvedNodeFill(for: node.semantic.kind)
+            }
+            // Explicit insert: `[_, default:]` with a method call on a class
+            // value is a get, so the default would never be stored.
+            let path: CGMutablePath
+            if let existing = byColor[color] {
+                path = existing
+            } else {
+                path = CGMutablePath()
+                byColor[color] = path
+            }
+            path.addRect(CGRect(
+                x: node.frame.x, y: node.frame.y,
+                width: node.frame.width, height: node.frame.height
+            ))
+        }
+        let paths = byColor.map { (color: $0.key, path: $0.value as CGPath) }
+        nodeBatchCache = (boardRevision, excluded, paths)
+        return paths
+    }
 
     /// Settable so controllers can restore saved view state and test drivers
     /// can script navigation.
@@ -40,9 +115,6 @@ public final class CanvasView: NSView {
         }
     }
 
-    /// Below this scale a 160-wide node is under ~29px — simplified rendering.
-    static let simplifiedRenderScale: Double = 0.18
-
     private var spatialIndex = SpatialIndex()
     private let renderer = BoardRenderer()
 
@@ -56,11 +128,23 @@ public final class CanvasView: NSView {
         case move(originals: [ElementID: Rect], startWorld: Point)
         case resize(id: ElementID, handle: ResizeHandle, original: Rect, startWorld: Point)
         case rubberBand(start: CGPoint, current: CGPoint)
+        case connect(from: ElementID, current: CGPoint, target: ElementID?)
     }
+
+    /// World-space width of the border band that starts a connection drag
+    /// instead of a move (in view pixels, so it feels constant at any zoom).
+    private static let connectBandViewWidth: CGFloat = 10
 
     private var gesture: GestureState = .idle
     private var labelEditor: NSTextField?
     private var editingElementID: ElementID?
+    /// Typing undo stays local to the editing session; only the committed
+    /// rename lands on the document's undo stack (as one operation).
+    private var labelEditingUndoManager = UndoManager()
+    private var edgePopover: NSPopover?
+    /// Edge state when the popover opened; the diff commits as one operation.
+    private var edgeEditBaseline: (id: ElementID, edge: DesignerModel.Edge)?
+    private var edgeEditCurrent: EdgeEditorView.Values?
 
     // MARK: Setup
 
@@ -85,6 +169,14 @@ public final class CanvasView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        var probeT0 = CACurrentMediaTime()
+        var probeReport = ""
+        func probe(_ name: String) {
+            guard Self.perfProbe != nil else { return }
+            let now = CACurrentMediaTime()
+            probeReport += String(format: "%@=%.2f ", name, (now - probeT0) * 1000)
+            probeT0 = now
+        }
 
         context.setFillColor(Palette.canvasBackground.cgColor)
         context.fill(bounds)
@@ -94,38 +186,132 @@ public final class CanvasView: NSView {
             return
         }
 
-        let visibleWorld = viewport.visibleWorldRect(viewSize: bounds.size)
-        let visibleIDs = spatialIndex.query(visibleWorld)
-        let hiddenLayers = Set(board.layers.filter { !$0.isVisible }.map(\.id))
-
-        // Cached z-order; per-frame work is a filter, not a sort.
-        let drawables = zOrderedElements.filter { element in
-            visibleIDs.contains(element.id)
-                && element.layerIDs.contains { !hiddenLayers.contains($0) }
+        // Edges anchored to a node being dragged follow it live; their cached
+        // routes and indexed bounds are stale until the gesture commits, so
+        // they are collected and re-resolved individually.
+        var dragAffectedEdges: Set<ElementID> = []
+        if !transientFrames.isEmpty {
+            for id in transientFrames.keys {
+                for edge in board.edges(anchoredTo: id) {
+                    dragAffectedEdges.insert(edge.id)
+                }
+            }
+        }
+        let overrideFrames = transientFrames.isEmpty
+            ? nil
+            : board.frameProvider(overrides: transientFrames)
+        // Routes come from the per-board-revision cache except for the few
+        // edges tracking an in-flight drag — resolving 4k routes per frame
+        // was the difference between 45ms and 16ms frames at fit zoom.
+        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache] element in
+            if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
+                return EdgeGeometry.route(for: edge, frames: overrideFrames)
+            }
+            return routeCache[element.id]
         }
 
-        // LOD: when nodes are a few pixels wide, rounded paths, strokes, and
-        // text are invisible anyway — batch-fill plain rects grouped by color
-        // (one CG call per color instead of four per node).
-        if viewport.scale < Self.simplifiedRenderScale {
-            renderer.drawSimplified(
-                drawables,
+        let hiddenLayers = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        func isOnVisibleLayer(_ element: Element) -> Bool {
+            element.layerIDs.contains { !hiddenLayers.contains($0) }
+        }
+
+        if viewport.scale < BoardRenderer.textVisibilityScale {
+            // FAR-ZOOM FAST PATH. Below caption scale, edges are plain lines
+            // and nodes are plain rects — both come from world-space paths
+            // cached per board revision and drawn through the CTM. No culling,
+            // no per-element Swift work: the probe showed query+filter+
+            // per-node batching cost ~11ms/frame at 6k elements; this path
+            // does a handful of CG calls regardless of element count.
+            renderer.strokeEdgeBatch(
+                edgeBatchPath(excluding: dragAffectedEdges),
                 in: context,
-                viewport: viewport,
-                transientFrames: transientFrames,
-                selection: selection
+                viewport: viewport
             )
-        } else {
-            for element in drawables {
-                renderer.draw(
-                    element,
-                    in: context,
-                    viewport: viewport,
-                    frameOverride: transientFrames[element.id],
-                    isSelected: selection.contains(element.id),
-                    suppressText: element.id == editingElementID
+            probe("edges")
+
+            renderer.fillNodeBatch(
+                nodeBatchPaths(excluding: Set(transientFrames.keys)),
+                in: context,
+                viewport: viewport
+            )
+
+            // Individual overlays: drag-affected edges, selection, in-flight
+            // drags, and ink (rare at this scale, drawn as-is).
+            for id in dragAffectedEdges {
+                guard let element = board.elements[id], isOnVisibleLayer(element),
+                      let edge = element.edge, let route = routeFor(element) else { continue }
+                renderer.drawEdge(
+                    edge, route: route, in: context, viewport: viewport,
+                    isSelected: selection.contains(id), simplified: true
                 )
             }
+            for id in selection {
+                guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
+                if let edge = element.edge {
+                    guard !dragAffectedEdges.contains(id), let route = routeFor(element) else { continue }
+                    renderer.drawEdge(
+                        edge, route: route, in: context, viewport: viewport,
+                        isSelected: true, simplified: true
+                    )
+                } else if let node = element.node {
+                    renderer.drawSimplifiedNode(
+                        node, frame: transientFrames[id] ?? node.frame,
+                        in: context, viewport: viewport, isSelected: true
+                    )
+                }
+            }
+            for (id, frame) in transientFrames where !selection.contains(id) {
+                guard let node = board.elements[id]?.node else { continue }
+                renderer.drawSimplifiedNode(
+                    node, frame: frame, in: context, viewport: viewport, isSelected: false
+                )
+            }
+            for id in inkElementIDs {
+                guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
+                renderer.draw(
+                    element, in: context, viewport: viewport,
+                    isSelected: selection.contains(id)
+                )
+            }
+            probe("nodes")
+        } else {
+            // NEAR-ZOOM FULL PATH: cull to the viewport, draw each element
+            // with full detail (rounded nodes, text, arrowheads, captions).
+            let visibleWorld = viewport.visibleWorldRect(viewSize: bounds.size)
+            var visibleIDs = spatialIndex.query(visibleWorld)
+            visibleIDs.formUnion(dragAffectedEdges)
+            probe("query")
+
+            // Cached z-order; per-frame work is a filter, not a sort.
+            let drawables = zOrderedElements.filter { element in
+                visibleIDs.contains(element.id) && isOnVisibleLayer(element)
+            }
+            probe("filter")
+
+            for element in drawables {
+                if let edge = element.edge {
+                    if let route = routeFor(element) {
+                        renderer.drawEdge(
+                            edge, route: route,
+                            in: context, viewport: viewport,
+                            isSelected: selection.contains(element.id)
+                        )
+                    }
+                } else {
+                    renderer.draw(
+                        element,
+                        in: context,
+                        viewport: viewport,
+                        frameOverride: transientFrames[element.id],
+                        isSelected: selection.contains(element.id),
+                        suppressText: element.id == editingElementID
+                    )
+                }
+            }
+            probe("nodes")
+        }
+        if let report = Self.perfProbe, !probeReport.isEmpty {
+            report(probeReport)
         }
 
         if let handleBox = singleSelectionViewRect() {
@@ -134,6 +320,23 @@ public final class CanvasView: NSView {
 
         if case .rubberBand(let start, let current) = gesture {
             renderer.drawRubberBand(rectFrom(start, current), in: context)
+        }
+
+        if case .connect(let fromID, let current, let target) = gesture {
+            let frames = board.frameProvider(overrides: transientFrames)
+            if let frame = frames(fromID) {
+                let startWorld = EdgeGeometry.point(
+                    on: frame,
+                    side: EdgeGeometry.autoSide(from: frame, toward: viewport.toWorld(current)),
+                    offset: 0.5
+                )
+                renderer.drawConnectPreview(
+                    from: viewport.toView(startWorld), to: current, in: context
+                )
+            }
+            if let target, let targetFrame = frames(target) {
+                renderer.highlightConnectTarget(viewport.toView(targetFrame), in: context)
+            }
         }
     }
 
@@ -184,6 +387,8 @@ public final class CanvasView: NSView {
 
     /// Temporary M1 debug hook; removed once the interaction bug is fixed.
     public static var debugTrace: ((String) -> Void)?
+    /// Perf probe: receives per-section draw timings (ms) when set.
+    public static var perfProbe: ((String) -> Void)?
 
     public override func mouseDown(with event: NSEvent) {
         Self.debugTrace?("mouseDown clicks=\(event.clickCount) window=\(event.locationInWindow)")
@@ -212,6 +417,14 @@ public final class CanvasView: NSView {
         }
 
         let hit = editableElement(at: point)
+
+        // Starting a drag from a node's border band creates a connection.
+        if let hit, hit.node != nil, !event.modifierFlags.contains(.shift),
+           isInConnectBand(point, of: hit) {
+            gesture = .connect(from: hit.id, current: point, target: nil)
+            return
+        }
+
         if let hit {
             if event.modifierFlags.contains(.shift) {
                 if selection.contains(hit.id) {
@@ -273,6 +486,12 @@ public final class CanvasView: NSView {
             gesture = .rubberBand(start: start, current: point)
             needsDisplay = true
 
+        case .connect(let fromID, _, _):
+            let target = editableElement(at: point)
+            let targetID = (target?.node != nil && target?.id != fromID) ? target?.id : nil
+            gesture = .connect(from: fromID, current: point, target: targetID)
+            needsDisplay = true
+
         case .idle:
             break
         }
@@ -302,16 +521,53 @@ public final class CanvasView: NSView {
             }
             needsDisplay = true
 
+        case .connect(let fromID, _, let targetID):
+            if let targetID {
+                let layerIDs = activeLayerIDs()
+                let element = Element(
+                    layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+                    sortKey: board.topSortKey,
+                    content: .edge(Edge(
+                        from: .element(fromID, side: nil, offset: nil),
+                        to: .element(targetID, side: nil, offset: nil)
+                    ))
+                )
+                delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
+                selection = [element.id]
+            }
+            needsDisplay = true
+
         case .mouseDown, .idle:
             break
         }
         gesture = .idle
     }
 
+    /// Inside the node but within a thin band of its border (or slightly
+    /// outside it) — the affordance for starting a connection.
+    private func isInConnectBand(_ viewPoint: CGPoint, of element: Element) -> Bool {
+        guard let frame = SpatialIndex.boundingRect(of: element) else { return false }
+        let world = viewport.toWorld(viewPoint)
+        let band = Double(Self.connectBandViewWidth) / viewport.scale
+        let insideExpanded = Rect(
+            x: frame.x - band, y: frame.y - band,
+            width: frame.width + band * 2, height: frame.height + band * 2
+        ).contains(world)
+        let insideCore = Rect(
+            x: frame.x + band, y: frame.y + band,
+            width: max(frame.width - band * 2, 0), height: max(frame.height - band * 2, 0)
+        ).contains(world)
+        return insideExpanded && !insideCore
+    }
+
     private func handleDoubleClick(at point: CGPoint) {
         if let hit = editableElement(at: point) {
             selection = [hit.id]
-            beginLabelEdit(for: hit)
+            if hit.edge != nil {
+                presentEdgeEditor(for: hit, at: point)
+            } else {
+                beginLabelEdit(for: hit)
+            }
         } else {
             createBlock(at: viewport.toWorld(point))
         }
@@ -347,11 +603,19 @@ public final class CanvasView: NSView {
 
     @objc public func deleteSelection(_ sender: Any?) {
         guard !selection.isEmpty else { return }
-        let operations = selection.compactMap { id -> BoardOperation? in
-            board.elements[id] != nil ? .removeElement(id) : nil
+        // Deleting a node takes its connectors with it — one undo step.
+        var doomed = selection.filter { board.elements[$0] != nil }
+        for id in doomed {
+            for edge in board.edges(anchoredTo: id) {
+                doomed.insert(edge.id)
+            }
         }
         selection = []
-        delegate?.canvasView(self, perform: .batch(operations), actionName: "Delete")
+        delegate?.canvasView(
+            self,
+            perform: .batch(doomed.map { .removeElement($0) }),
+            actionName: "Delete"
+        )
     }
 
     @objc public func addBlock(_ sender: Any?) {
@@ -415,6 +679,8 @@ public final class CanvasView: NSView {
         )
         field.target = self
         field.action = #selector(labelEditorDidCommit(_:))
+        field.delegate = self
+        labelEditingUndoManager = UndoManager()
         addSubview(field)
         window?.makeFirstResponder(field)
         labelEditor = field
@@ -426,7 +692,7 @@ public final class CanvasView: NSView {
         commitLabelEditor()
     }
 
-    func commitLabelEditor() {
+    public func commitLabelEditor() {
         guard let field = labelEditor, let id = editingElementID else { return }
         let text = field.stringValue
         field.removeFromSuperview()
@@ -447,6 +713,49 @@ public final class CanvasView: NSView {
         }
         delegate?.canvasView(self, perform: .replaceElement(element), actionName: "Rename")
         window?.makeFirstResponder(self)
+    }
+
+    // MARK: Edge editor popover
+
+    private func presentEdgeEditor(for element: Element, at viewPoint: CGPoint) {
+        guard let edge = element.edge else { return }
+        dismissEdgeEditor()
+
+        edgeEditBaseline = (element.id, edge)
+        let editor = EdgeEditorView(values: .init(edge: edge)) { [weak self] values in
+            self?.edgeEditCurrent = values
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: editor)
+        popover.delegate = self
+        popover.show(
+            relativeTo: CGRect(x: viewPoint.x - 2, y: viewPoint.y - 2, width: 4, height: 4),
+            of: self,
+            preferredEdge: .maxY
+        )
+        edgePopover = popover
+    }
+
+    private func dismissEdgeEditor() {
+        edgePopover?.close()
+        edgePopover = nil
+    }
+
+    fileprivate func commitEdgeEditor() {
+        defer {
+            edgeEditBaseline = nil
+            edgeEditCurrent = nil
+            edgePopover = nil
+        }
+        guard
+            let baseline = edgeEditBaseline,
+            let values = edgeEditCurrent,
+            values != EdgeEditorView.Values(edge: baseline.edge),
+            var element = board.elements[baseline.id]
+        else { return }
+        element.content = .edge(values.applied(to: baseline.edge))
+        delegate?.canvasView(self, perform: .replaceElement(element), actionName: "Edit Connector")
     }
 
     private func currentLabel(of element: Element) -> String {
@@ -520,7 +829,8 @@ public final class CanvasView: NSView {
                 hypot($0.x - world.x, $0.y - world.y) <= tolerance * 2
             }
         case .edge:
-            return false
+            guard let route = routeCache[element.id] else { return false }
+            return route.distance(to: world) <= tolerance
         }
     }
 
@@ -566,6 +876,8 @@ public final class CanvasView: NSView {
                $0.rect(around: handleBox).insetBy(dx: -3, dy: -3).contains(point)
            }) {
             handle.cursor.set()
+        } else if let hit = editableElement(at: point), hit.node != nil, isInConnectBand(point, of: hit) {
+            NSCursor.crosshair.set()
         } else {
             NSCursor.arrow.set()
         }
@@ -574,6 +886,7 @@ public final class CanvasView: NSView {
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         renderer.invalidateCaches()
+        nodeBatchCache = nil // baked-in resolved colors
         needsDisplay = true
     }
 
@@ -585,5 +898,18 @@ public final class CanvasView: NSView {
             options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: self
         ))
+    }
+}
+
+extension CanvasView: NSPopoverDelegate {
+    public func popoverDidClose(_ notification: Notification) {
+        commitEdgeEditor()
+    }
+}
+
+extension CanvasView: NSTextFieldDelegate {
+    /// Keeps the field editor's typing undo out of the document undo stack.
+    public func undoManager(for view: NSTextView) -> UndoManager? {
+        labelEditingUndoManager
     }
 }

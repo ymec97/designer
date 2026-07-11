@@ -20,12 +20,38 @@ public struct SpatialIndex {
     }
 
     public init(board: Board, cellSize: Double = 512) {
+        self.init(board: board, edgeRoutes: Self.resolveRoutes(for: board), cellSize: cellSize)
+    }
+
+    /// Variant taking pre-resolved routes so callers that cache routes (the
+    /// canvas does) don't pay for resolution twice.
+    public init(board: Board, edgeRoutes: [ElementID: EdgeGeometry.Route], cellSize: Double = 512) {
         self.init(cellSize: cellSize)
         for element in board.elements.values {
             if let rect = Self.boundingRect(of: element) {
                 insert(element.id, bounds: rect)
             }
         }
+        // Edges are indexed by their resolved route, padded so near-line hit
+        // queries land in their cells.
+        for (id, route) in edgeRoutes {
+            let bounds = route.boundingRect
+            insert(id, bounds: Rect(
+                x: bounds.x - 8, y: bounds.y - 8,
+                width: bounds.width + 16, height: bounds.height + 16
+            ))
+        }
+    }
+
+    public static func resolveRoutes(for board: Board) -> [ElementID: EdgeGeometry.Route] {
+        let frames = board.frameProvider()
+        var routes: [ElementID: EdgeGeometry.Route] = [:]
+        for element in board.elements.values {
+            if let edge = element.edge, let route = EdgeGeometry.route(for: edge, frames: frames) {
+                routes[element.id] = route
+            }
+        }
+        return routes
     }
 
     // MARK: Maintenance

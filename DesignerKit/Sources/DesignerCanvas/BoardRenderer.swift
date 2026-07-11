@@ -148,49 +148,229 @@ final class BoardRenderer {
         }
     }
 
-    /// LOD path for far-out zoom: plain rects batched by fill color. One
-    /// `fill([CGRect])` per distinct color replaces four path operations per
-    /// node — the difference between 22% and ~0% dropped frames at 2k nodes.
-    func drawSimplified(
-        _ elements: [Element],
+    // MARK: Edges
+
+    func drawEdge(
+        _ edge: Edge,
+        route: EdgeGeometry.Route,
         in context: CGContext,
         viewport: CanvasViewport,
-        transientFrames: [ElementID: Rect],
-        selection: Set<ElementID>
+        isSelected: Bool,
+        simplified: Bool = false
     ) {
-        var rectsByColor: [CGColor: [CGRect]] = [:]
-        var selectedRects: [CGRect] = []
+        let viewPoints = route.points.map { viewport.toView($0) }
+        guard viewPoints.count >= 2 else { return }
 
-        for element in elements {
-            switch element.content {
-            case .node(let node):
-                let frame = transientFrames[element.id] ?? node.frame
-                let rect = viewport.toView(frame)
-                let fill: CGColor
-                if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
-                    fill = parsed.cgColor
-                } else {
-                    fill = resolvedNodeFill(for: node.semantic.kind)
-                }
-                rectsByColor[fill, default: []].append(rect)
-                if selection.contains(element.id) { selectedRects.append(rect) }
-            case .note:
-                break // Sub-pixel text: nothing useful to draw.
-            case .ink(let ink):
-                drawInk(ink, in: context, viewport: viewport, isSelected: selection.contains(element.id))
-            case .edge:
-                break // M2
-            }
+        let strokeColor = color(hex: edge.style.stroke, fallback: Palette.edgeStroke)
+        let lineWidth = max(CGFloat(edge.style.strokeWidth ?? 1.5) * viewport.scale, simplified ? 0.5 : 1)
+
+        if isSelected {
+            context.setStrokeColor(Palette.selection.withAlphaComponent(0.35).cgColor)
+            context.setLineWidth(lineWidth + 4)
+            strokePolyline(viewPoints, in: context)
         }
 
-        for (color, rects) in rectsByColor {
+        context.setStrokeColor(isSelected ? Palette.selection.cgColor : strokeColor)
+        context.setLineWidth(lineWidth)
+        strokePolyline(viewPoints, in: context)
+
+        guard !simplified else { return }
+
+        // Arrowheads by direction.
+        let arrowColor = isSelected ? Palette.selection.cgColor : strokeColor
+        let direction = edge.semantic.direction
+        if direction == .forward || direction == .both {
+            drawArrowhead(
+                at: viewPoints[viewPoints.count - 1], from: viewPoints[viewPoints.count - 2],
+                color: arrowColor, scale: viewport.scale, in: context
+            )
+        }
+        if direction == .backward || direction == .both {
+            drawArrowhead(
+                at: viewPoints[0], from: viewPoints[1],
+                color: arrowColor, scale: viewport.scale, in: context
+            )
+        }
+
+        // Label pill + well-known-key badges at the route midpoint.
+        if viewport.scale >= Self.textVisibilityScale {
+            drawEdgeCaption(edge, at: viewport.toView(route.midpoint), viewport: viewport, in: context)
+        }
+    }
+
+    private func strokePolyline(_ points: [CGPoint], in context: CGContext) {
+        context.beginPath()
+        context.move(to: points[0])
+        for point in points.dropFirst() {
+            context.addLine(to: point)
+        }
+        context.strokePath()
+    }
+
+    private func drawArrowhead(
+        at tip: CGPoint, from previous: CGPoint,
+        color: CGColor, scale: Double, in context: CGContext
+    ) {
+        let angle = atan2(tip.y - previous.y, tip.x - previous.x)
+        let length = 9 * scale
+        let spread = 0.46
+        let left = CGPoint(
+            x: tip.x - length * cos(angle - spread),
+            y: tip.y - length * sin(angle - spread)
+        )
+        let right = CGPoint(
+            x: tip.x - length * cos(angle + spread),
+            y: tip.y - length * sin(angle + spread)
+        )
+        context.setFillColor(color)
+        context.beginPath()
+        context.move(to: tip)
+        context.addLine(to: left)
+        context.addLine(to: right)
+        context.closePath()
+        context.fillPath()
+    }
+
+    private func drawEdgeCaption(
+        _ edge: Edge, at center: CGPoint, viewport: CanvasViewport, in context: CGContext
+    ) {
+        let label = edge.semantic.label ?? ""
+        let badgeKeys = [
+            WellKnownEdgeProperty.protocolKey,
+            WellKnownEdgeProperty.data,
+            WellKnownEdgeProperty.condition,
+        ]
+        let badges = badgeKeys.compactMap { key in
+            edge.semantic.properties[key].map { "\(key): \($0)" }
+        }
+        guard !label.isEmpty || !badges.isEmpty else { return }
+
+        var lines: [NSAttributedString] = []
+        if !label.isEmpty {
+            lines.append(attributedString(label, fontSize: 12 * viewport.scale, color: Palette.nodeText))
+        }
+        if !badges.isEmpty {
+            lines.append(attributedString(
+                badges.joined(separator: "  ·  "),
+                fontSize: 10 * viewport.scale,
+                color: Palette.noteText
+            ))
+        }
+
+        let sizes = lines.map { $0.size() }
+        let width = sizes.map(\.width).max() ?? 0
+        let height = sizes.map(\.height).reduce(0, +)
+        let padding = 5 * viewport.scale
+        let pill = CGRect(
+            x: center.x - width / 2 - padding,
+            y: center.y - height / 2 - padding,
+            width: width + padding * 2,
+            height: height + padding * 2
+        )
+        let path = CGPath(
+            roundedRect: pill,
+            cornerWidth: min(6 * viewport.scale, pill.height / 2),
+            cornerHeight: min(6 * viewport.scale, pill.height / 2),
+            transform: nil
+        )
+        context.setFillColor(Palette.captionBackground.cgColor)
+        context.addPath(path)
+        context.fillPath()
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        var y = pill.minY + padding
+        for (line, size) in zip(lines, sizes) {
+            line.draw(at: CGPoint(x: center.x - size.width / 2, y: y))
+            y += size.height
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Live preview while dragging a new connection.
+    func drawConnectPreview(from: CGPoint, to: CGPoint, in context: CGContext) {
+        context.setStrokeColor(Palette.selection.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineDash(phase: 0, lengths: [6, 4])
+        strokePolyline([from, to], in: context)
+        context.setLineDash(phase: 0, lengths: [])
+        drawArrowhead(at: to, from: from, color: Palette.selection.cgColor, scale: 1, in: context)
+    }
+
+    func highlightConnectTarget(_ viewRect: CGRect, in context: CGContext) {
+        context.setStrokeColor(Palette.selection.cgColor)
+        context.setLineWidth(2.5)
+        let path = CGPath(
+            roundedRect: viewRect.insetBy(dx: -3, dy: -3),
+            cornerWidth: 8, cornerHeight: 8, transform: nil
+        )
+        context.addPath(path)
+        context.strokePath()
+    }
+
+    /// Fills pre-built world-space node paths (one per fill color) through
+    /// the CTM — the far-zoom node pass is a handful of CG calls with zero
+    /// per-node Swift work.
+    func fillNodeBatch(
+        _ paths: [(color: CGColor, path: CGPath)],
+        in context: CGContext,
+        viewport: CanvasViewport
+    ) {
+        guard !paths.isEmpty else { return }
+        context.saveGState()
+        context.translateBy(
+            x: -viewport.origin.x * viewport.scale,
+            y: -viewport.origin.y * viewport.scale
+        )
+        context.scaleBy(x: viewport.scale, y: viewport.scale)
+        for (color, path) in paths {
             context.setFillColor(color)
-            context.fill(rects)
+            context.addPath(path)
+            context.fillPath()
         }
-        if !selectedRects.isEmpty {
+        context.restoreGState()
+    }
+
+    /// Strokes a pre-built world-space path holding every edge in ONE call,
+    /// mapped through the CTM instead of transforming 15k points on the CPU.
+    /// Antialiasing off: at these scales edges are ~1px lines and AA is the
+    /// dominant rasterization cost.
+    func strokeEdgeBatch(_ worldPath: CGPath, in context: CGContext, viewport: CanvasViewport) {
+        guard !worldPath.isEmpty else { return }
+        context.saveGState()
+        context.setShouldAntialias(false)
+        context.translateBy(
+            x: -viewport.origin.x * viewport.scale,
+            y: -viewport.origin.y * viewport.scale
+        )
+        context.scaleBy(x: viewport.scale, y: viewport.scale)
+        context.setStrokeColor(Palette.edgeStroke.cgColor)
+        context.setLineWidth(max(1.5, 0.75 / viewport.scale)) // ≥0.75px on screen
+        context.addPath(worldPath)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// Far-zoom rendering of an individual node outside the cached batch
+    /// (in-flight drags, selection): a plain rect, visually consistent with
+    /// the batched fill.
+    func drawSimplifiedNode(
+        _ node: Node, frame: Rect,
+        in context: CGContext, viewport: CanvasViewport, isSelected: Bool
+    ) {
+        let rect = viewport.toView(frame)
+        let fill: CGColor
+        if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
+            fill = parsed.cgColor
+        } else {
+            fill = resolvedNodeFill(for: node.semantic.kind)
+        }
+        context.setFillColor(fill)
+        context.fill(rect)
+        if isSelected {
             context.setStrokeColor(Palette.selection.cgColor)
             context.setLineWidth(1.5)
-            for rect in selectedRects { context.stroke(rect) }
+            context.stroke(rect)
         }
     }
 
@@ -316,6 +496,9 @@ final class BoardRenderer {
 enum Palette {
     static let selection = NSColor.controlAccentColor
     static let nodeStroke = NSColor.secondaryLabelColor
+    static let edgeStroke = NSColor.secondaryLabelColor
+    /// Slightly translucent so captions sit on lines without hard boxes.
+    static let captionBackground = NSColor.windowBackgroundColor.withAlphaComponent(0.88)
     static let nodeText = NSColor.labelColor
     static let noteText = NSColor.secondaryLabelColor
     static let inkStroke = NSColor.labelColor

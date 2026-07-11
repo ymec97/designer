@@ -27,10 +27,12 @@ final class PerfTestDriver: NSObject {
         var board = Board(title: "Perf \(nodeCount)")
         let layerID = board.layers[0].id
         let kinds: [NodeKind] = [.service, .database, .queue, .cache, .gateway, .client]
-        var sortKey: String? = nil
+        let totalElements = nodeCount * 3 // nodes + up to ~2 edges each
+        var elementIndex = 0
+        var nodeIDs: [ElementID] = []
         for i in 0..<nodeCount {
-            let key = SortKey.after(sortKey)
-            sortKey = key
+            let key = SortKey.bulk(elementIndex, of: totalElements)
+            elementIndex += 1
             let element = Element(
                 layerIDs: [layerID],
                 sortKey: key,
@@ -47,6 +49,34 @@ final class PerfTestDriver: NSObject {
                 ))
             )
             board.elements[element.id] = element
+            nodeIDs.append(element.id)
+        }
+
+        // ~4k connectors (D12): grid neighbors right + down, mixed routing,
+        // captions on a subset to exercise the label path.
+        var edgeCount = 0
+        for i in 0..<nodeCount {
+            for target in [i % 50 < 49 ? i + 1 : nil, i + 50 < nodeCount ? i + 50 : nil].compactMap({ $0 }) {
+                let key = SortKey.bulk(elementIndex, of: totalElements)
+                elementIndex += 1
+                var semantic = EdgeSemantic()
+                if edgeCount % 5 == 0 {
+                    semantic.label = "call \(edgeCount)"
+                    semantic.properties[WellKnownEdgeProperty.protocolKey] = "gRPC"
+                }
+                let element = Element(
+                    layerIDs: [layerID],
+                    sortKey: key,
+                    content: .edge(Edge(
+                        semantic: semantic,
+                        from: .element(nodeIDs[i], side: nil, offset: nil),
+                        to: .element(nodeIDs[target], side: nil, offset: nil),
+                        routing: edgeCount % 3 == 0 ? .orthogonal : .straight
+                    ))
+                )
+                board.elements[element.id] = element
+                edgeCount += 1
+            }
         }
         return board
     }
@@ -57,6 +87,13 @@ final class PerfTestDriver: NSObject {
     }
 
     func start() {
+        if CommandLine.arguments.contains("--perf-probe") {
+            var counter = 0
+            CanvasView.perfProbe = { report in
+                counter += 1
+                if counter % 45 == 0 { print("PROBE", report) }
+            }
+        }
         canvasView.zoomToFit(nil)
         fitViewport = canvasView.viewport
         var start = fitViewport
@@ -67,6 +104,16 @@ final class PerfTestDriver: NSObject {
         let link = canvasView.displayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
+
+        // The display link silently pauses when the window is occluded
+        // (locked screen, display asleep). Fail loudly instead of hanging.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.startTime == 0 else { return }
+            FileHandle.standardError.write(Data(
+                "PERF-TEST STALLED: display link never fired — the screen is likely locked or asleep. Run again with the display awake.\n".utf8
+            ))
+            exit(2)
+        }
     }
 
     @objc private func tick(_ link: CADisplayLink) {
@@ -120,9 +167,10 @@ final class PerfTestDriver: NSObject {
         let dropped = deltas.filter { $0 > nominal * 1.6 }.count
         let droppedFraction = Double(dropped) / Double(deltas.count)
 
+        let edgeCount = canvasView.board.elements.values.filter { $0.edge != nil }.count
         let report = String(
-            format: "PERF-TEST nodes=%d refresh=%.1fHz frames=%d avg=%.2fms p95=%.2fms max=%.2fms dropped=%d (%.1f%%)",
-            Self.nodeCount, 1 / nominal, deltas.count,
+            format: "PERF-TEST nodes=%d edges=%d refresh=%.1fHz frames=%d avg=%.2fms p95=%.2fms max=%.2fms dropped=%d (%.1f%%)",
+            Self.nodeCount, edgeCount, 1 / nominal, deltas.count,
             average * 1000, p95 * 1000, (sorted.last ?? 0) * 1000,
             dropped, droppedFraction * 100
         )

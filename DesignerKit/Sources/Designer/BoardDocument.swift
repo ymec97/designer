@@ -40,10 +40,19 @@ final class BoardDocument: NSDocument, ObservableObject {
         DesignerCanvas.CanvasView.debugTrace?("document.perform \(actionName)")
         do {
             let inverse = try board.apply(operation)
-            undoManager?.registerUndo(withTarget: self) { document in
+            guard let undoManager else { return }
+            // One operation = exactly one undo step. AppKit's default
+            // per-event grouping would merge operations that happen to share
+            // a runloop cycle (e.g. a label commit followed by a connect in
+            // one event, or future agent batches) into a single undo.
+            undoManager.groupsByEvent = false
+            let needsGroup = !undoManager.isUndoing && !undoManager.isRedoing
+            if needsGroup { undoManager.beginUndoGrouping() }
+            undoManager.registerUndo(withTarget: self) { document in
                 document.perform(inverse, actionName: actionName)
             }
-            undoManager?.setActionName(actionName)
+            undoManager.setActionName(actionName)
+            if needsGroup { undoManager.endUndoGrouping() }
         } catch {
             presentError(error)
         }

@@ -39,9 +39,12 @@ final class UITestDriver {
         step3DragBlock()
         step4RenderedPixels()
         step5UndoRedo()
+        step6ConnectTwoBlocks()
+        step7EdgeFollowsMove()
+        step8CascadeDelete()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo all verified through sendEvent")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, cascade verified")
             exit(0)
         } else {
             for failure in failures {
@@ -170,6 +173,127 @@ final class UITestDriver {
         expect(
             document.board.elements.count == countBefore,
             "3 redos should restore \(countBefore) element(s)"
+        )
+    }
+
+    private var firstNodeID: ElementID? {
+        document.board.elements.values
+            .filter { $0.node != nil }
+            .min { $0.sortKey < $1.sortKey }?.id
+    }
+
+    private func nodeFrame(_ id: ElementID?) -> Rect? {
+        id.flatMap { document.board.elements[$0]?.node?.frame }
+    }
+
+    private func edgeElements() -> [Element] {
+        document.board.elements.values.filter { $0.edge != nil }
+    }
+
+    private func step6ConnectTwoBlocks() {
+        guard let aID = firstNodeID, let aFrame = nodeFrame(aID) else {
+            expect(false, "no source block for connect")
+            return
+        }
+        // Create block B to the right of A.
+        let bWorldCenter = Point(x: aFrame.maxX + 320, y: aFrame.midY)
+        let bView = canvasView.viewport.toView(bWorldCenter)
+        click(at: bView, clickCount: 1)
+        click(at: bView, clickCount: 2)
+        pumpRunLoop()
+        key(53) // escape closes the label editor without a name
+        pumpRunLoop()
+        canvasView.commitLabelEditor()
+        pumpRunLoop()
+        expect(
+            document.board.elements.values.filter { $0.node != nil }.count == 2,
+            "second block should exist"
+        )
+
+        // Drag from A's right border band to B's center.
+        let borderView = canvasView.viewport.toView(Point(x: aFrame.maxX - 2, y: aFrame.midY))
+        send(.leftMouseDown, at: borderView, clickCount: 1)
+        for i in 1...6 {
+            let t = CGFloat(i) / 6
+            send(.leftMouseDragged, at: CGPoint(
+                x: borderView.x + (bView.x - borderView.x) * t,
+                y: borderView.y + (bView.y - borderView.y) * t
+            ), clickCount: 1)
+        }
+        send(.leftMouseUp, at: bView, clickCount: 1)
+        pumpRunLoop()
+
+        let edges = edgeElements()
+        expect(edges.count == 1, "border drag should create exactly 1 edge, got \(edges.count)")
+        if let edge = edges.first?.edge {
+            expect(edge.from.elementID == aID, "edge should start at block A")
+        }
+    }
+
+    private func step7EdgeFollowsMove() {
+        guard let edgeElement = edgeElements().first,
+              let edge = edgeElement.edge,
+              let bID = edge.to.elementID,
+              let bFrame = nodeFrame(bID) else {
+            expect(false, "no edge/target for follow test")
+            return
+        }
+        // Drag B and verify the resolved route endpoint tracks its border.
+        let bCenterView = canvasView.viewport.toView(Point(x: bFrame.midX, y: bFrame.midY))
+        let destination = CGPoint(x: bCenterView.x + 90, y: bCenterView.y + 140)
+        send(.leftMouseDown, at: bCenterView, clickCount: 1)
+        for i in 1...6 {
+            let t = CGFloat(i) / 6
+            send(.leftMouseDragged, at: CGPoint(
+                x: bCenterView.x + (destination.x - bCenterView.x) * t,
+                y: bCenterView.y + (destination.y - bCenterView.y) * t
+            ), clickCount: 1)
+        }
+        send(.leftMouseUp, at: destination, clickCount: 1)
+        pumpRunLoop()
+
+        guard let movedFrame = nodeFrame(bID),
+              let route = EdgeGeometry.route(
+                  for: document.board.elements[edgeElement.id]!.edge!,
+                  frames: document.board.frameProvider()
+              ) else {
+            expect(false, "edge route unresolvable after move")
+            return
+        }
+        expect(abs(movedFrame.midX - bFrame.midX - 90) < 3, "block B should have moved")
+        let end = route.end
+        let onBorder = abs(end.x - movedFrame.x) < 1 || abs(end.x - movedFrame.maxX) < 1
+            || abs(end.y - movedFrame.y) < 1 || abs(end.y - movedFrame.maxY) < 1
+        expect(onBorder, "edge endpoint \(end) should sit on moved block border \(movedFrame)")
+    }
+
+    private func step8CascadeDelete() {
+        guard let edge = edgeElements().first?.edge,
+              let bID = edge.to.elementID,
+              let bFrame = nodeFrame(bID) else {
+            expect(false, "no edge for cascade test")
+            return
+        }
+        let elementsBefore = document.board.elements.count
+
+        // Select B and delete it: its connector must go too, in one undo step.
+        let bCenter = canvasView.viewport.toView(Point(x: bFrame.midX, y: bFrame.midY))
+        click(at: bCenter, clickCount: 1)
+        pumpRunLoop()
+        key(51) // delete
+        pumpRunLoop()
+
+        expect(edgeElements().isEmpty, "deleting a block must cascade to its edges")
+        expect(
+            document.board.elements.count == elementsBefore - 2,
+            "cascade should remove block + edge"
+        )
+
+        document.undoManager?.undo()
+        pumpRunLoop()
+        expect(
+            document.board.elements.count == elementsBefore && edgeElements().count == 1,
+            "one undo should restore block + edge together (elements=\(document.board.elements.count)/\(elementsBefore) edges=\(edgeElements().count) canUndo=\(document.undoManager?.canUndo ?? false) undoName='\(document.undoManager?.undoActionName ?? "")' redoName='\(document.undoManager?.redoActionName ?? "")')"
         )
     }
 

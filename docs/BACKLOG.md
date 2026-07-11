@@ -13,6 +13,15 @@ effectively invisible while typing. Likely fix: size the field to the zoomed
 node frame (height and width), or clamp the editing font and zoom the canvas
 so editing always happens at a readable effective scale.
 
+### B2. Sort keys grow under repeated sequential insertion
+*Found 2026-07-12 during M2 perf work. Address in M6 polish.*
+`SortKey.after()` chained N times grows keys ~1 char per ~17 insertions
+(quadratic total cost; a 5.9k-element chain visibly hung board generation).
+Bulk builders now use `SortKey.bulk(_:of:)`, but interactive boards that add
+thousands of elements over their lifetime will accumulate long keys. Fix:
+adopt integer-part fractional keys (jitter-style "a0/a1/b00" scheme) with a
+migration, or periodically renumber keys in an idle pass.
+
 ## Post-MVP problems to design for
 
 ### P1. Zoom-level drift makes content sizes inconsistent (Excalidraw pain)

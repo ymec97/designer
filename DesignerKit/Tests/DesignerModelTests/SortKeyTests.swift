@@ -49,6 +49,28 @@ final class SortKeyTests: XCTestCase {
         }
     }
 
+    func testBulkKeysAreOrderedValidAndBetweenCompatible() {
+        let count = 6000
+        var previous: String?
+        for index in 0..<count {
+            let key = SortKey.bulk(index, of: count)
+            XCTAssertFalse(key.hasSuffix("0"), "bulk keys must not end in '0': \(key)")
+            if let previous {
+                XCTAssertGreaterThan(key, previous, "bulk keys must be strictly increasing")
+                // A key must always fit between two adjacent bulk keys.
+                let mid = SortKey.between(previous, key)
+                XCTAssertGreaterThan(mid, previous)
+                XCTAssertLessThan(mid, key)
+            }
+            previous = key
+        }
+        // Constant length regardless of index (the whole point vs chained after()).
+        XCTAssertEqual(
+            SortKey.bulk(0, of: count).count,
+            SortKey.bulk(count - 1, of: count).count
+        )
+    }
+
     func testDenseSequentialInsertions() {
         // Insert 500 keys always at a random gap; the whole list must stay sorted.
         var keys = [SortKey.initial]

@@ -57,6 +57,29 @@ public enum SortKey {
     }
 
     static func value(_ character: Character) -> Int {
-        digits.firstIndex(of: character) ?? 0
+        guard let ascii = character.asciiValue else { return 0 }
+        switch ascii {
+        case 0x30...0x39: return Int(ascii - 0x30)          // '0'-'9'
+        case 0x61...0x7A: return Int(ascii - 0x61) + 10     // 'a'-'z'
+        default: return 0
+        }
+    }
+
+    /// Constant-length key for bulk generation (index i of a known count):
+    /// zero-padded base-36 counter + a non-zero tail digit to satisfy the
+    /// no-trailing-zero invariant. Chaining `after()` thousands of times
+    /// grows keys quadratically — bulk builders (perf boards, importers)
+    /// must use this instead.
+    public static func bulk(_ index: Int, of count: Int) -> String {
+        let width = max(1, Int(ceil(log(Double(max(count, 2))) / log(36))))
+        var digitsOut = [Character](repeating: "0", count: width)
+        var remaining = index
+        var position = width - 1
+        while remaining > 0 && position >= 0 {
+            digitsOut[position] = digits[remaining % base]
+            remaining /= base
+            position -= 1
+        }
+        return String(digitsOut) + "i"
     }
 }

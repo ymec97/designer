@@ -63,7 +63,10 @@ build/Designer.app/Contents/MacOS/Designer --perf-test
 
 ## Status
 
-Milestone M1 (canvas core) — see the brief's §8 for the roadmap.
+Milestone M2 (connectors) — see the brief's §8 for the roadmap.
 Done: document model, versioned persistence, operation layer with undo/redo,
-canvas with pan/zoom/select/drag/resize/create/label-edit at 2k-node scale.
-Next: M2 connectors.
+canvas with pan/zoom/select/drag/resize/create/label-edit, and semantic
+connectors (border-drag to connect, auto-anchoring that survives move/resize/
+undo storms, straight + orthogonal routing, label/protocol/data/condition
+badges, popover editor, cascade delete) — fluid at 2k nodes + 4k edges.
+Next: M3 freehand ink + sketch-to-structure.
