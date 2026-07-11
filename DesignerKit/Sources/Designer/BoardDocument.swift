@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import DesignerModel
 import DesignerPersistence
 
@@ -9,11 +8,8 @@ final class BoardDocument: NSDocument, ObservableObject {
     override class var autosavesInPlace: Bool { true }
 
     override func makeWindowControllers() {
-        let hostingController = NSHostingController(
-            rootView: BoardPlaceholderView(document: self)
-        )
-        let window = NSWindow(contentViewController: hostingController)
-        window.setContentSize(NSSize(width: 960, height: 640))
+        let window = NSWindow(contentViewController: CanvasViewController(document: self))
+        window.setContentSize(NSSize(width: 1100, height: 720))
         window.styleMask.insert([.resizable, .miniaturizable, .closable, .titled])
         window.center()
         addWindowController(NSWindowController(window: window))
@@ -34,7 +30,22 @@ final class BoardDocument: NSDocument, ObservableObject {
         }
     }
 
-    // MARK: Temporary M0 mutations (replaced by the operation layer in M1)
+    // MARK: Mutations
+
+    /// All document changes flow through here: applies the operation and
+    /// registers its inverse with the undo manager, which also drives
+    /// NSDocument's change tracking and autosave.
+    func perform(_ operation: BoardOperation, actionName: String) {
+        do {
+            let inverse = try board.apply(operation)
+            undoManager?.registerUndo(withTarget: self) { document in
+                document.perform(inverse, actionName: actionName)
+            }
+            undoManager?.setActionName(actionName)
+        } catch {
+            presentError(error)
+        }
+    }
 
     func addSampleNode() {
         let baseLayer = board.layers[0]
@@ -51,7 +62,6 @@ final class BoardDocument: NSDocument, ObservableObject {
                 )
             ))
         )
-        board.elements.append(node)
-        updateChangeCount(.changeDone)
+        perform(.insertElement(node), actionName: "Add Block")
     }
 }

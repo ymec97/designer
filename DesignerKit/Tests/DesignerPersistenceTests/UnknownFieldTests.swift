@@ -5,10 +5,16 @@ import DesignerModel
 /// NFR R2: fields written by future app versions must survive an open→save
 /// round-trip in this version, at every level of the document.
 final class UnknownFieldTests: XCTestCase {
+    /// Marker resolved to the array index of the first element with that role
+    /// (element order in JSON is sorted by random UUID, so indices vary).
+    private enum PathToken {
+        case elementWithRole(String)
+    }
+
     /// Injects an unknown field into a JSON object at the given path, decodes
     /// the document, re-encodes it, and asserts the field is still there.
     private func assertUnknownFieldSurvives(
-        injectAt path: [Any],
+        injectAt rawPath: [Any],
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
@@ -17,6 +23,17 @@ final class UnknownFieldTests: XCTestCase {
             try JSONSerialization.jsonObject(with: data) as? [String: Any],
             file: file, line: line
         )
+        let path: [Any] = try rawPath.map { token in
+            guard let pathToken = token as? PathToken else { return token }
+            switch pathToken {
+            case .elementWithRole(let role):
+                let elements = try XCTUnwrap(json["elements"] as? [[String: Any]], file: file, line: line)
+                return try XCTUnwrap(
+                    elements.firstIndex { ($0["role"] as? String) == role },
+                    "no element with role \(role)", file: file, line: line
+                )
+            }
+        }
         json = try inject(into: json, at: path, key: "fieldFromTheFuture", value: "v2-data")
         let mutated = try JSONSerialization.data(withJSONObject: json)
 
@@ -39,15 +56,19 @@ final class UnknownFieldTests: XCTestCase {
     }
 
     func testUnknownFieldOnElement() throws {
-        try assertUnknownFieldSurvives(injectAt: ["elements", 0])
+        try assertUnknownFieldSurvives(injectAt: ["elements", PathToken.elementWithRole("node")])
     }
 
     func testUnknownFieldOnNodeSemantic() throws {
-        try assertUnknownFieldSurvives(injectAt: ["elements", 0, "semantic"])
+        try assertUnknownFieldSurvives(injectAt: ["elements", PathToken.elementWithRole("node"), "semantic"])
+    }
+
+    func testUnknownFieldOnEdgeSemantic() throws {
+        try assertUnknownFieldSurvives(injectAt: ["elements", PathToken.elementWithRole("edge"), "semantic"])
     }
 
     func testUnknownFieldOnStyle() throws {
-        try assertUnknownFieldSurvives(injectAt: ["elements", 0, "style"])
+        try assertUnknownFieldSurvives(injectAt: ["elements", PathToken.elementWithRole("node"), "style"])
     }
 
     func testUnknownFieldOnGroup() throws {

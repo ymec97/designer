@@ -6,11 +6,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = MainMenu.build()
     }
 
+    private var perfTestDriver: PerfTestDriver?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             runSmokeTest(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         }
+        if CommandLine.arguments.contains("--perf-test") {
+            runPerfTest()
+        }
+    }
+
+    /// See PerfTestDriver — the M1/D12 frame-pacing criterion as a command.
+    private func runPerfTest() {
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument
+        else {
+            FileHandle.standardError.write(Data("PERF-TEST FAIL: cannot create document\n".utf8))
+            exit(1)
+        }
+        controller.addDocument(document)
+        document.board = PerfTestDriver.makeSyntheticBoard()
+        document.makeWindowControllers()
+        document.showWindows()
+
+        guard let canvasController = document.windowControllers.first?.contentViewController
+                as? CanvasViewController else {
+            FileHandle.standardError.write(Data("PERF-TEST FAIL: no canvas controller\n".utf8))
+            exit(1)
+        }
+        let driver = PerfTestDriver(canvasView: canvasController.canvasView)
+        perfTestDriver = driver
+        // Give the window one runloop turn to lay out before measuring.
+        DispatchQueue.main.async { driver.start() }
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
@@ -45,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let error { fail("save: \(error.localizedDescription)") }
                 do {
                     let reread = try BoardPackage.read(from: url)
-                    let nodeCount = reread.elements.filter { $0.node != nil }.count
+                    let nodeCount = reread.elements.values.filter { $0.node != nil }.count
                     guard nodeCount == 2 else { fail("expected 2 nodes, found \(nodeCount)") }
                     guard reread.layers.count == 1 else { fail("expected 1 layer") }
                     print("SMOKE-TEST PASS: \(url.path)")

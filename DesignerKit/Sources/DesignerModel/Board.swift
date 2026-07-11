@@ -12,7 +12,10 @@ public struct Board: Equatable, Sendable {
     public var modifiedAt: Date
     /// Panel order. A valid board always has at least one layer.
     public var layers: [Layer]
-    public var elements: [Element]
+    /// Keyed by ID: element identity is the ID, z-order is the sort key, and
+    /// storage order is meaningless — undo/redo can never perturb it. The
+    /// canonical JSON form is an array sorted by ID.
+    public var elements: [ElementID: Element]
     public var groups: [Group]
     public var extra: [String: JSONValue]
 
@@ -33,18 +36,23 @@ public struct Board: Equatable, Sendable {
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt ?? createdAt
         self.layers = layers
-        self.elements = elements
+        self.elements = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
         self.groups = groups
         self.extra = extra
     }
 
     public func element(withID id: ElementID) -> Element? {
-        elements.first { $0.id == id }
+        elements[id]
+    }
+
+    /// Elements in z-order (bottom to top), the order the renderer draws them.
+    public var elementsInZOrder: [Element] {
+        elements.values.sorted { ($0.sortKey, $0.id) < ($1.sortKey, $1.id) }
     }
 
     /// The sort key that places a new element above everything else.
     public var topSortKey: String {
-        SortKey.after(elements.map(\.sortKey).max())
+        SortKey.after(elements.values.map(\.sortKey).max())
     }
 }
 
@@ -62,7 +70,17 @@ extension Board: Codable {
         modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
         layers = try container.decodeIfPresent([Layer].self, forKey: .layers) ?? []
         if layers.isEmpty { layers = [Layer(name: "Base")] }
-        elements = try container.decodeIfPresent([Element].self, forKey: .elements) ?? []
+        let elementList = try container.decodeIfPresent([Element].self, forKey: .elements) ?? []
+        elements = [:]
+        elements.reserveCapacity(elementList.count)
+        for element in elementList {
+            guard elements.updateValue(element, forKey: element.id) == nil else {
+                throw DecodingError.dataCorrupted(DecodingError.Context(
+                    codingPath: container.codingPath + [CodingKeys.elements],
+                    debugDescription: "Duplicate element id '\(element.id)'"
+                ))
+            }
+        }
         groups = try container.decodeIfPresent([Group].self, forKey: .groups) ?? []
         extra = try decoder.unknownFields(excluding: CodingKeys.knownKeys)
     }
@@ -75,7 +93,8 @@ extension Board: Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(modifiedAt, forKey: .modifiedAt)
         try container.encode(layers, forKey: .layers)
-        try container.encode(elements, forKey: .elements)
+        // Sorted by ID: stable across sessions and immune to mutation order (NFR M3).
+        try container.encode(elements.values.sorted { $0.id < $1.id }, forKey: .elements)
         try container.encode(groups, forKey: .groups)
         try encoder.encodeUnknownFields(extra)
     }

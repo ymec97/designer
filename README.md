@@ -37,7 +37,18 @@ one-time component install, which needs admin rights:
 ## Tests
 
 ```sh
-cd DesignerKit && swift test
+cd DesignerKit && swift test    # unit suite (model, persistence, canvas math)
+```
+
+End-to-end checks built into the app binary (no permissions or UI scripting needed):
+
+```sh
+# Real NSDocument pipeline: create → mutate → save → reopen → verify
+build/Designer.app/Contents/MacOS/Designer --smoke-test /tmp/out.designerboard
+
+# Frame pacing on a synthetic 2,000-node board (M1/D12 criterion):
+# scripted pan + zoom phases, fails if >2% frames drop
+build/Designer.app/Contents/MacOS/Designer --perf-test
 ```
 
 ## Layout
@@ -52,4 +63,7 @@ cd DesignerKit && swift test
 
 ## Status
 
-Milestone M0 (skeleton + persistence) — see the brief's §8 for the roadmap.
+Milestone M1 (canvas core) — see the brief's §8 for the roadmap.
+Done: document model, versioned persistence, operation layer with undo/redo,
+canvas with pan/zoom/select/drag/resize/create/label-edit at 2k-node scale.
+Next: M2 connectors.

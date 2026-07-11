@@ -1,4 +1,5 @@
 import AppKit
+import DesignerCanvas
 
 /// The app runs without a storyboard, so the main menu is built in code.
 /// NSDocument's standard machinery (save, autosave, undo, window titles)
@@ -9,8 +10,44 @@ enum MainMenu {
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
         mainMenu.addItem(editMenuItem())
+        mainMenu.addItem(boardMenuItem())
+        mainMenu.addItem(viewMenuItem())
         mainMenu.addItem(windowMenuItem())
         return mainMenu
+    }
+
+    private static func boardMenuItem() -> NSMenuItem {
+        let menu = NSMenu(title: "Board")
+        menu.addItem(withTitle: "Add Block",
+                     action: #selector(CanvasView.addBlock(_:)),
+                     keyEquivalent: "b")
+        menu.addItem(withTitle: "Delete",
+                     action: #selector(CanvasView.deleteSelection(_:)),
+                     keyEquivalent: "")
+        return wrapped(menu)
+    }
+
+    private static func viewMenuItem() -> NSMenuItem {
+        let menu = NSMenu(title: "View")
+        menu.addItem(withTitle: "Zoom In",
+                     action: #selector(CanvasView.zoomIn(_:)),
+                     keyEquivalent: "+")
+        // Hidden alternate so plain ⌘= also zooms in (no shift needed).
+        let zoomInAlternate = menu.addItem(withTitle: "Zoom In",
+                                           action: #selector(CanvasView.zoomIn(_:)),
+                                           keyEquivalent: "=")
+        zoomInAlternate.isAlternate = true
+        zoomInAlternate.isHidden = true
+        menu.addItem(withTitle: "Zoom Out",
+                     action: #selector(CanvasView.zoomOut(_:)),
+                     keyEquivalent: "-")
+        menu.addItem(withTitle: "Actual Size",
+                     action: #selector(CanvasView.zoomActualSize(_:)),
+                     keyEquivalent: "0")
+        menu.addItem(withTitle: "Zoom to Fit",
+                     action: #selector(CanvasView.zoomToFit(_:)),
+                     keyEquivalent: "9")
+        return wrapped(menu)
     }
 
     private static func appMenuItem() -> NSMenuItem {
