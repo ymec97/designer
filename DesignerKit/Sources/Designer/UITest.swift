@@ -42,9 +42,12 @@ final class UITestDriver {
         step6ConnectTwoBlocks()
         step7EdgeFollowsMove()
         step8CascadeDelete()
+        step9DrawScribbleStaysInk()
+        step10SketchRectangleBecomesBlock()
+        step11SketchStrokeBecomesConnector()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, cascade verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, cascade, ink, sketch-to-structure verified")
             exit(0)
         } else {
             for failure in failures {
@@ -297,6 +300,98 @@ final class UITestDriver {
         )
     }
 
+    private func inkCount() -> Int {
+        document.board.elements.values.filter {
+            if case .ink = $0.content { return true }
+            return false
+        }.count
+    }
+
+    private func drag(along path: [CGPoint]) {
+        guard path.count > 1 else { return }
+        send(.leftMouseDown, at: path[0], clickCount: 1)
+        for point in path.dropFirst().dropLast() {
+            send(.leftMouseDragged, at: point, clickCount: 1)
+        }
+        send(.leftMouseUp, at: path[path.count - 1], clickCount: 1)
+        pumpRunLoop()
+    }
+
+    private func step9DrawScribbleStaysInk() {
+        key(2, characters: "d") // draw tool
+        pumpRunLoop()
+        guard canvasView.tool == .draw else {
+            expect(false, "'d' should activate the draw tool")
+            return
+        }
+        // A jagged zig-zag far from any block: recognized as nothing → ink.
+        var path: [CGPoint] = []
+        for i in 0..<14 {
+            path.append(CGPoint(
+                x: 60 + CGFloat(i) * 12,
+                y: 620 + CGFloat(i % 2 == 0 ? 0 : 45) + CGFloat(i % 3) * 8
+            ))
+        }
+        let before = inkCount()
+        drag(along: path)
+        expect(inkCount() == before + 1, "scribble should stay ink (ink \(before)→\(inkCount()))")
+    }
+
+    private func step10SketchRectangleBecomesBlock() {
+        let nodesBefore = document.board.elements.values.filter { $0.node != nil }.count
+        let inkBefore = inkCount()
+
+        // Sketch a rectangle in empty space (view coords, draw tool active).
+        var path: [CGPoint] = []
+        let x: CGFloat = 620, y: CGFloat = 520, w: CGFloat = 170, h: CGFloat = 110
+        for i in 0...10 { path.append(CGPoint(x: x + w * CGFloat(i) / 10, y: y)) }
+        for i in 0...8 { path.append(CGPoint(x: x + w, y: y + h * CGFloat(i) / 8)) }
+        for i in 0...10 { path.append(CGPoint(x: x + w - w * CGFloat(i) / 10, y: y + h)) }
+        for i in 0...7 { path.append(CGPoint(x: x, y: y + h - h * CGFloat(i) / 8)) }
+        drag(along: path)
+
+        let nodesAfter = document.board.elements.values.filter { $0.node != nil }.count
+        expect(
+            nodesAfter == nodesBefore + 1 && inkCount() == inkBefore,
+            "sketched rectangle should live-convert to a block (nodes \(nodesBefore)→\(nodesAfter), ink \(inkBefore)→\(inkCount()))"
+        )
+    }
+
+    private func step11SketchStrokeBecomesConnector() {
+        // Stroke from the step-10 block to block A: should become an edge.
+        let nodes = document.board.elements.values.filter { $0.node != nil }
+        guard nodes.count >= 2 else {
+            expect(false, "need two blocks for sketch-connect")
+            return
+        }
+        let sorted = nodes.sorted { $0.sortKey < $1.sortKey }
+        guard let fromFrame = sorted[sorted.count - 1].node?.frame,
+              let toFrame = sorted[0].node?.frame else {
+            expect(false, "missing frames")
+            return
+        }
+        let edgesBefore = edgeElements().count
+        let start = canvasView.viewport.toView(Point(x: fromFrame.midX, y: fromFrame.y - 4))
+        let end = canvasView.viewport.toView(Point(x: toFrame.midX, y: toFrame.maxY + 4))
+        var path: [CGPoint] = []
+        for i in 0...16 {
+            let t = CGFloat(i) / 16
+            path.append(CGPoint(
+                x: start.x + (end.x - start.x) * t + CGFloat((i % 3)) * 2,
+                y: start.y + (end.y - start.y) * t
+            ))
+        }
+        drag(along: path)
+
+        expect(
+            edgeElements().count == edgesBefore + 1,
+            "sketched stroke between blocks should live-convert to a connector (edges \(edgesBefore)→\(edgeElements().count))"
+        )
+        key(9, characters: "v") // back to select tool
+        pumpRunLoop()
+        expect(canvasView.tool == .select, "'v' should return to the select tool")
+    }
+
     // MARK: Event synthesis
 
     private func click(at point: CGPoint, clickCount: Int) {
@@ -321,7 +416,7 @@ final class UITestDriver {
         window.sendEvent(event)
     }
 
-    private func key(_ keyCode: UInt16) {
+    private func key(_ keyCode: UInt16, characters: String = "\r") {
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(
                 with: type,
@@ -330,8 +425,8 @@ final class UITestDriver {
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber,
                 context: nil,
-                characters: "\r",
-                charactersIgnoringModifiers: "\r",
+                characters: characters,
+                charactersIgnoringModifiers: characters,
                 isARepeat: false,
                 keyCode: keyCode
             ) else { continue }

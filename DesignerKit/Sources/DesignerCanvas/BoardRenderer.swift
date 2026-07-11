@@ -124,21 +124,29 @@ final class BoardRenderer {
         }
     }
 
-    private func drawInk(
+    func drawInk(
         _ ink: Ink, in context: CGContext, viewport: CanvasViewport, isSelected: Bool
     ) {
         guard ink.points.count > 1 else { return }
-        context.setStrokeColor(color(hex: ink.style.stroke, fallback: Palette.inkStroke))
-        context.setLineWidth(CGFloat(ink.style.strokeWidth ?? 2) * viewport.scale)
+        let baseWidth = CGFloat(ink.style.strokeWidth ?? 2) * viewport.scale
+        let strokeColor = color(hex: ink.style.stroke, fallback: Palette.inkStroke)
+        context.setStrokeColor(strokeColor)
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        context.beginPath()
-        let first = viewport.toView(Point(x: ink.points[0].x, y: ink.points[0].y))
-        context.move(to: first)
+
+        // Pressure-varying width: stroke per segment, width interpolated from
+        // the endpoint pressures (0.5 = neutral for non-pressure devices).
+        // Ink counts are small; per-segment stroking is fine.
+        var previous = ink.points[0]
         for point in ink.points.dropFirst() {
+            let pressure = (previous.pressure + point.pressure) / 2
+            context.setLineWidth(baseWidth * CGFloat(0.5 + pressure))
+            context.beginPath()
+            context.move(to: viewport.toView(Point(x: previous.x, y: previous.y)))
             context.addLine(to: viewport.toView(Point(x: point.x, y: point.y)))
+            context.strokePath()
+            previous = point
         }
-        context.strokePath()
 
         if isSelected, let bounds = SpatialIndex.boundingRect(of: Element(
             layerIDs: [], sortKey: "i", content: .ink(ink)

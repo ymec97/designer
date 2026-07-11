@@ -7,12 +7,15 @@ let package = Package(
     products: [
         .library(name: "DesignerModel", targets: ["DesignerModel"]),
         .library(name: "DesignerPersistence", targets: ["DesignerPersistence"]),
+        .library(name: "DesignerRecognition", targets: ["DesignerRecognition"]),
         .library(name: "DesignerCanvas", targets: ["DesignerCanvas"]),
         .executable(name: "Designer", targets: ["Designer"]),
     ],
     targets: [
         .target(name: "DesignerModel"),
         .target(name: "DesignerPersistence", dependencies: ["DesignerModel"]),
+        // Sketch → structure: pure geometric stroke recognition (D15).
+        .target(name: "DesignerRecognition", dependencies: ["DesignerModel"]),
         // AppKit canvas: rendering, viewport, input. Swift 5 language mode
         // like the app target (AppKit APIs); model stays strict Swift 6.
         .target(
@@ -23,11 +26,12 @@ let package = Package(
         // The app itself.
         .executableTarget(
             name: "Designer",
-            dependencies: ["DesignerModel", "DesignerPersistence", "DesignerCanvas"],
+            dependencies: ["DesignerModel", "DesignerPersistence", "DesignerCanvas", "DesignerRecognition"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(name: "DesignerModelTests", dependencies: ["DesignerModel"]),
         .testTarget(name: "DesignerPersistenceTests", dependencies: ["DesignerPersistence"]),
+        .testTarget(name: "DesignerRecognitionTests", dependencies: ["DesignerRecognition"]),
         .testTarget(
             name: "DesignerCanvasTests",
             dependencies: ["DesignerCanvas"],

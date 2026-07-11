@@ -122,6 +122,23 @@ public final class CanvasView: NSView {
     /// operation (= one undo step) at gesture end.
     private var transientFrames: [ElementID: Rect] = [:]
 
+    /// Active interaction tool. Select is the default; Draw captures ink.
+    public enum Tool {
+        case select
+        case draw
+    }
+
+    public var tool: Tool = .select {
+        didSet {
+            guard tool != oldValue else { return }
+            commitLabelEditor()
+            gesture = .idle
+            window?.invalidateCursorRects(for: self)
+            updateCursor(at: nil)
+            needsDisplay = true
+        }
+    }
+
     private enum GestureState {
         case idle
         case mouseDown(at: CGPoint, on: ElementID?, hadSelection: Bool)
@@ -129,6 +146,7 @@ public final class CanvasView: NSView {
         case resize(id: ElementID, handle: ResizeHandle, original: Rect, startWorld: Point)
         case rubberBand(start: CGPoint, current: CGPoint)
         case connect(from: ElementID, current: CGPoint, target: ElementID?)
+        case draw(points: [StrokePoint], startedAt: TimeInterval)
     }
 
     /// World-space width of the border band that starts a connection drag
@@ -322,6 +340,13 @@ public final class CanvasView: NSView {
             renderer.drawRubberBand(rectFrom(start, current), in: context)
         }
 
+        if case .draw(let points, _) = gesture, points.count > 1 {
+            renderer.drawInk(
+                Ink(points: points, style: Style(strokeWidth: 2)),
+                in: context, viewport: viewport, isSelected: false
+            )
+        }
+
         if case .connect(let fromID, let current, let target) = gesture {
             let frames = board.frameProvider(overrides: transientFrames)
             if let frame = frames(fromID) {
@@ -394,6 +419,14 @@ public final class CanvasView: NSView {
         Self.debugTrace?("mouseDown clicks=\(event.clickCount) window=\(event.locationInWindow)")
         commitLabelEditor()
         let point = convert(event.locationInWindow, from: nil)
+
+        if tool == .draw {
+            gesture = .draw(
+                points: [strokePoint(from: event, at: point, since: event.timestamp)],
+                startedAt: event.timestamp
+            )
+            return
+        }
 
         if event.clickCount == 2 {
             Self.debugTrace?("doubleClick at view=\(point)")
@@ -492,9 +525,28 @@ public final class CanvasView: NSView {
             gesture = .connect(from: fromID, current: point, target: targetID)
             needsDisplay = true
 
+        case .draw(var points, let startedAt):
+            points.append(strokePoint(from: event, at: point, since: startedAt))
+            gesture = .draw(points: points, startedAt: startedAt)
+            needsDisplay = true
+
         case .idle:
             break
         }
+    }
+
+    /// World-space stroke sample from an input event. Pressure comes from
+    /// tablet events (Sidecar pencil, Wacom); plain mouse/trackpad strokes
+    /// use the neutral 0.5 — ink never requires a pressure device (D15 note).
+    private func strokePoint(from event: NSEvent, at viewPoint: CGPoint, since start: TimeInterval) -> StrokePoint {
+        let world = viewport.toWorld(viewPoint)
+        let pressure: Double
+        if event.subtype == .tabletPoint || event.subtype == .tabletProximity {
+            pressure = Double(event.pressure)
+        } else {
+            pressure = 0.5
+        }
+        return StrokePoint(x: world.x, y: world.y, pressure: pressure, time: event.timestamp - start)
     }
 
     public override func mouseUp(with event: NSEvent) {
@@ -537,10 +589,35 @@ public final class CanvasView: NSView {
             }
             needsDisplay = true
 
+        case .draw(var points, let startedAt):
+            points.append(strokePoint(
+                from: event,
+                at: convert(event.locationInWindow, from: nil),
+                since: startedAt
+            ))
+            if points.count > 1 {
+                let element = Element(
+                    layerIDs: activeLayerIDs().isEmpty ? [board.layers[0].id] : activeLayerIDs(),
+                    sortKey: board.topSortKey,
+                    content: .ink(Ink(points: points, style: Style(strokeWidth: 2)))
+                )
+                delegate?.canvasView(self, perform: .insertElement(element), actionName: "Draw")
+                strokeFinished?(element.id)
+            }
+            needsDisplay = true
+
         case .mouseDown, .idle:
             break
         }
         gesture = .idle
+    }
+
+    /// Called after a drawn stroke is committed — the live-recognition hook.
+    public var strokeFinished: ((ElementID) -> Void)?
+
+    /// Programmatic selection (structurize handover, tests).
+    public func select(_ ids: Set<ElementID>) {
+        selection = ids.filter { board.elements[$0] != nil }
     }
 
     /// Inside the node but within a thin band of its border (or slightly
@@ -576,11 +653,26 @@ public final class CanvasView: NSView {
     // MARK: Keyboard
 
     public override func keyDown(with event: NSEvent) {
+        // Single-key tool switching (Excalidraw-style), no modifiers.
+        if event.modifierFlags.intersection([.command, .option, .control]).isEmpty {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v": return activateSelectTool(nil)
+            case "d": return activateDrawTool(nil)
+            default: break
+            }
+        }
         switch event.keyCode {
         case 51, 117: // delete, forward delete
             deleteSelection(nil)
         case 53: // escape
-            selection = []
+            if case .draw = gesture {
+                gesture = .idle // cancel the in-flight stroke
+                needsDisplay = true
+            } else if tool == .draw {
+                tool = .select
+            } else {
+                selection = []
+            }
         case 123, 124, 125, 126: // arrows: ← → ↓ ↑
             let step: Double = event.modifierFlags.contains(.shift) ? 10 : 1
             let (dx, dy): (Double, Double) = {
@@ -620,6 +712,14 @@ public final class CanvasView: NSView {
 
     @objc public func addBlock(_ sender: Any?) {
         createBlock(at: viewport.toWorld(CGPoint(x: bounds.midX, y: bounds.midY)))
+    }
+
+    @objc public func activateSelectTool(_ sender: Any?) {
+        tool = .select
+    }
+
+    @objc public func activateDrawTool(_ sender: Any?) {
+        tool = .draw
     }
 
     private func nudgeSelection(dx: Double, dy: Double) {
@@ -870,7 +970,18 @@ public final class CanvasView: NSView {
     // MARK: Cursor feedback
 
     public override func mouseMoved(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    private func updateCursor(at point: CGPoint?) {
+        if tool == .draw {
+            NSCursor.crosshair.set()
+            return
+        }
+        guard let point else {
+            NSCursor.arrow.set()
+            return
+        }
         if let handleBox = singleSelectionViewRect(),
            let handle = ResizeHandle.allCases.first(where: {
                $0.rect(around: handleBox).insetBy(dx: -3, dy: -3).contains(point)

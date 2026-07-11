@@ -48,7 +48,7 @@ public enum EdgeGeometry {
             return best
         }
 
-        static func segmentDistance(_ p: Point, _ a: Point, _ b: Point) -> Double {
+        public static func segmentDistance(_ p: Point, _ a: Point, _ b: Point) -> Double {
             let dx = b.x - a.x, dy = b.y - a.y
             let lengthSquared = dx * dx + dy * dy
             guard lengthSquared > 0 else { return hypot(p.x - a.x, p.y - a.y) }

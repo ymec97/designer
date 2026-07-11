@@ -18,9 +18,25 @@ enum MainMenu {
 
     private static func boardMenuItem() -> NSMenuItem {
         let menu = NSMenu(title: "Board")
+        let select = menu.addItem(withTitle: "Select Tool",
+                                  action: #selector(CanvasView.activateSelectTool(_:)),
+                                  keyEquivalent: "v")
+        select.keyEquivalentModifierMask = []
+        let draw = menu.addItem(withTitle: "Draw Tool",
+                                action: #selector(CanvasView.activateDrawTool(_:)),
+                                keyEquivalent: "d")
+        draw.keyEquivalentModifierMask = []
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Add Block",
                      action: #selector(CanvasView.addBlock(_:)),
                      keyEquivalent: "b")
+        menu.addItem(withTitle: "Structurize",
+                     action: Selector(("structurize:")),
+                     keyEquivalent: "r")
+        menu.addItem(withTitle: "Convert Sketches Automatically",
+                     action: Selector(("toggleLiveRecognition:")),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Delete",
                      action: #selector(CanvasView.deleteSelection(_:)),
                      keyEquivalent: "")
