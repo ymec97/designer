@@ -15,9 +15,22 @@ final class BoardRenderer {
     }
 
     private var textCache: [TextCacheKey: NSAttributedString] = [:]
+    /// Dynamic NSColor → CGColor resolution is too slow to do 2,000×/frame;
+    /// resolved values are stable until the appearance changes.
+    private var fillCache: [String: CGColor] = [:]
 
+    /// Call when the effective appearance changes: cached CGColors and
+    /// attributed strings were resolved under the old appearance.
     func invalidateCaches() {
         textCache.removeAll()
+        fillCache.removeAll()
+    }
+
+    func resolvedNodeFill(for kind: NodeKind) -> CGColor {
+        if let cached = fillCache[kind.rawValue] { return cached }
+        let resolved = Palette.nodeFill(for: kind).cgColor
+        fillCache[kind.rawValue] = resolved
+        return resolved
     }
 
     // MARK: Elements
@@ -62,7 +75,11 @@ final class BoardRenderer {
             transform: nil
         )
 
-        context.setFillColor(color(hex: node.style.fill, fallback: Palette.nodeFill(for: node.semantic.kind)))
+        if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
+            context.setFillColor(parsed.cgColor)
+        } else {
+            context.setFillColor(resolvedNodeFill(for: node.semantic.kind))
+        }
         context.addPath(path)
         context.fillPath()
 
@@ -153,7 +170,7 @@ final class BoardRenderer {
                 if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
                     fill = parsed.cgColor
                 } else {
-                    fill = Palette.nodeFill(for: node.semantic.kind).cgColor
+                    fill = resolvedNodeFill(for: node.semantic.kind)
                 }
                 rectsByColor[fill, default: []].append(rect)
                 if selection.contains(element.id) { selectedRects.append(rect) }
@@ -175,6 +192,24 @@ final class BoardRenderer {
             context.setLineWidth(1.5)
             for rect in selectedRects { context.stroke(rect) }
         }
+    }
+
+    /// Centered affordance hint for an empty board — the whole onboarding a
+    /// blank canvas needs (D17): what to do, in one line, gone once you do it.
+    func drawEmptyHint(in context: CGContext, bounds: CGRect) {
+        let hint = "Double-click to add a block   ·   scroll to pan   ·   pinch or ⌘scroll to zoom"
+        let attributed = NSAttributedString(string: hint, attributes: [
+            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            .foregroundColor: Palette.hintText,
+        ])
+        let size = attributed.size()
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        attributed.draw(at: CGPoint(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2
+        ))
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     // MARK: Adornments
@@ -280,22 +315,40 @@ final class BoardRenderer {
 /// correctly in light and dark mode without per-element colors.
 enum Palette {
     static let selection = NSColor.controlAccentColor
-    static let nodeStroke = NSColor.tertiaryLabelColor
+    static let nodeStroke = NSColor.secondaryLabelColor
     static let nodeText = NSColor.labelColor
     static let noteText = NSColor.secondaryLabelColor
     static let inkStroke = NSColor.labelColor
     static let canvasBackground = NSColor.windowBackgroundColor
     static let grid = NSColor.separatorColor.withAlphaComponent(0.35)
+    static let hintText = NSColor.tertiaryLabelColor
+
+    /// Node surface must contrast with the canvas in BOTH appearances —
+    /// system "background" colors don't (controlBackgroundColor ≈
+    /// windowBackgroundColor in dark mode, which made blocks invisible).
+    private static let nodeSurface = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.27, green: 0.28, blue: 0.30, alpha: 1)
+            : NSColor.white
+    }
 
     static func nodeFill(for kind: NodeKind) -> NSColor {
         switch kind {
-        case .database: return NSColor.systemBlue.withAlphaComponent(0.12)
-        case .queue: return NSColor.systemOrange.withAlphaComponent(0.12)
-        case .cache: return NSColor.systemPurple.withAlphaComponent(0.12)
-        case .gateway: return NSColor.systemTeal.withAlphaComponent(0.12)
-        case .client: return NSColor.systemGreen.withAlphaComponent(0.12)
-        case .external: return NSColor.systemGray.withAlphaComponent(0.15)
-        default: return NSColor.controlBackgroundColor
+        case .database: return nodeSurface.tinted(with: .systemBlue)
+        case .queue: return nodeSurface.tinted(with: .systemOrange)
+        case .cache: return nodeSurface.tinted(with: .systemPurple)
+        case .gateway: return nodeSurface.tinted(with: .systemTeal)
+        case .client: return nodeSurface.tinted(with: .systemGreen)
+        case .external: return nodeSurface.tinted(with: .systemGray)
+        default: return nodeSurface
+        }
+    }
+}
+
+extension NSColor {
+    func tinted(with tint: NSColor) -> NSColor {
+        NSColor(name: nil) { _ in
+            self.blended(withFraction: 0.18, of: tint) ?? self
         }
     }
 }

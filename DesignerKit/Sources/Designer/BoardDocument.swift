@@ -1,4 +1,5 @@
 import AppKit
+import DesignerCanvas
 import DesignerModel
 import DesignerPersistence
 
@@ -36,6 +37,7 @@ final class BoardDocument: NSDocument, ObservableObject {
     /// registers its inverse with the undo manager, which also drives
     /// NSDocument's change tracking and autosave.
     func perform(_ operation: BoardOperation, actionName: String) {
+        DesignerCanvas.CanvasView.debugTrace?("document.perform \(actionName)")
         do {
             let inverse = try board.apply(operation)
             undoManager?.registerUndo(withTarget: self) { document in

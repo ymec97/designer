@@ -77,6 +77,10 @@ public final class CanvasView: NSView {
     public override var isFlipped: Bool { true }
     public override var acceptsFirstResponder: Bool { true }
 
+    /// First click on an inactive window should engage the canvas, not be
+    /// swallowed by click-through protection.
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     // MARK: Rendering
 
     public override func draw(_ dirtyRect: NSRect) {
@@ -84,6 +88,11 @@ public final class CanvasView: NSView {
 
         context.setFillColor(Palette.canvasBackground.cgColor)
         context.fill(bounds)
+
+        if board.elements.isEmpty {
+            renderer.drawEmptyHint(in: context, bounds: bounds)
+            return
+        }
 
         let visibleWorld = viewport.visibleWorldRect(viewSize: bounds.size)
         let visibleIDs = spatialIndex.query(visibleWorld)
@@ -173,11 +182,16 @@ public final class CanvasView: NSView {
 
     // MARK: Mouse input
 
+    /// Temporary M1 debug hook; removed once the interaction bug is fixed.
+    public static var debugTrace: ((String) -> Void)?
+
     public override func mouseDown(with event: NSEvent) {
+        Self.debugTrace?("mouseDown clicks=\(event.clickCount) window=\(event.locationInWindow)")
         commitLabelEditor()
         let point = convert(event.locationInWindow, from: nil)
 
         if event.clickCount == 2 {
+            Self.debugTrace?("doubleClick at view=\(point)")
             handleDoubleClick(at: point)
             return
         }
@@ -360,6 +374,7 @@ public final class CanvasView: NSView {
 
     private func createBlock(at world: Point) {
         let layerIDs = activeLayerIDs()
+        Self.debugTrace?("createBlock world=\(world) layers=\(layerIDs.count) delegate=\(delegate != nil)")
         guard !layerIDs.isEmpty else { return }
         let frame = Rect(x: world.x - 80, y: world.y - 40, width: 160, height: 80)
         let element = Element(
@@ -554,6 +569,12 @@ public final class CanvasView: NSView {
         } else {
             NSCursor.arrow.set()
         }
+    }
+
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        renderer.invalidateCaches()
+        needsDisplay = true
     }
 
     public override func updateTrackingAreas() {

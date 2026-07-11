@@ -16,6 +16,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--perf-test") {
             runPerfTest()
         }
+        if CommandLine.arguments.contains("--ui-test") {
+            runUITest()
+        }
+    }
+
+    private func runUITest() {
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument
+        else {
+            FileHandle.standardError.write(Data("UI-TEST FAIL: cannot create document\n".utf8))
+            exit(1)
+        }
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let driver = UITestDriver(document: document) else {
+            FileHandle.standardError.write(Data("UI-TEST FAIL: no canvas window\n".utf8))
+            exit(1)
+        }
+        DispatchQueue.main.async { driver.run() }
     }
 
     /// See PerfTestDriver — the M1/D12 frame-pacing criterion as a command.
