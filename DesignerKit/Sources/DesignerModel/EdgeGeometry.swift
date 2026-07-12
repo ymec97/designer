@@ -200,4 +200,50 @@ extension Board {
             return edge.from.elementID == id || edge.to.elementID == id
         }
     }
+
+    /// How a new connection `from → to` relates to an existing edge between
+    /// the same pair, so both the connect gesture and sketch conversion make
+    /// the same call: same-direction repeats are absorbed (no duplicates, no
+    /// accidental bidirectional), opposite-direction repeats upgrade to `both`.
+    public enum ConnectionMergeOutcome: Equatable {
+        /// No edge between the pair — insert a new one.
+        case none
+        /// An edge already expresses this direction (or is bidirectional).
+        case alreadyConnected(ElementID)
+        /// An edge exists in the opposite direction — upgrade it to `.both`.
+        case oppositeDirection(ElementID)
+    }
+
+    public func connectionMergeOutcome(from: ElementID, to: ElementID) -> ConnectionMergeOutcome {
+        for element in elements.values {
+            guard let edge = element.edge else { continue }
+            let endpoints = (edge.from.elementID, edge.to.elementID)
+            let sameOrientation = endpoints == (from, to)
+            let oppositeOrientation = endpoints == (to, from)
+            guard sameOrientation || oppositeOrientation else { continue }
+
+            switch edge.semantic.direction {
+            case .both, .none:
+                return .alreadyConnected(element.id)
+            case .backward:
+                // `backward` flips the arrow: from→to arrows point at `from`.
+                return sameOrientation
+                    ? .oppositeDirection(element.id)
+                    : .alreadyConnected(element.id)
+            default: // .forward and unknown values
+                return sameOrientation
+                    ? .alreadyConnected(element.id)
+                    : .oppositeDirection(element.id)
+            }
+        }
+        return .none
+    }
+
+    /// The operation upgrading an existing edge to bidirectional.
+    public func makeBidirectionalOperation(_ id: ElementID) -> BoardOperation? {
+        guard var element = elements[id], var edge = element.edge else { return nil }
+        edge.semantic.direction = .both
+        element.content = .edge(edge)
+        return .replaceElement(element)
+    }
 }

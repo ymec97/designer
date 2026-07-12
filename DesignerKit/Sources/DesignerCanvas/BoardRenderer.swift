@@ -342,10 +342,12 @@ final class BoardRenderer {
     func fillNodeBatch(
         _ paths: [(color: CGColor, path: CGPath)],
         in context: CGContext,
-        viewport: CanvasViewport
+        viewport: CanvasViewport,
+        alpha: CGFloat = 1
     ) {
         guard !paths.isEmpty else { return }
         context.saveGState()
+        context.setAlpha(alpha)
         context.translateBy(
             x: -viewport.origin.x * viewport.scale,
             y: -viewport.origin.y * viewport.scale
@@ -363,9 +365,12 @@ final class BoardRenderer {
     /// mapped through the CTM instead of transforming 15k points on the CPU.
     /// Antialiasing off: at these scales edges are ~1px lines and AA is the
     /// dominant rasterization cost.
-    func strokeEdgeBatch(_ worldPath: CGPath, in context: CGContext, viewport: CanvasViewport) {
+    func strokeEdgeBatch(
+        _ worldPath: CGPath, in context: CGContext, viewport: CanvasViewport, alpha: CGFloat = 1
+    ) {
         guard !worldPath.isEmpty else { return }
         context.saveGState()
+        context.setAlpha(alpha)
         context.setShouldAntialias(false)
         context.translateBy(
             x: -viewport.origin.x * viewport.scale,
@@ -568,7 +573,7 @@ extension NSColor {
 
 extension NSColor {
     /// Parses "#RRGGBB" or "#RRGGBBAA".
-    convenience init?(hexString: String) {
+    public convenience init?(hexString: String) {
         var hex = hexString.trimmingCharacters(in: .whitespaces)
         if hex.hasPrefix("#") { hex.removeFirst() }
         guard hex.count == 6 || hex.count == 8, let value = UInt64(hex, radix: 16) else {

@@ -41,11 +41,20 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     }
 
     private let toolbarState = ToolbarState()
+    private let layersModel = LayersPanelModel()
 
     override func viewDidLoad() {
         super.viewDidLoad()
         boardSubscription = document.$board.sink { [weak self] board in
-            self?.canvasView.board = board
+            guard let self else { return }
+            self.canvasView.board = board
+            // Keep the active layer valid across undo/board changes.
+            if let active = self.layersModel.activeLayerID,
+               !board.layers.contains(where: { $0.id == active }) {
+                self.setActiveLayer(board.layers.first?.id)
+            } else if self.layersModel.activeLayerID == nil {
+                self.setActiveLayer(board.layers.first?.id)
+            }
         }
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
@@ -54,6 +63,100 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             self?.toolbarState.tool = tool
         }
         installToolbar()
+        installLayersPanel()
+    }
+
+    // MARK: Layers
+
+    private func setActiveLayer(_ id: LayerID?) {
+        layersModel.activeLayerID = id
+        canvasView.activeLayerID = id
+    }
+
+    @objc func toggleLayersPanel(_ sender: Any?) {
+        layersModel.isVisible.toggle()
+    }
+
+    private func installLayersPanel() {
+        let actions = LayersPanelActions(
+            setVisible: { [weak self] id, visible in
+                self?.updateLayer(id) { $0.isVisible = visible }
+            },
+            setLocked: { [weak self] id, locked in
+                self?.updateLayer(id) { $0.isLocked = locked }
+            },
+            rename: { [weak self] id, name in
+                self?.updateLayer(id) { $0.name = name }
+            },
+            setTint: { [weak self] id, tint in
+                self?.updateLayer(id) { $0.colorTint = tint }
+            },
+            addLayer: { [weak self] in
+                guard let self else { return }
+                let layer = Layer(name: "Layer \(self.document.board.layers.count + 1)")
+                self.document.perform(
+                    .insertLayer(layer, at: self.document.board.layers.count),
+                    actionName: "Add Layer"
+                )
+                self.setActiveLayer(layer.id)
+            },
+            duplicate: { [weak self] id in
+                guard let self,
+                      let operations = self.document.board.duplicateLayerOperations(id) else { return }
+                self.document.perform(.batch(operations), actionName: "Duplicate Layer")
+            },
+            delete: { [weak self] id in
+                guard let self,
+                      let operations = self.document.board.deleteLayerOperations(id) else {
+                    NSSound.beep()
+                    return
+                }
+                self.document.perform(.batch(operations), actionName: "Delete Layer")
+                if self.layersModel.activeLayerID == id {
+                    self.setActiveLayer(self.document.board.layers.first?.id)
+                }
+            },
+            move: { [weak self] source, destination in
+                guard let self, let sourceIndex = source.first,
+                      self.document.board.layers.indices.contains(sourceIndex) else { return }
+                let id = self.document.board.layers[sourceIndex].id
+                // List's destination is in "after removal" terms for downward moves.
+                let target = destination > sourceIndex ? destination - 1 : destination
+                guard target != sourceIndex else { return }
+                self.document.perform(.moveLayer(id, to: target), actionName: "Reorder Layers")
+            },
+            setActive: { [weak self] id in
+                self?.setActiveLayer(id)
+            },
+            setFocus: { [weak self] enabled in
+                self?.layersModel.focusEnabled = enabled
+                self?.canvasView.focusActiveLayer = enabled
+            },
+            assignSelection: { [weak self] id in
+                guard let self else { return }
+                let operations = self.document.board.assignOperations(self.canvasView.selection, toLayer: id)
+                guard !operations.isEmpty else {
+                    NSSound.beep()
+                    return
+                }
+                self.document.perform(.batch(operations), actionName: "Assign to Layer")
+            }
+        )
+
+        let panel = LayersPanelContainer(document: document, model: layersModel, actions: actions)
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+        ])
+    }
+
+    private func updateLayer(_ id: LayerID, _ mutate: (inout Layer) -> Void) {
+        guard var layer = document.board.layers.first(where: { $0.id == id }) else { return }
+        mutate(&layer)
+        document.perform(.replaceLayer(layer), actionName: "Edit Layer")
     }
 
     private func installToolbar() {

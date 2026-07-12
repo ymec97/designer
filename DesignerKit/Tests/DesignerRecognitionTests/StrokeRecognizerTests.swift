@@ -401,6 +401,85 @@ final class StrokeRecognizerTests: XCTestCase {
         XCTAssertEqual(edges.first?.edge?.semantic.direction, .both)
     }
 
+    func testSameDirectionRestrokeIsAbsorbedNotBidirectional() throws {
+        var (board, layer) = makeBoard()
+        let a = Element(
+            layerIDs: [layer], sortKey: "i",
+            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
+        )
+        let b = Element(
+            layerIDs: [layer], sortKey: "j",
+            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
+        )
+        try board.apply(.insertElement(a))
+        try board.apply(.insertElement(b))
+
+        let first = inkElement(
+            sketchLine(from: Point(x: 105, y: 30), to: Point(x: 395, y: 30), jitterAmount: 1),
+            layer: layer
+        )
+        try board.apply(.insertElement(first))
+        try board.apply(try XCTUnwrap(SketchConversion.conversion(for: first, in: board)).operation)
+
+        // Second stroke in the SAME direction: absorbed, direction unchanged.
+        let repeated = inkElement(
+            sketchLine(from: Point(x: 105, y: 35), to: Point(x: 395, y: 35), jitterAmount: 1),
+            layer: layer
+        )
+        try board.apply(.insertElement(repeated))
+        let conversion = try XCTUnwrap(SketchConversion.conversion(for: repeated, in: board))
+        XCTAssertEqual(conversion.actionName, "Convert to Connector")
+        try board.apply(conversion.operation)
+
+        let edges = board.elements.values.filter { $0.edge != nil }
+        XCTAssertEqual(edges.count, 1, "no duplicate edge")
+        XCTAssertEqual(
+            edges.first?.edge?.semantic.direction, .forward,
+            "same-direction restroke must NOT become bidirectional"
+        )
+        XCTAssertNil(board.elements[repeated.id], "the repeated stroke is absorbed")
+    }
+
+    func testConnectionMergeOutcomes() throws {
+        var (board, layer) = makeBoard()
+        let a = Element(
+            layerIDs: [layer], sortKey: "i",
+            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
+        )
+        let b = Element(
+            layerIDs: [layer], sortKey: "j",
+            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
+        )
+        try board.apply(.insertElement(a))
+        try board.apply(.insertElement(b))
+        XCTAssertEqual(board.connectionMergeOutcome(from: a.id, to: b.id), .none)
+
+        let edge = Element(
+            layerIDs: [layer], sortKey: "k",
+            content: .edge(DesignerModel.Edge(
+                from: .element(a.id, side: nil, offset: nil),
+                to: .element(b.id, side: nil, offset: nil)
+            ))
+        )
+        try board.apply(.insertElement(edge))
+
+        XCTAssertEqual(
+            board.connectionMergeOutcome(from: a.id, to: b.id),
+            .alreadyConnected(edge.id)
+        )
+        XCTAssertEqual(
+            board.connectionMergeOutcome(from: b.id, to: a.id),
+            .oppositeDirection(edge.id)
+        )
+
+        try board.apply(try XCTUnwrap(board.makeBidirectionalOperation(edge.id)))
+        XCTAssertEqual(
+            board.connectionMergeOutcome(from: b.id, to: a.id),
+            .alreadyConnected(edge.id),
+            "a bidirectional edge absorbs strokes in both directions"
+        )
+    }
+
     func testConversionUndoRestoresInk() throws {
         var (board, layer) = makeBoard()
         let ink = inkElement(

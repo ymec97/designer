@@ -63,11 +63,12 @@ build/Designer.app/Contents/MacOS/Designer --perf-test
 
 ## Status
 
-Milestone M3 (ink + sketch-to-structure) — see the brief's §8 for the roadmap.
+Milestone M4 (layers) — see the brief's §8 for the roadmap.
 Done: document model, versioned persistence, operation layer with undo/redo,
 canvas with pan/zoom/select/drag/resize/create/label-edit, and semantic
 connectors (border-drag to connect, auto-anchoring that survives move/resize/
 undo storms, straight + orthogonal routing, label/protocol/data/condition
 badges, popover editor, cascade delete) — fluid at 2k nodes + 4k edges.
 Freehand ink (mouse/trackpad + tablet pressure), geometric stroke recognition (rectangle/ellipse/diamond/line), live sketch-to-structure conversion, ⌘R structurize.
-Next: M4 layers.
+Layers: floating panel (⌘L), multi-membership, active layer, show/hide/lock/tint/duplicate/reorder, focus mode dimming.
+Next: M5 library.

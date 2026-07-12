@@ -14,6 +14,7 @@ public enum BoardOperation: Equatable, Sendable {
     case insertLayer(Layer, at: Int)
     case removeLayer(LayerID)
     case replaceLayer(Layer)
+    case moveLayer(LayerID, to: Int)
     /// Applied in order, inverted in reverse order. Atomic: if any child
     /// fails, the already-applied prefix is rolled back.
     case batch([BoardOperation])
@@ -104,6 +105,17 @@ extension Board {
             let old = layers[index]
             layers[index] = layer
             return .replaceLayer(old)
+
+        case .moveLayer(let id, let index):
+            guard let currentIndex = layers.firstIndex(where: { $0.id == id }) else {
+                throw BoardOperationError.layerNotFound(id)
+            }
+            guard (0..<layers.count).contains(index) else {
+                throw BoardOperationError.layerIndexOutOfRange(index)
+            }
+            let layer = layers.remove(at: currentIndex)
+            layers.insert(layer, at: index)
+            return .moveLayer(id, to: currentIndex)
 
         case .batch(let operations):
             var inverses: [BoardOperation] = []

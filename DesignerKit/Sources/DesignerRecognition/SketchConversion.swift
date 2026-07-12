@@ -51,17 +51,25 @@ public enum SketchConversion {
                 fromNode != toNode
             else { return nil }
 
-            // A stroke retracing an existing connection (either direction)
-            // upgrades it to bidirectional instead of duplicating it.
-            if var existing = existingEdge(between: fromNode, and: toNode, in: board) {
-                var edge = existing.edge!
-                edge.semantic.direction = .both
-                existing.content = .edge(edge)
+            // A stroke opposing an existing connection upgrades it to
+            // bidirectional; a same-direction repeat is absorbed (the stroke
+            // vanishes, nothing duplicates or changes direction).
+            switch board.connectionMergeOutcome(from: fromNode, to: toNode) {
+            case .alreadyConnected(let existing):
                 return Conversion(
-                    operation: .batch([.removeElement(element.id), .replaceElement(existing)]),
-                    producedID: existing.id,
+                    operation: .removeElement(element.id),
+                    producedID: existing,
+                    actionName: "Convert to Connector"
+                )
+            case .oppositeDirection(let existing):
+                guard let upgrade = board.makeBidirectionalOperation(existing) else { return nil }
+                return Conversion(
+                    operation: .batch([.removeElement(element.id), upgrade]),
+                    producedID: existing,
                     actionName: "Make Bidirectional"
                 )
+            case .none:
+                break
             }
 
             let edge = Element(
@@ -80,15 +88,6 @@ public enum SketchConversion {
         }
     }
 
-    private static func existingEdge(
-        between a: ElementID, and b: ElementID, in board: Board
-    ) -> Element? {
-        board.elements.values.first { element in
-            guard let edge = element.edge else { return false }
-            let endpoints = (edge.from.elementID, edge.to.elementID)
-            return (endpoints == (a, b)) || (endpoints == (b, a))
-        }
-    }
 
     /// Batch conversion for a selection; nil when nothing converts.
     /// Two passes: closed shapes become blocks first, then lines attach to

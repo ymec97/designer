@@ -11,6 +11,9 @@ import DesignerPersistence
 enum ScreenshotDriver {
     static func makeDemoBoard() -> Board {
         var board = Board(title: "Demo")
+        board.layers[0].name = "Infra"
+        board.layers.append(Layer(name: "Security", colorTint: "#D95757"))
+        board.layers.append(Layer(name: "Data Flow", colorTint: "#4A90D9"))
         let layer = board.layers[0].id
         var keyIndex = 0
         func key() -> String {
@@ -70,9 +73,9 @@ enum ScreenshotDriver {
         )
         board.elements[dangling.id] = dangling
 
-        // A freehand annotation that stayed ink.
+        // A freehand annotation that stayed ink (on the Security layer).
         let ink = Element(
-            layerIDs: [layer], sortKey: key(),
+            layerIDs: [board.layers[1].id], sortKey: key(),
             content: .ink(Ink(
                 points: (0...30).map { i in
                     let t = Double(i) / 30
@@ -110,6 +113,9 @@ enum ScreenshotDriver {
         }
         window.setContentSize(NSSize(width: 1140, height: 700))
         window.makeKeyAndOrderFront(nil)
+        if let controller = window.contentViewController as? CanvasViewController {
+            controller.toggleLayersPanel(nil) // show the panel in the capture
+        }
 
         // Give layout + SwiftUI toolbar one runloop turn, then capture.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

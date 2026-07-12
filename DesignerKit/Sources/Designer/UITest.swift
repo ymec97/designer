@@ -45,9 +45,10 @@ final class UITestDriver {
         step9DrawScribbleStaysInk()
         step10SketchRectangleBecomesBlock()
         step11SketchStrokeBecomesConnector()
+        step12LayerVisibilityLockingAndActive()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers verified")
             exit(0)
         } else {
             for failure in failures {
@@ -423,6 +424,89 @@ final class UITestDriver {
         key(9, characters: "v") // back to select tool
         pumpRunLoop()
         expect(canvasView.tool == .select, "'v' should return to the select tool")
+    }
+
+    private func step12LayerVisibilityLockingAndActive() {
+        // New blocks land on the active layer.
+        let security = Layer(name: "Security")
+        document.perform(.insertLayer(security, at: 1), actionName: "Add Layer")
+        canvasView.activeLayerID = security.id
+        pumpRunLoop()
+
+        let before = Set(document.board.elements.keys)
+        canvasView.addBlock(nil)
+        pumpRunLoop()
+        canvasView.commitLabelEditor()
+        pumpRunLoop()
+        guard let newID = Set(document.board.elements.keys).subtracting(before).first,
+              let frame = document.board.elements[newID]?.node?.frame else {
+            expect(false, "⌘B should create a block")
+            return
+        }
+        expect(
+            document.board.elements[newID]?.layerIDs == [security.id],
+            "new block should land on the active layer"
+        )
+
+        let center = canvasView.viewport.toView(Point(x: frame.midX, y: frame.midY))
+
+        func setSecurity(_ mutate: (inout Layer) -> Void) {
+            guard var layer = document.board.layers.first(where: { $0.id == security.id }) else { return }
+            mutate(&layer)
+            document.perform(.replaceLayer(layer), actionName: "Edit Layer")
+            pumpRunLoop()
+        }
+
+        // Hidden layer: invisible pixels, no hit-testing.
+        canvasView.select([])
+        setSecurity { $0.isVisible = false }
+        if let bitmap = canvasView.bitmapImageRepForCachingDisplay(in: canvasView.bounds) {
+            canvasView.cacheDisplay(in: canvasView.bounds, to: bitmap)
+            let scaleX = CGFloat(bitmap.pixelsWide) / canvasView.bounds.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / canvasView.bounds.height
+            let inside = bitmap.colorAt(x: Int(center.x * scaleX), y: Int(center.y * scaleY))
+            let empty = bitmap.colorAt(x: Int(5 * scaleX), y: Int(5 * scaleY))
+            expect(inside == empty, "hidden layer's block should not render")
+        }
+        click(at: center, clickCount: 1)
+        pumpRunLoop()
+        expect(canvasView.selection.isEmpty, "hidden layer's block should not be clickable")
+
+        // Locked layer: visible but not selectable.
+        setSecurity { $0.isVisible = true; $0.isLocked = true }
+        click(at: center, clickCount: 1)
+        pumpRunLoop()
+        expect(canvasView.selection.isEmpty, "locked layer's block should not be selectable")
+
+        // Unlocked again: selectable.
+        setSecurity { $0.isLocked = false }
+        click(at: center, clickCount: 1)
+        pumpRunLoop()
+        expect(canvasView.selection == [newID], "unlocked block should select normally")
+
+        // Focus mode dims non-active elements (pixel changes at block A).
+        canvasView.select([])
+        guard let otherFrame = document.board.elements.values
+            .first(where: { $0.node != nil && $0.id != newID })?.node?.frame else { return }
+        let otherCenter = canvasView.viewport.toView(Point(x: otherFrame.midX, y: otherFrame.midY))
+        func pixel(at point: CGPoint) -> NSColor? {
+            guard let bitmap = canvasView.bitmapImageRepForCachingDisplay(in: canvasView.bounds) else { return nil }
+            canvasView.cacheDisplay(in: canvasView.bounds, to: bitmap)
+            let scaleX = CGFloat(bitmap.pixelsWide) / canvasView.bounds.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / canvasView.bounds.height
+            return bitmap.colorAt(x: Int(point.x * scaleX), y: Int(point.y * scaleY))
+        }
+        let fullOpacity = pixel(at: otherCenter)
+        canvasView.focusActiveLayer = true
+        pumpRunLoop()
+        let dimmed = pixel(at: otherCenter)
+        expect(
+            fullOpacity != nil && dimmed != nil && fullOpacity != dimmed,
+            "focus mode should visibly dim blocks off the active layer"
+        )
+        canvasView.focusActiveLayer = false
+        canvasView.activeLayerID = nil
+        pumpRunLoop()
     }
 
     // MARK: Event synthesis

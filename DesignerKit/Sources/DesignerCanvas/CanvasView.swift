@@ -40,44 +40,58 @@ public final class CanvasView: NSView {
     /// Resolved edge routes — rebuilt on board changes; only edges touched by
     /// an in-flight drag are re-resolved per frame.
     private var routeCache: [ElementID: EdgeGeometry.Route] = [:]
-    /// One world-space path holding every edge except `excluded` — stroked in
-    /// a single CG call through the CTM. Rebuilt when the exclusion set
-    /// changes (once per drag gesture), not per frame.
-    private var edgeBatchCache: (excluded: Set<ElementID>, path: CGPath)?
+    /// World-space paths holding every edge except `excluded` — stroked in
+    /// single CG calls through the CTM, split into full-opacity and dimmed
+    /// groups when focus mode is on. Rebuilt when the exclusion set changes
+    /// (once per drag gesture), not per frame.
+    private var edgeBatchCache: (excluded: Set<ElementID>, active: CGPath, dimmed: CGPath)?
 
     /// Bumped on every board change; keys the renderer's edge-layer cache.
     private var boardRevision = 0
 
-    private func edgeBatchPath(excluding excluded: Set<ElementID>) -> CGPath {
+    private func edgeBatchPaths(
+        excluding excluded: Set<ElementID>
+    ) -> (active: CGPath, dimmed: CGPath) {
         if let cache = edgeBatchCache, cache.excluded == excluded {
-            return cache.path
+            return (cache.active, cache.dimmed)
         }
-        let path = CGMutablePath()
+        let active = CGMutablePath()
+        let dimmed = CGMutablePath()
         for (id, route) in routeCache where !excluded.contains(id) {
             guard let first = route.points.first else { continue }
+            let path = (board.elements[id].map(isDimmed) == true) ? dimmed : active
             path.move(to: CGPoint(x: first.x, y: first.y))
             for point in route.points.dropFirst() {
                 path.addLine(to: CGPoint(x: point.x, y: point.y))
             }
         }
-        edgeBatchCache = (excluded, path)
-        return path
+        edgeBatchCache = (excluded, active, dimmed)
+        return (active, dimmed)
     }
 
     /// World-space node rect paths grouped by fill color, cached per board
-    /// revision (and per drag-exclusion set, rebuilt once per gesture).
-    private var nodeBatchCache: (revision: Int, excluded: Set<ElementID>, paths: [(color: CGColor, path: CGPath)])?
+    /// revision (and per drag-exclusion set, rebuilt once per gesture),
+    /// split into full-opacity and dimmed groups when focus mode is on.
+    private var nodeBatchCache: (
+        revision: Int,
+        excluded: Set<ElementID>,
+        active: [(color: CGColor, path: CGPath)],
+        dimmed: [(color: CGColor, path: CGPath)]
+    )?
     /// Ink elements are rare; they draw individually on the fast path.
     private var inkElementIDs: [ElementID] = []
     /// Edges with an unattached endpoint — warning style, excluded from batches.
     private var danglingEdgeIDs: Set<ElementID> = []
 
-    private func nodeBatchPaths(excluding excluded: Set<ElementID>) -> [(color: CGColor, path: CGPath)] {
+    private func nodeBatchPaths(
+        excluding excluded: Set<ElementID>
+    ) -> (active: [(color: CGColor, path: CGPath)], dimmed: [(color: CGColor, path: CGPath)]) {
         if let cache = nodeBatchCache, cache.revision == boardRevision, cache.excluded == excluded {
-            return cache.paths
+            return (cache.active, cache.dimmed)
         }
         let hiddenLayers = Set(board.layers.filter { !$0.isVisible }.map(\.id))
-        var byColor: [CGColor: CGMutablePath] = [:]
+        var activeByColor: [CGColor: CGMutablePath] = [:]
+        var dimmedByColor: [CGColor: CGMutablePath] = [:]
         for element in zOrderedElements {
             guard !excluded.contains(element.id),
                   let node = element.node,
@@ -90,6 +104,8 @@ public final class CanvasView: NSView {
             }
             // Explicit insert: `[_, default:]` with a method call on a class
             // value is a get, so the default would never be stored.
+            let dimmedElement = isDimmed(element)
+            var byColor = dimmedElement ? dimmedByColor : activeByColor
             let path: CGMutablePath
             if let existing = byColor[color] {
                 path = existing
@@ -101,10 +117,12 @@ public final class CanvasView: NSView {
                 x: node.frame.x, y: node.frame.y,
                 width: node.frame.width, height: node.frame.height
             ))
+            if dimmedElement { dimmedByColor = byColor } else { activeByColor = byColor }
         }
-        let paths = byColor.map { (color: $0.key, path: $0.value as CGPath) }
-        nodeBatchCache = (boardRevision, excluded, paths)
-        return paths
+        let active = activeByColor.map { (color: $0.key, path: $0.value as CGPath) }
+        let dimmed = dimmedByColor.map { (color: $0.key, path: $0.value as CGPath) }
+        nodeBatchCache = (boardRevision, excluded, active, dimmed)
+        return (active, dimmed)
     }
 
     /// Settable so controllers can restore saved view state and test drivers
@@ -149,6 +167,42 @@ public final class CanvasView: NSView {
 
     /// Observers (toolbar) are told when the tool changes, however it changes.
     public var toolChanged: ((Tool) -> Void)?
+
+    /// Where new elements land (D9). Nil falls back to the first visible,
+    /// unlocked layer. Set by the layers panel.
+    public var activeLayerID: LayerID? {
+        didSet {
+            guard activeLayerID != oldValue else { return }
+            edgeBatchCache = nil
+            nodeBatchCache = nil
+            needsDisplay = true
+        }
+    }
+
+    /// Focus mode: elements not on the active layer render dimmed.
+    public var focusActiveLayer: Bool = false {
+        didSet {
+            guard focusActiveLayer != oldValue else { return }
+            edgeBatchCache = nil
+            nodeBatchCache = nil
+            needsDisplay = true
+        }
+    }
+
+    static let dimmedAlpha: CGFloat = 0.22
+
+    /// Non-nil when focus dimming is in effect: the layer to keep at full
+    /// opacity.
+    private var focusLayerID: LayerID? {
+        guard focusActiveLayer, let id = activeLayerID,
+              board.layers.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    private func isDimmed(_ element: Element) -> Bool {
+        guard let focusID = focusLayerID else { return false }
+        return !element.layerIDs.contains(focusID)
+    }
 
     private enum GestureState {
         case idle
@@ -251,26 +305,28 @@ public final class CanvasView: NSView {
             // no per-element Swift work: the probe showed query+filter+
             // per-node batching cost ~11ms/frame at 6k elements; this path
             // does a handful of CG calls regardless of element count.
+            let edgePaths = edgeBatchPaths(excluding: dragAffectedEdges.union(danglingEdgeIDs))
+            renderer.strokeEdgeBatch(edgePaths.active, in: context, viewport: viewport)
             renderer.strokeEdgeBatch(
-                edgeBatchPath(excluding: dragAffectedEdges.union(danglingEdgeIDs)),
-                in: context,
-                viewport: viewport
+                edgePaths.dimmed, in: context, viewport: viewport, alpha: Self.dimmedAlpha
             )
             // Dangling connectors keep their warning style at any zoom.
             for id in danglingEdgeIDs where !dragAffectedEdges.contains(id) {
                 guard let element = board.elements[id], isOnVisibleLayer(element),
                       let edge = element.edge, let route = routeFor(element) else { continue }
-                renderer.drawEdge(
-                    edge, route: route, in: context, viewport: viewport,
-                    isSelected: selection.contains(id), isDangling: true, simplified: true
-                )
+                withFocusAlpha(context, dimmed: isDimmed(element)) {
+                    renderer.drawEdge(
+                        edge, route: route, in: context, viewport: viewport,
+                        isSelected: selection.contains(id), isDangling: true, simplified: true
+                    )
+                }
             }
             probe("edges")
 
+            let nodePaths = nodeBatchPaths(excluding: Set(transientFrames.keys))
+            renderer.fillNodeBatch(nodePaths.active, in: context, viewport: viewport)
             renderer.fillNodeBatch(
-                nodeBatchPaths(excluding: Set(transientFrames.keys)),
-                in: context,
-                viewport: viewport
+                nodePaths.dimmed, in: context, viewport: viewport, alpha: Self.dimmedAlpha
             )
 
             // Individual overlays: drag-affected edges, selection, in-flight
@@ -309,10 +365,12 @@ public final class CanvasView: NSView {
             }
             for id in inkElementIDs {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
-                renderer.draw(
-                    element, in: context, viewport: viewport,
-                    isSelected: selection.contains(id)
-                )
+                withFocusAlpha(context, dimmed: isDimmed(element)) {
+                    renderer.draw(
+                        element, in: context, viewport: viewport,
+                        isSelected: selection.contains(id)
+                    )
+                }
             }
             probe("nodes")
         } else {
@@ -330,24 +388,26 @@ public final class CanvasView: NSView {
             probe("filter")
 
             for element in drawables {
-                if let edge = element.edge {
-                    if let route = routeFor(element) {
-                        renderer.drawEdge(
-                            edge, route: route,
-                            in: context, viewport: viewport,
+                withFocusAlpha(context, dimmed: isDimmed(element)) {
+                    if let edge = element.edge {
+                        if let route = routeFor(element) {
+                            renderer.drawEdge(
+                                edge, route: route,
+                                in: context, viewport: viewport,
+                                isSelected: selection.contains(element.id),
+                                isDangling: danglingEdgeIDs.contains(element.id)
+                            )
+                        }
+                    } else {
+                        renderer.draw(
+                            element,
+                            in: context,
+                            viewport: viewport,
+                            frameOverride: transientFrames[element.id],
                             isSelected: selection.contains(element.id),
-                            isDangling: danglingEdgeIDs.contains(element.id)
+                            suppressText: element.id == editingElementID
                         )
                     }
-                } else {
-                    renderer.draw(
-                        element,
-                        in: context,
-                        viewport: viewport,
-                        frameOverride: transientFrames[element.id],
-                        isSelected: selection.contains(element.id),
-                        suppressText: element.id == editingElementID
-                    )
                 }
             }
             probe("nodes")
@@ -599,17 +659,28 @@ public final class CanvasView: NSView {
 
         case .connect(let fromID, _, let targetID):
             if let targetID {
-                let layerIDs = activeLayerIDs()
-                let element = Element(
-                    layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
-                    sortKey: board.topSortKey,
-                    content: .edge(Edge(
-                        from: .element(fromID, side: nil, offset: nil),
-                        to: .element(targetID, side: nil, offset: nil)
-                    ))
-                )
-                delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
-                selection = [element.id]
+                switch board.connectionMergeOutcome(from: fromID, to: targetID) {
+                case .alreadyConnected(let existing):
+                    // Idempotent: repeating a connection selects it, no duplicate.
+                    selection = [existing]
+                case .oppositeDirection(let existing):
+                    if let operation = board.makeBidirectionalOperation(existing) {
+                        delegate?.canvasView(self, perform: operation, actionName: "Make Bidirectional")
+                    }
+                    selection = [existing]
+                case .none:
+                    let layerIDs = activeLayerIDs()
+                    let element = Element(
+                        layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+                        sortKey: board.topSortKey,
+                        content: .edge(Edge(
+                            from: .element(fromID, side: nil, offset: nil),
+                            to: .element(targetID, side: nil, offset: nil)
+                        ))
+                    )
+                    delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
+                    selection = [element.id]
+                }
             }
             needsDisplay = true
 
@@ -771,10 +842,25 @@ public final class CanvasView: NSView {
         }
     }
 
-    /// M1: all visible, unlocked layers are "active"; M4 adds explicit control.
+    /// The layer new elements land on: the explicit active layer when it is
+    /// usable, otherwise the first visible, unlocked layer.
     private func activeLayerIDs() -> Set<LayerID> {
-        let active = board.layers.filter { $0.isVisible && !$0.isLocked }.map(\.id)
-        return active.isEmpty ? [] : [active[0]]
+        if let id = activeLayerID,
+           let layer = board.layers.first(where: { $0.id == id }),
+           layer.isVisible, !layer.isLocked {
+            return [id]
+        }
+        let usable = board.layers.filter { $0.isVisible && !$0.isLocked }.map(\.id)
+        return usable.isEmpty ? [] : [usable[0]]
+    }
+
+    /// Draws `body` dimmed when focus mode excludes the element.
+    private func withFocusAlpha(_ context: CGContext, dimmed: Bool, _ body: () -> Void) {
+        guard dimmed else { return body() }
+        context.saveGState()
+        context.setAlpha(Self.dimmedAlpha)
+        body()
+        context.restoreGState()
     }
 
     func beginLabelEdit(for element: Element) {

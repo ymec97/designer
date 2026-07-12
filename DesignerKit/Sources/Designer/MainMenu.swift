@@ -45,6 +45,10 @@ enum MainMenu {
 
     private static func viewMenuItem() -> NSMenuItem {
         let menu = NSMenu(title: "View")
+        menu.addItem(withTitle: "Show Layers",
+                     action: Selector(("toggleLayersPanel:")),
+                     keyEquivalent: "l")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Zoom In",
                      action: #selector(CanvasView.zoomIn(_:)),
                      keyEquivalent: "+")

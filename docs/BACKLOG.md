@@ -74,6 +74,13 @@ curved rendering). (b) Routing should avoid crossing over other nodes where
 possible (obstacle-aware orthogonal/curved routing; the spatial index can
 supply obstacles).
 
+### P6. App logo / icon
+*Requested 2026-07-13 by Yarden.*
+Find/design a cool logo for the app: app icon (macOS .icns via Asset
+Catalog), Dock icon, About panel. Candidate direction: geometric mark
+blending a sketched stroke morphing into a clean block+connector (the
+sketch-to-structure identity). Revisit at M6 polish.
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input
