@@ -43,6 +43,7 @@ public struct NodeShape: RawRepresentable, Hashable, Codable, Sendable, Expressi
     public static let rectangle: NodeShape = "rectangle"
     public static let ellipse: NodeShape = "ellipse"
     public static let diamond: NodeShape = "diamond"
+    public static let triangle: NodeShape = "triangle"
 }
 
 public struct RoutingMode: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {

@@ -156,6 +156,28 @@ struct LayersPanel: View {
                 .foregroundStyle(.tertiary)
                 .monospacedDigit()
 
+            let index = document.board.layers.firstIndex { $0.id == layer.id } ?? 0
+            VStack(spacing: 0) {
+                Button {
+                    actions.move(IndexSet(integer: index), index - 1)
+                } label: {
+                    Image(systemName: "chevron.up").font(.system(size: 7, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(index == 0)
+                .help("Move layer up")
+                Button {
+                    actions.move(IndexSet(integer: index), index + 2)
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .disabled(index >= document.board.layers.count - 1)
+                .help("Move layer down")
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 12)
+
             Button {
                 actions.setLocked(layer.id, !layer.isLocked)
             } label: {

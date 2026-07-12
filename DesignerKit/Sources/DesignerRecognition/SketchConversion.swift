@@ -24,7 +24,7 @@ public enum SketchConversion {
         guard let recognition = StrokeRecognizer.recognize(ink.points) else { return nil }
 
         switch recognition {
-        case .rectangle(let rect), .ellipse(let rect), .diamond(let rect):
+        case .rectangle(let rect), .ellipse(let rect), .diamond(let rect), .triangle(let rect):
             let frame = Rect(
                 x: rect.x, y: rect.y,
                 width: max(rect.width, minimumNodeSize.width),
@@ -34,6 +34,7 @@ public enum SketchConversion {
             switch recognition {
             case .ellipse: shape = .ellipse
             case .diamond: shape = .diamond
+            case .triangle: shape = .triangle
             default: shape = .rectangle
             }
             let node = Element(

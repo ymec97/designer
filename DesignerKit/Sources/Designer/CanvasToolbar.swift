@@ -34,11 +34,13 @@ struct CanvasToolbar: View {
             )
             toolButton(
                 icon: "wand.and.stars", hint: "⌘R", label: "Structurize",
+                help: "Structurize (⌘R) — turn selected freehand sketches into clean blocks & connectors",
                 isActive: false, action: onStructurize
             )
             Divider().frame(height: 22).padding(.horizontal, 3)
             toolButton(
                 icon: "square.3.layers.3d", hint: "⌘L", label: "Layers",
+                help: "Layers (⌘L) — view the same board through different concerns",
                 isActive: state.layersPanelVisible, action: onLayers
             )
         }
@@ -54,6 +56,7 @@ struct CanvasToolbar: View {
 
     private func toolButton(
         icon: String, hint: String, label: String,
+        help: String? = nil,
         isActive: Bool, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -74,7 +77,7 @@ struct CanvasToolbar: View {
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
-        .help("\(label)  (\(hint))")
+        .help(help ?? "\(label)  (\(hint))")
         .accessibilityLabel(label)
     }
 }

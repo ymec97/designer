@@ -30,7 +30,7 @@ enum MainMenu {
         menu.addItem(withTitle: "Add Block",
                      action: #selector(CanvasView.addBlock(_:)),
                      keyEquivalent: "b")
-        menu.addItem(withTitle: "Structurize",
+        menu.addItem(withTitle: "Structurize Sketch into Shapes",
                      action: Selector(("structurize:")),
                      keyEquivalent: "r")
         menu.addItem(withTitle: "Convert Sketches Automatically",

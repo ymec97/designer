@@ -81,6 +81,13 @@ final class BoardRenderer {
             diamond.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
             diamond.closeSubpath()
             path = diamond
+        case .triangle:
+            let triangle = CGMutablePath()
+            triangle.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            triangle.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            triangle.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            triangle.closeSubpath()
+            path = triangle
         default:
             let cornerRadius = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
             path = CGPath(

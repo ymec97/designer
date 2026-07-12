@@ -265,7 +265,13 @@ public final class CanvasView: NSView {
         context.fill(bounds)
 
         if board.elements.isEmpty {
-            renderer.drawEmptyHint(in: context, bounds: bounds)
+            // Still show the hint, but keep drawing so the very first stroke
+            // on a blank canvas is visible while it's being drawn (it isn't
+            // committed to the board until mouseUp).
+            if case .draw = gesture {} else {
+                renderer.drawEmptyHint(in: context, bounds: bounds)
+            }
+            drawInFlightGesture(in: context)
             return
         }
 
@@ -420,18 +426,24 @@ public final class CanvasView: NSView {
             renderer.drawResizeHandles(around: handleBox, in: context)
         }
 
-        if case .rubberBand(let start, let current) = gesture {
-            renderer.drawRubberBand(rectFrom(start, current), in: context)
-        }
+        drawInFlightGesture(in: context)
+    }
 
-        if case .draw(let points, _) = gesture, points.count > 1 {
+    /// In-flight gesture overlays (rubber band, live ink stroke, connect
+    /// preview). Drawn in both the normal and empty-canvas paths so the very
+    /// first stroke is visible while drawing.
+    private func drawInFlightGesture(in context: CGContext) {
+        switch gesture {
+        case .rubberBand(let start, let current):
+            renderer.drawRubberBand(rectFrom(start, current), in: context)
+
+        case .draw(let points, _) where points.count > 1:
             renderer.drawInk(
                 Ink(points: points, style: Style(strokeWidth: 2)),
                 in: context, viewport: viewport, isSelected: false
             )
-        }
 
-        if case .connect(let fromID, let current, let target) = gesture {
+        case .connect(let fromID, let current, let target):
             let frames = board.frameProvider(overrides: transientFrames)
             if let frame = frames(fromID) {
                 let startWorld = EdgeGeometry.point(
@@ -446,6 +458,9 @@ public final class CanvasView: NSView {
             if let target, let targetFrame = frames(target) {
                 renderer.highlightConnectTarget(viewport.toView(targetFrame), in: context)
             }
+
+        default:
+            break
         }
     }
 
@@ -657,7 +672,7 @@ public final class CanvasView: NSView {
             }
             needsDisplay = true
 
-        case .connect(let fromID, _, let targetID):
+        case .connect(let fromID, let dropPoint, let targetID):
             if let targetID {
                 switch board.connectionMergeOutcome(from: fromID, to: targetID) {
                 case .alreadyConnected(let existing):
@@ -680,6 +695,12 @@ public final class CanvasView: NSView {
                     )
                     delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
                     selection = [element.id]
+                    // Seamless labeling: open the editor on the fresh edge so
+                    // protocol/data/label can be set without a second click.
+                    if let inserted = board.elements[element.id] {
+                        gesture = .idle
+                        presentEdgeEditor(for: inserted, at: dropPoint)
+                    }
                 }
             }
             needsDisplay = true
@@ -1112,9 +1133,18 @@ public final class CanvasView: NSView {
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
             owner: self
         ))
+    }
+
+    /// System-managed cursor for the draw tool: survives drags and window
+    /// activation (setting NSCursor manually did not, which read as the
+    /// cursor "disappearing" during the first stroke).
+    public override func resetCursorRects() {
+        if tool == .draw {
+            addCursorRect(bounds, cursor: .crosshair)
+        }
     }
 }
 

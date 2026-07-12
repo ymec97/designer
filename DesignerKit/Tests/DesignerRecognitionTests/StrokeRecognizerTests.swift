@@ -332,6 +332,52 @@ final class StrokeRecognizerTests: XCTestCase {
         }
     }
 
+    private func sketchTriangle(
+        centerX: Double, centerY: Double, size: Double, jitterAmount: Double
+    ) -> [StrokePoint] {
+        let vertices = [
+            Point(x: centerX, y: centerY - size),
+            Point(x: centerX + size, y: centerY + size),
+            Point(x: centerX - size, y: centerY + size),
+        ]
+        var points: [Point] = []
+        for side in 0..<3 {
+            let from = vertices[side]
+            let to = vertices[(side + 1) % 3]
+            for step in 0..<14 {
+                let t = Double(step) / 14
+                if side == 2, t > 0.9 { break }
+                points.append(Point(
+                    x: from.x + (to.x - from.x) * t + jitter(jitterAmount),
+                    y: from.y + (to.y - from.y) * t + jitter(jitterAmount)
+                ))
+            }
+        }
+        return strokePoints(points)
+    }
+
+    func testTriangleIsRecognizedAsTriangleNotCircle() {
+        for trial in 0..<8 {
+            let result = StrokeRecognizer.recognize(
+                sketchTriangle(centerX: 200, centerY: 200, size: 80 + Double(trial) * 3, jitterAmount: 2 + Double(trial % 3))
+            )
+            if case .triangle = result { continue }
+            XCTFail("triangle trial \(trial) should be .triangle, got \(String(describing: result))")
+        }
+    }
+
+    func testTriangleShapePreservedInConversion() throws {
+        var (board, layer) = makeBoard()
+        let ink = inkElement(
+            sketchTriangle(centerX: 200, centerY: 200, size: 90, jitterAmount: 2),
+            layer: layer
+        )
+        try board.apply(.insertElement(ink))
+        let conversion = try XCTUnwrap(SketchConversion.conversion(for: ink, in: board))
+        try board.apply(conversion.operation)
+        XCTAssertEqual(board.elements[conversion.producedID]?.node?.shape, .triangle)
+    }
+
     func testShapeIsPreservedInConversion() throws {
         var (board, layer) = makeBoard()
         let circle = inkElement(

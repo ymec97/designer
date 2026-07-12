@@ -38,8 +38,9 @@ enum ScreenshotDriver {
         let orders = node("orders-svc", .service, Rect(x: 600, y: 90, width: 150, height: 70))
         let payments = node("payments-svc", .service, Rect(x: 600, y: 310, width: 150, height: 70))
         let database = node("orders-db", .database, Rect(x: 830, y: 90, width: 140, height: 70), shape: .ellipse)
-        let decision = node("fraud?", .service, Rect(x: 620, y: 470, width: 140, height: 100), shape: .diamond)
-        for element in [client, gateway, orders, payments, database, decision] {
+        let decision = node("fraud?", .service, Rect(x: 610, y: 470, width: 140, height: 100), shape: .diamond)
+        let alert = node("alert", .external, Rect(x: 300, y: 470, width: 140, height: 110), shape: .triangle)
+        for element in [client, gateway, orders, payments, database, decision, alert] {
             board.elements[element.id] = element
         }
 

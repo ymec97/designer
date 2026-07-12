@@ -9,6 +9,7 @@ public enum StrokeRecognizer {
         case rectangle(Rect)
         case ellipse(Rect)
         case diamond(Rect)
+        case triangle(Rect)
         case line(from: Point, to: Point)
     }
 
@@ -80,21 +81,30 @@ public enum StrokeRecognizer {
         let solidity = hullSolidity(points, hull: hull)
         guard solidity >= 0.72 else { return nil }
 
-        let corners = detectCorners(points)
+        // Roundness first: a true circle/ellipse (circularity → 1) is round
+        // regardless of how its jittery hull simplifies. Squares and diamonds
+        // sit near 0.785, triangles near 0.6, so 0.82 cleanly separates
+        // "round" from "cornered". (Straight-edged shapes fail this and are
+        // classified by corner count below.)
+        let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
+        let area = polygonArea(points)
+        let circularity = perimeter > 0 ? 4 * .pi * area / (perimeter * perimeter) : 0
+        if circularity > 0.82 {
+            return .ellipse(bounds)
+        }
 
-        switch corners.count {
-        case 0...2:
-            // Smooth closed curve. Roundness picks ellipse; anything else
-            // solid still converts (as a rectangle-presented block).
-            let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
-            let area = polygonArea(points)
-            let circularity = 4 * .pi * area / (perimeter * perimeter)
-            return circularity > 0.55 ? .ellipse(bounds) : .rectangle(bounds)
+        // Reduce the convex hull to its dominant corners (Douglas-Peucker) to
+        // count straight sides.
+        let diagonal = (bounds.width * bounds.width + bounds.height * bounds.height).squareRoot()
+        let cornerPoints = simplifiedRingVertices(hull, epsilon: 0.08 * diagonal)
 
-        case 3...5:
-            // Quadrilateral-ish. Rectangle if corners sit near the bounding
-            // box corners; diamond if they sit near the edge midpoints.
-            let cornerPoints = corners.map { points[$0] }
+        switch cornerPoints.count {
+        case 3:
+            return .triangle(bounds)
+
+        case 4:
+            // Rectangle if corners sit near the bounding-box corners,
+            // diamond if near the edge midpoints.
             let boxCorners = [
                 Point(x: bounds.x, y: bounds.y),
                 Point(x: bounds.maxX, y: bounds.y),
@@ -107,24 +117,56 @@ public enum StrokeRecognizer {
                 Point(x: bounds.midX, y: bounds.maxY),
                 Point(x: bounds.x, y: bounds.midY),
             ]
-            let diagonal = (bounds.width * bounds.width + bounds.height * bounds.height).squareRoot()
             let toBoxCorners = averageNearestDistance(from: cornerPoints, to: boxCorners) / diagonal
             let toMidpoints = averageNearestDistance(from: cornerPoints, to: midpoints) / diagonal
-            if toBoxCorners <= toMidpoints, toBoxCorners < 0.18 {
-                return .rectangle(bounds)
-            }
-            if toMidpoints < toBoxCorners, toMidpoints < 0.18 {
-                return .diamond(bounds)
-            }
-            // Solid closed quad that fits neither template cleanly (rotated,
-            // skewed): still a block.
-            return .rectangle(bounds)
+            return toMidpoints < toBoxCorners ? .diamond(bounds) : .rectangle(bounds)
 
         default:
-            // Solid but many corners (hexagon-ish sketch, sloppy box with
-            // extra kinks): still a block. Solidity already rejected scribbles.
+            // Solid and cornered but not a clean triangle/quad (sloppy box,
+            // hexagon-ish): default to a rectangle block.
             return .rectangle(bounds)
         }
+    }
+
+    /// Dominant corners of a closed ring after Douglas-Peucker simplification.
+    /// A triangle → 3 points, square/diamond → 4, circle → many. Splits the
+    /// ring at its two most distant vertices so the closed curve simplifies
+    /// cleanly.
+    static func simplifiedRingVertices(_ ring: [Point], epsilon: Double) -> [Point] {
+        let n = ring.count
+        guard n > 3 else { return ring }
+
+        // Split point: the vertex farthest from ring[0].
+        var farIndex = 0
+        var farDistance = -1.0
+        for i in 1..<n {
+            let d = distance(ring[0], ring[i])
+            if d > farDistance { farDistance = d; farIndex = i }
+        }
+        let arcA = Array(ring[0...farIndex])
+        let arcB = Array(ring[farIndex..<n]) + [ring[0]]
+        let simplifiedA = douglasPeucker(arcA, epsilon: epsilon)
+        let simplifiedB = douglasPeucker(arcB, epsilon: epsilon)
+        // Drop the two shared endpoints (start and split appear in both arcs).
+        return Array(simplifiedA.dropLast()) + Array(simplifiedB.dropLast())
+    }
+
+    static func douglasPeucker(_ points: [Point], epsilon: Double) -> [Point] {
+        guard points.count > 2 else { return points }
+        let first = points[0]
+        let last = points[points.count - 1]
+        var maxDistance = 0.0
+        var index = 0
+        for i in 1..<(points.count - 1) {
+            let d = EdgeGeometry.Route.segmentDistance(points[i], first, last)
+            if d > maxDistance { maxDistance = d; index = i }
+        }
+        if maxDistance > epsilon {
+            let left = douglasPeucker(Array(points[0...index]), epsilon: epsilon)
+            let right = douglasPeucker(Array(points[index..<points.count]), epsilon: epsilon)
+            return left.dropLast() + right
+        }
+        return [first, last]
     }
 
     // MARK: Solidity
