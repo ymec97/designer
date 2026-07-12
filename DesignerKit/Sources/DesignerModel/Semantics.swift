@@ -46,6 +46,20 @@ public struct NodeShape: RawRepresentable, Hashable, Codable, Sendable, Expressi
     public static let triangle: NodeShape = "triangle"
 }
 
+/// Orientation for shapes that have one (triangles): which way the apex
+/// points. Rectangles/ellipses ignore it.
+public struct ShapeOrientation: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public init(_ rawValue: String) { self.rawValue = rawValue }
+    public init(stringLiteral value: String) { self.rawValue = value }
+
+    public static let up: ShapeOrientation = "up"
+    public static let down: ShapeOrientation = "down"
+    public static let left: ShapeOrientation = "left"
+    public static let right: ShapeOrientation = "right"
+}
+
 public struct RoutingMode: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
     public var rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }

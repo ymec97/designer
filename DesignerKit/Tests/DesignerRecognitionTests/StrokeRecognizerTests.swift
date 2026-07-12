@@ -333,12 +333,15 @@ final class StrokeRecognizerTests: XCTestCase {
     }
 
     private func sketchTriangle(
-        centerX: Double, centerY: Double, size: Double, jitterAmount: Double
+        centerX: Double, centerY: Double, size: Double, jitterAmount: Double,
+        upsideDown: Bool = false
     ) -> [StrokePoint] {
+        let apexY = upsideDown ? centerY + size : centerY - size
+        let baseY = upsideDown ? centerY - size : centerY + size
         let vertices = [
-            Point(x: centerX, y: centerY - size),
-            Point(x: centerX + size, y: centerY + size),
-            Point(x: centerX - size, y: centerY + size),
+            Point(x: centerX, y: apexY),
+            Point(x: centerX + size, y: baseY),
+            Point(x: centerX - size, y: baseY),
         ]
         var points: [Point] = []
         for side in 0..<3 {
@@ -366,16 +369,37 @@ final class StrokeRecognizerTests: XCTestCase {
         }
     }
 
-    func testTriangleShapePreservedInConversion() throws {
+    func testTriangleApexOrientation() {
+        for trial in 0..<6 {
+            let up = StrokeRecognizer.recognize(
+                sketchTriangle(centerX: 200, centerY: 200, size: 85, jitterAmount: 2 + Double(trial % 3))
+            )
+            let down = StrokeRecognizer.recognize(
+                sketchTriangle(centerX: 200, centerY: 200, size: 85, jitterAmount: 2 + Double(trial % 3), upsideDown: true)
+            )
+            guard case .triangle(_, let upApex) = up else {
+                XCTFail("trial \(trial): expected triangle, got \(String(describing: up))"); continue
+            }
+            guard case .triangle(_, let downApex) = down else {
+                XCTFail("trial \(trial): expected triangle, got \(String(describing: down))"); continue
+            }
+            XCTAssertEqual(upApex, .up, "upright triangle apex should point up")
+            XCTAssertEqual(downApex, .down, "upside-down triangle apex should point down")
+        }
+    }
+
+    func testTriangleShapeAndOrientationPreservedInConversion() throws {
         var (board, layer) = makeBoard()
         let ink = inkElement(
-            sketchTriangle(centerX: 200, centerY: 200, size: 90, jitterAmount: 2),
+            sketchTriangle(centerX: 200, centerY: 200, size: 90, jitterAmount: 2, upsideDown: true),
             layer: layer
         )
         try board.apply(.insertElement(ink))
         let conversion = try XCTUnwrap(SketchConversion.conversion(for: ink, in: board))
         try board.apply(conversion.operation)
-        XCTAssertEqual(board.elements[conversion.producedID]?.node?.shape, .triangle)
+        let node = try XCTUnwrap(board.elements[conversion.producedID]?.node)
+        XCTAssertEqual(node.shape, .triangle)
+        XCTAssertEqual(node.orientation, .down, "an upside-down triangle must stay upside-down")
     }
 
     func testShapeIsPreservedInConversion() throws {

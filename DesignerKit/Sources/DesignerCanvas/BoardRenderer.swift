@@ -82,10 +82,27 @@ final class BoardRenderer {
             diamond.closeSubpath()
             path = diamond
         case .triangle:
+            // Apex vertex + the two base corners, per orientation.
+            let apex: CGPoint
+            let base: (CGPoint, CGPoint)
+            switch node.orientation {
+            case .down:
+                apex = CGPoint(x: rect.midX, y: rect.maxY)
+                base = (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY))
+            case .left:
+                apex = CGPoint(x: rect.minX, y: rect.midY)
+                base = (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY))
+            case .right:
+                apex = CGPoint(x: rect.maxX, y: rect.midY)
+                base = (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.minX, y: rect.maxY))
+            default: // up
+                apex = CGPoint(x: rect.midX, y: rect.minY)
+                base = (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY))
+            }
             let triangle = CGMutablePath()
-            triangle.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            triangle.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-            triangle.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            triangle.move(to: apex)
+            triangle.addLine(to: base.0)
+            triangle.addLine(to: base.1)
             triangle.closeSubpath()
             path = triangle
         default:

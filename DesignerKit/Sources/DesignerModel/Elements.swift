@@ -124,17 +124,21 @@ public struct Node: Equatable, Sendable, Codable {
     public var semantic: NodeSemantic
     public var frame: Rect
     public var shape: NodeShape
+    /// Apex direction for shapes that have one (triangles); default up.
+    public var orientation: ShapeOrientation
     public var style: Style
 
     public init(
         semantic: NodeSemantic = NodeSemantic(),
         frame: Rect,
         shape: NodeShape = .rectangle,
+        orientation: ShapeOrientation = .up,
         style: Style = Style()
     ) {
         self.semantic = semantic
         self.frame = frame
         self.shape = shape
+        self.orientation = orientation
         self.style = style
     }
 }
@@ -284,7 +288,7 @@ extension Element: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id, layers, sortKey, group, role
         // Role payload keys, flattened at the element level:
-        case semantic, frame, shape, style, from, to, routing, waypoints, points, text
+        case semantic, frame, shape, orientation, style, from, to, routing, waypoints, points, text
     }
 
     public init(from decoder: Decoder) throws {
@@ -301,6 +305,7 @@ extension Element: Codable {
                 semantic: try container.decodeIfPresent(NodeSemantic.self, forKey: .semantic) ?? NodeSemantic(),
                 frame: try container.decode(Rect.self, forKey: .frame),
                 shape: try container.decodeIfPresent(NodeShape.self, forKey: .shape) ?? .rectangle,
+                orientation: try container.decodeIfPresent(ShapeOrientation.self, forKey: .orientation) ?? .up,
                 style: try container.decodeIfPresent(Style.self, forKey: .style) ?? Style()
             ))
         case "edge":
@@ -348,6 +353,9 @@ extension Element: Codable {
             try container.encode(node.frame, forKey: .frame)
             if node.shape != .rectangle {
                 try container.encode(node.shape, forKey: .shape)
+            }
+            if node.orientation != .up {
+                try container.encode(node.orientation, forKey: .orientation)
             }
             try container.encode(node.style, forKey: .style)
         case .edge(let edge):

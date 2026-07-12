@@ -9,7 +9,7 @@ public enum StrokeRecognizer {
         case rectangle(Rect)
         case ellipse(Rect)
         case diamond(Rect)
-        case triangle(Rect)
+        case triangle(Rect, apex: ShapeOrientation)
         case line(from: Point, to: Point)
     }
 
@@ -100,7 +100,7 @@ public enum StrokeRecognizer {
 
         switch cornerPoints.count {
         case 3:
-            return .triangle(bounds)
+            return .triangle(bounds, apex: triangleApex(cornerPoints))
 
         case 4:
             // Rectangle if corners sit near the bounding-box corners,
@@ -126,6 +126,38 @@ public enum StrokeRecognizer {
             // hexagon-ish): default to a rectangle block.
             return .rectangle(bounds)
         }
+    }
+
+    /// Which way a triangle's apex points. The apex is the vertex between the
+    /// two most nearly equal edges (the tip of an isosceles triangle); its
+    /// offset from the opposite side's midpoint, snapped to an axis, gives the
+    /// direction. Screen y grows downward.
+    static func triangleApex(_ vertices: [Point]) -> ShapeOrientation {
+        guard vertices.count == 3 else { return .up }
+        func edgeLength(_ a: Int, _ b: Int) -> Double { distance(vertices[a], vertices[b]) }
+
+        var apexIndex = 0
+        var smallestDifference = Double.greatestFiniteMagnitude
+        for i in 0..<3 {
+            let left = (i + 2) % 3
+            let right = (i + 1) % 3
+            let difference = abs(edgeLength(i, left) - edgeLength(i, right))
+            if difference < smallestDifference {
+                smallestDifference = difference
+                apexIndex = i
+            }
+        }
+
+        let apex = vertices[apexIndex]
+        let a = vertices[(apexIndex + 1) % 3]
+        let b = vertices[(apexIndex + 2) % 3]
+        let baseMid = Point(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        let dx = apex.x - baseMid.x
+        let dy = apex.y - baseMid.y
+        if abs(dx) > abs(dy) {
+            return dx > 0 ? .right : .left
+        }
+        return dy > 0 ? .down : .up
     }
 
     /// Dominant corners of a closed ring after Douglas-Peucker simplification.
