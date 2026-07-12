@@ -30,12 +30,19 @@ public enum SketchConversion {
                 width: max(rect.width, minimumNodeSize.width),
                 height: max(rect.height, minimumNodeSize.height)
             )
+            let shape: NodeShape
+            switch recognition {
+            case .ellipse: shape = .ellipse
+            case .diamond: shape = .diamond
+            default: shape = .rectangle
+            }
             let node = Element(
                 layerIDs: element.layerIDs,
                 sortKey: element.sortKey,
                 content: .node(Node(
                     semantic: NodeSemantic(kind: .generic, name: ""),
-                    frame: frame
+                    frame: frame,
+                    shape: shape
                 ))
             )
             return Conversion(

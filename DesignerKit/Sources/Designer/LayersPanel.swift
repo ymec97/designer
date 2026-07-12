@@ -74,31 +74,41 @@ struct LayersPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("Layers")
-                .font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Toggle(isOn: Binding(
-                get: { model.focusEnabled },
-                set: { actions.setFocus($0) }
-            )) {
-                Image(systemName: "scope")
-                    .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text("Layers")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("⌘L")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    actions.addLayer()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .help("Add layer")
             }
-            .toggleStyle(.button)
-            .buttonStyle(.borderless)
-            .help("Focus active layer (dim others)")
-            Button {
-                actions.addLayer()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
+            if model.focusEnabled, let name = activeLayerName {
+                Label("Focusing “\(name)” — other layers dimmed", systemImage: "scope")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(1)
+            } else {
+                Text("Click a row to make it active — new items land there")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
-            .buttonStyle(.borderless)
-            .help("Add layer")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
+    }
+
+    private var activeLayerName: String? {
+        document.board.layers.first { $0.id == model.activeLayerID }?.name
     }
 
     private func row(for layer: Layer) -> some View {
@@ -126,6 +136,20 @@ struct LayersPanel: View {
             )
 
             Spacer(minLength: 4)
+
+            // Focus lives on the ACTIVE row so it is obvious what it dims.
+            if isActive {
+                Button {
+                    actions.setFocus(!model.focusEnabled)
+                } label: {
+                    Image(systemName: "scope")
+                        .font(.system(size: 10, weight: model.focusEnabled ? .bold : .regular))
+                        .foregroundStyle(model.focusEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                        .frame(width: 15)
+                }
+                .buttonStyle(.plain)
+                .help("Focus this layer — dim everything else")
+            }
 
             Text("\(document.board.elementCount(onLayer: layer.id))")
                 .font(.system(size: 10))
@@ -159,6 +183,12 @@ struct LayersPanel: View {
                     Button(choice.name) { actions.setTint(layer.id, choice.hex) }
                 }
             }
+            Divider()
+            let index = document.board.layers.firstIndex { $0.id == layer.id } ?? 0
+            Button("Move Up") { actions.move(IndexSet(integer: index), index - 1) }
+                .disabled(index == 0)
+            Button("Move Down") { actions.move(IndexSet(integer: index), index + 2) }
+                .disabled(index >= document.board.layers.count - 1)
             Divider()
             Button("Delete Layer", role: .destructive) { actions.delete(layer.id) }
                 .disabled(document.board.layers.count <= 1)

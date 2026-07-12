@@ -81,6 +81,14 @@ Catalog), Dock icon, About panel. Candidate direction: geometric mark
 blending a sketched stroke morphing into a clean block+connector (the
 sketch-to-structure identity). Revisit at M6 polish.
 
+### P7. Multi-stroke shape recognition
+*Requested 2026-07-13 by Yarden. Post-MVP.*
+A shape drawn as several separate line streaks (e.g. 4 strokes forming a
+box) should structurize into one block. Approach: on ⌘R over multiple ink
+strokes, chain strokes whose endpoints meet within tolerance into a single
+virtual stroke, then run normal closed-shape recognition on the chain.
+Live mode could also try chaining the last few strokes on stroke-end.
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input

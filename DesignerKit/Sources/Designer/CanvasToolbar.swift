@@ -6,6 +6,7 @@ import DesignerCanvas
 /// else stays in menus and keys.
 final class ToolbarState: ObservableObject {
     @Published var tool: CanvasView.Tool = .select
+    @Published var layersPanelVisible = false
 }
 
 struct CanvasToolbar: View {
@@ -14,6 +15,7 @@ struct CanvasToolbar: View {
     let onDrawTool: () -> Void
     let onAddBlock: () -> Void
     let onStructurize: () -> Void
+    let onLayers: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
@@ -33,6 +35,11 @@ struct CanvasToolbar: View {
             toolButton(
                 icon: "wand.and.stars", hint: "⌘R", label: "Structurize",
                 isActive: false, action: onStructurize
+            )
+            Divider().frame(height: 22).padding(.horizontal, 3)
+            toolButton(
+                icon: "square.3.layers.3d", hint: "⌘L", label: "Layers",
+                isActive: state.layersPanelVisible, action: onLayers
             )
         }
         .padding(.horizontal, 8)

@@ -311,6 +311,54 @@ final class StrokeRecognizerTests: XCTestCase {
         }, "all ink should be converted")
     }
 
+    func testGappyCircleStillRecognizesAsEllipse() {
+        // Hand-drawn circles often stop 30–45% short of their start point.
+        for gapFraction in [0.3, 0.45] {
+            let sweep = 2 * .pi * (1 - gapFraction / .pi)
+            let points = strokePoints((0...40).map { i -> Point in
+                let t = Double(i) / 40 * sweep
+                return Point(x: 300 + cos(t) * 90 + jitter(2), y: 300 + sin(t) * 75 + jitter(2))
+            })
+            let result = StrokeRecognizer.recognize(points)
+            let isShape: Bool
+            switch result {
+            case .ellipse, .rectangle: isShape = true
+            default: isShape = false
+            }
+            XCTAssertTrue(
+                isShape,
+                "circle with \(Int(gapFraction * 100))% gap should still close, got \(String(describing: result))"
+            )
+        }
+    }
+
+    func testShapeIsPreservedInConversion() throws {
+        var (board, layer) = makeBoard()
+        let circle = inkElement(
+            sketchEllipse(centerX: 300, centerY: 300, radiusX: 85, radiusY: 70, jitterAmount: 2),
+            layer: layer
+        )
+        try board.apply(.insertElement(circle))
+        let circleConversion = try XCTUnwrap(SketchConversion.conversion(for: circle, in: board))
+        try board.apply(circleConversion.operation)
+        XCTAssertEqual(
+            board.elements[circleConversion.producedID]?.node?.shape, .ellipse,
+            "a sketched circle should LOOK like an ellipse after snapping"
+        )
+
+        let diamond = inkElement(
+            sketchDiamond(centerX: 600, centerY: 300, width: 130, height: 120, jitterAmount: 2),
+            layer: layer
+        )
+        try board.apply(.insertElement(diamond))
+        let diamondConversion = try XCTUnwrap(SketchConversion.conversion(for: diamond, in: board))
+        try board.apply(diamondConversion.operation)
+        XCTAssertEqual(
+            board.elements[diamondConversion.producedID]?.node?.shape, .diamond,
+            "a sketched diamond should LOOK like a diamond after snapping"
+        )
+    }
+
     func testSloppyClosedShapesStillConvert() {
         // Rotated diamond-ish quad, wobbly circle, and a pentagon-ish blob:
         // per user feedback these must all become blocks, not stay ink.

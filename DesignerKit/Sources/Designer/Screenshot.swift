@@ -20,10 +20,16 @@ enum ScreenshotDriver {
             keyIndex += 1
             return SortKey.bulk(keyIndex, of: 64)
         }
-        func node(_ name: String, _ kind: NodeKind, _ frame: Rect) -> Element {
+        func node(
+            _ name: String, _ kind: NodeKind, _ frame: Rect, shape: NodeShape = .rectangle
+        ) -> Element {
             Element(
                 layerIDs: [layer], sortKey: key(),
-                content: .node(Node(semantic: NodeSemantic(kind: kind, name: name), frame: frame))
+                content: .node(Node(
+                    semantic: NodeSemantic(kind: kind, name: name),
+                    frame: frame,
+                    shape: shape
+                ))
             )
         }
 
@@ -31,8 +37,9 @@ enum ScreenshotDriver {
         let gateway = node("api-gateway", .gateway, Rect(x: 320, y: 200, width: 160, height: 70))
         let orders = node("orders-svc", .service, Rect(x: 600, y: 90, width: 150, height: 70))
         let payments = node("payments-svc", .service, Rect(x: 600, y: 310, width: 150, height: 70))
-        let database = node("orders-db", .database, Rect(x: 870, y: 90, width: 140, height: 70))
-        for element in [client, gateway, orders, payments, database] {
+        let database = node("orders-db", .database, Rect(x: 830, y: 90, width: 140, height: 70), shape: .ellipse)
+        let decision = node("fraud?", .service, Rect(x: 620, y: 470, width: 140, height: 100), shape: .diamond)
+        for element in [client, gateway, orders, payments, database, decision] {
             board.elements[element.id] = element
         }
 

@@ -69,11 +69,25 @@ final class BoardRenderer {
         isSelected: Bool, suppressText: Bool
     ) {
         let rect = viewport.toView(frame)
-        let cornerRadius = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
-        let path = CGPath(
-            roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius,
-            transform: nil
-        )
+        let path: CGPath
+        switch node.shape {
+        case .ellipse:
+            path = CGPath(ellipseIn: rect, transform: nil)
+        case .diamond:
+            let diamond = CGMutablePath()
+            diamond.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            diamond.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            diamond.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            diamond.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+            diamond.closeSubpath()
+            path = diamond
+        default:
+            let cornerRadius = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
+            path = CGPath(
+                roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius,
+                transform: nil
+            )
+        }
 
         if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
             context.setFillColor(parsed.cgColor)

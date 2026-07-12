@@ -32,6 +32,19 @@ public struct EdgeDirection: RawRepresentable, Hashable, Codable, Sendable, Expr
     public static let none: EdgeDirection = "none"
 }
 
+/// Node outline shape (presentation). Sketch recognition preserves what the
+/// user drew; the default block is a rectangle.
+public struct NodeShape: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public init(_ rawValue: String) { self.rawValue = rawValue }
+    public init(stringLiteral value: String) { self.rawValue = value }
+
+    public static let rectangle: NodeShape = "rectangle"
+    public static let ellipse: NodeShape = "ellipse"
+    public static let diamond: NodeShape = "diamond"
+}
+
 public struct RoutingMode: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
     public var rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }

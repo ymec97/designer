@@ -16,7 +16,7 @@ public enum StrokeRecognizer {
     // zoom- and scale-independent.
     static let minimumPoints = 8
     static let minimumSize: Double = 16
-    static let closureThreshold = 0.22      // gap/diagonal to count as closed
+    static let closureThreshold = 0.3       // gap/diagonal to count as closed
     static let lineDeviation = 0.09         // max offset/length to count as a line
     static let cornerAngle = 0.65           // radians (~37°) of turn to be a corner
 
@@ -31,8 +31,13 @@ public enum StrokeRecognizer {
         let points = resample(raw, spacing: max(diagonal / 64, 1))
         guard points.count >= minimumPoints else { return nil }
 
+        // Closed if the ends nearly meet, OR the stroke clearly loops around
+        // its bounds (hand-drawn circles often stop 30–50% short of their
+        // start; a loop's path length ≈ 2.8–3.2× its diagonal, a line's ≈ 1).
         let gap = distance(points[0], points[points.count - 1])
+        let loopiness = pathLength(points) / diagonal
         let isClosed = gap < closureThreshold * diagonal
+            || (gap < 0.55 * diagonal && loopiness > 2.2)
 
         if !isClosed {
             return recognizeLine(points)

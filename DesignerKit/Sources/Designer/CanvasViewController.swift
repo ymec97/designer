@@ -75,6 +75,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     @objc func toggleLayersPanel(_ sender: Any?) {
         layersModel.isVisible.toggle()
+        toolbarState.layersPanelVisible = layersModel.isVisible
     }
 
     private func installLayersPanel() {
@@ -168,6 +169,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             onStructurize: { [weak self] in
                 guard let self else { return }
                 self.structurize(nil)
+                self.view.window?.makeFirstResponder(self.canvasView)
+            },
+            onLayers: { [weak self] in
+                guard let self else { return }
+                self.toggleLayersPanel(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
             }
         )

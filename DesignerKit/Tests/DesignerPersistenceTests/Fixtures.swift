@@ -30,7 +30,8 @@ enum Fixtures {
             sortKey: SortKey.after("i"),
             content: .node(Node(
                 semantic: NodeSemantic(kind: .database, name: "orders-db"),
-                frame: Rect(x: 400, y: 100, width: 140, height: 80)
+                frame: Rect(x: 400, y: 100, width: 140, height: 80),
+                shape: .ellipse
             )),
             extra: ["futureField": .string("preserved")]
         )

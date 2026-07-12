@@ -123,11 +123,18 @@ extension NodeSemantic: Codable {
 public struct Node: Equatable, Sendable, Codable {
     public var semantic: NodeSemantic
     public var frame: Rect
+    public var shape: NodeShape
     public var style: Style
 
-    public init(semantic: NodeSemantic = NodeSemantic(), frame: Rect, style: Style = Style()) {
+    public init(
+        semantic: NodeSemantic = NodeSemantic(),
+        frame: Rect,
+        shape: NodeShape = .rectangle,
+        style: Style = Style()
+    ) {
         self.semantic = semantic
         self.frame = frame
+        self.shape = shape
         self.style = style
     }
 }
@@ -277,7 +284,7 @@ extension Element: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id, layers, sortKey, group, role
         // Role payload keys, flattened at the element level:
-        case semantic, frame, style, from, to, routing, waypoints, points, text
+        case semantic, frame, shape, style, from, to, routing, waypoints, points, text
     }
 
     public init(from decoder: Decoder) throws {
@@ -293,6 +300,7 @@ extension Element: Codable {
             content = .node(Node(
                 semantic: try container.decodeIfPresent(NodeSemantic.self, forKey: .semantic) ?? NodeSemantic(),
                 frame: try container.decode(Rect.self, forKey: .frame),
+                shape: try container.decodeIfPresent(NodeShape.self, forKey: .shape) ?? .rectangle,
                 style: try container.decodeIfPresent(Style.self, forKey: .style) ?? Style()
             ))
         case "edge":
@@ -338,6 +346,9 @@ extension Element: Codable {
             try container.encode("node", forKey: .role)
             try container.encode(node.semantic, forKey: .semantic)
             try container.encode(node.frame, forKey: .frame)
+            if node.shape != .rectangle {
+                try container.encode(node.shape, forKey: .shape)
+            }
             try container.encode(node.style, forKey: .style)
         case .edge(let edge):
             try container.encode("edge", forKey: .role)
