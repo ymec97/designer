@@ -57,6 +57,23 @@ Implementation sketch: deterministic per-element seed, rough path generation
 (2 passes with offset control points), rough fills (hachure or solid),
 hand-style font option. Applies to SVG/PNG export too.
 
+### P4. Edge-density visual QA: hubs and parallel connections
+*Requested 2026-07-12 by Yarden. Run during M6 polish; fixes post-MVP if needed.*
+Build/test a complex board where (a) one node has many parallel connections
+to the same other node, and (b) a hub node fans out to many nodes. Judge
+whether it reads clearly or becomes an unclear mess. Likely fixes to evaluate
+if ugly: parallel-edge separation (offset curves between same node pair),
+fan-out anchor spreading (distribute anchor offsets along the node side
+instead of all hitting the midpoint), and label decluttering at density.
+
+### P5. Curve connectors after snapping + node-avoiding routing
+*Requested 2026-07-12 by Yarden. Post-MVP.*
+(a) Let users curve a snapped connector (drag its midpoint to bow it —
+`Edge.waypoints` already exists in the model, needs manipulation UX and
+curved rendering). (b) Routing should avoid crossing over other nodes where
+possible (obstacle-aware orthogonal/curved routing; the spatial index can
+supply obstacles).
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input
