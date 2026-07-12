@@ -164,12 +164,15 @@ final class BoardRenderer {
         in context: CGContext,
         viewport: CanvasViewport,
         isSelected: Bool,
+        isDangling: Bool = false,
         simplified: Bool = false
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
 
-        let strokeColor = color(hex: edge.style.stroke, fallback: Palette.edgeStroke)
+        let strokeColor = isDangling
+            ? Palette.danglingEdge.cgColor
+            : color(hex: edge.style.stroke, fallback: Palette.edgeStroke)
         let lineWidth = max(CGFloat(edge.style.strokeWidth ?? 1.5) * viewport.scale, simplified ? 0.5 : 1)
 
         if isSelected {
@@ -180,7 +183,24 @@ final class BoardRenderer {
 
         context.setStrokeColor(isSelected ? Palette.selection.cgColor : strokeColor)
         context.setLineWidth(lineWidth)
+        if isDangling {
+            context.setLineDash(phase: 0, lengths: [max(5 * viewport.scale, 3), max(4 * viewport.scale, 2.5)])
+        }
         strokePolyline(viewPoints, in: context)
+        if isDangling {
+            context.setLineDash(phase: 0, lengths: [])
+            // Open circle at each unattached endpoint: "plug me back in".
+            let radius = max(3.5 * viewport.scale, 2.5)
+            context.setFillColor(Palette.canvasBackground.cgColor)
+            context.setLineWidth(max(1.5 * viewport.scale, 1))
+            for (anchor, point) in [(edge.from, viewPoints[0]), (edge.to, viewPoints[viewPoints.count - 1])] {
+                if case .free = anchor {
+                    let circle = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+                    context.fillEllipse(in: circle)
+                    context.strokeEllipse(in: circle)
+                }
+            }
+        }
 
         guard !simplified else { return }
 
@@ -505,6 +525,8 @@ enum Palette {
     static let selection = NSColor.controlAccentColor
     static let nodeStroke = NSColor.secondaryLabelColor
     static let edgeStroke = NSColor.secondaryLabelColor
+    /// Detached connectors: unmistakably "not currently connected".
+    static let danglingEdge = NSColor.systemOrange
     /// Slightly translucent so captions sit on lines without hard boxes.
     static let captionBackground = NSColor.windowBackgroundColor.withAlphaComponent(0.88)
     static let nodeText = NSColor.labelColor

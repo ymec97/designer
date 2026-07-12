@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 import DesignerCanvas
 import DesignerModel
 import DesignerRecognition
@@ -39,6 +40,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         view = canvasView
     }
 
+    private let toolbarState = ToolbarState()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         boardSubscription = document.$board.sink { [weak self] board in
@@ -47,6 +50,37 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
         }
+        canvasView.toolChanged = { [weak self] tool in
+            self?.toolbarState.tool = tool
+        }
+        installToolbar()
+    }
+
+    private func installToolbar() {
+        let toolbar = CanvasToolbar(
+            state: toolbarState,
+            onSelectTool: { [weak self] in self?.toolbarAction { $0.activateSelectTool(nil) } },
+            onDrawTool: { [weak self] in self?.toolbarAction { $0.activateDrawTool(nil) } },
+            onAddBlock: { [weak self] in self?.toolbarAction { $0.addBlock(nil) } },
+            onStructurize: { [weak self] in
+                guard let self else { return }
+                self.structurize(nil)
+                self.view.window?.makeFirstResponder(self.canvasView)
+            }
+        )
+        let host = NSHostingView(rootView: toolbar)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+        ])
+    }
+
+    private func toolbarAction(_ body: (CanvasView) -> Void) {
+        body(canvasView)
+        // Clicking a toolbar button must not steal keyboard focus from the canvas.
+        view.window?.makeFirstResponder(canvasView)
     }
 
     // MARK: Sketch → structure
@@ -56,7 +90,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
               let element = document.board.elements[id],
               let conversion = SketchConversion.conversion(for: element, in: document.board)
         else { return }
-        document.perform(conversion.operation, actionName: conversion.actionName)
+        document.perform(
+            document.board.expandingWithReattachments(conversion.operation),
+            actionName: conversion.actionName
+        )
         canvasView.select([conversion.producedID])
     }
 
@@ -66,7 +103,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             NSSound.beep()
             return
         }
-        document.perform(conversion.operation, actionName: conversion.actionName)
+        document.perform(
+            document.board.expandingWithReattachments(conversion.operation),
+            actionName: conversion.actionName
+        )
         canvasView.select([conversion.producedID])
     }
 
@@ -82,7 +122,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     // MARK: CanvasViewDelegate
 
     func canvasView(_ view: CanvasView, perform operation: BoardOperation, actionName: String) {
-        document.perform(operation, actionName: actionName)
+        // Any newly placed block also snaps nearby dangling connector
+        // endpoints onto itself, inside the same undo step.
+        document.perform(
+            document.board.expandingWithReattachments(operation),
+            actionName: actionName
+        )
     }
 
     func canvasViewDidChangeSelection(_ view: CanvasView) {

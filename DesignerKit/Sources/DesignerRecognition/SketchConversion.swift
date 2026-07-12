@@ -50,6 +50,20 @@ public enum SketchConversion {
                 let toNode = nearestNode(to: to, in: board, excluding: element.id),
                 fromNode != toNode
             else { return nil }
+
+            // A stroke retracing an existing connection (either direction)
+            // upgrades it to bidirectional instead of duplicating it.
+            if var existing = existingEdge(between: fromNode, and: toNode, in: board) {
+                var edge = existing.edge!
+                edge.semantic.direction = .both
+                existing.content = .edge(edge)
+                return Conversion(
+                    operation: .batch([.removeElement(element.id), .replaceElement(existing)]),
+                    producedID: existing.id,
+                    actionName: "Make Bidirectional"
+                )
+            }
+
             let edge = Element(
                 layerIDs: element.layerIDs,
                 sortKey: element.sortKey,
@@ -63,6 +77,16 @@ public enum SketchConversion {
                 producedID: edge.id,
                 actionName: "Convert to Connector"
             )
+        }
+    }
+
+    private static func existingEdge(
+        between a: ElementID, and b: ElementID, in board: Board
+    ) -> Element? {
+        board.elements.values.first { element in
+            guard let edge = element.edge else { return false }
+            let endpoints = (edge.from.elementID, edge.to.elementID)
+            return (endpoints == (a, b)) || (endpoints == (b, a))
         }
     }
 

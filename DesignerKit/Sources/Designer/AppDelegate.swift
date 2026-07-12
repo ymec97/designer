@@ -19,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--ui-test") {
             runUITest()
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshot"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            ScreenshotDriver.run(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
     }
 
     private func runUITest() {

@@ -42,31 +42,49 @@ public enum StrokeRecognizer {
 
     // MARK: Open strokes
 
+    /// Open strokes count as connector candidates when they progress from A
+    /// to B without doubling back — curvature is fine (hand-drawn arrows bow),
+    /// scribbles are not. Attachment (endpoints near two blocks) is decided
+    /// by the conversion layer, which is the real disambiguator.
     private static func recognizeLine(_ points: [Point]) -> Recognition? {
         let start = points[0]
         let end = points[points.count - 1]
-        let length = distance(start, end)
-        guard length > 0 else { return nil }
+        let chord = distance(start, end)
+        guard chord > 0 else { return nil }
+
         let maxDeviation = points
             .map { EdgeGeometry.Route.segmentDistance($0, start, end) }
             .max() ?? 0
-        guard maxDeviation <= lineDeviation * length else { return nil }
-        return .line(from: start, to: end)
+        let windingRatio = pathLength(points) / chord
+
+        // Either near-straight, or moderately curved without backtracking.
+        if maxDeviation <= lineDeviation * chord || windingRatio <= 1.8 {
+            return .line(from: start, to: end)
+        }
+        return nil
     }
 
     // MARK: Closed shapes
 
     private static func recognizeClosedShape(_ points: [Point], bounds: Rect) -> Recognition? {
+        // Gate on solidity first: any closed stroke that fills its convex
+        // hull like a real shape (not a scribble) converts to a block —
+        // the product semantic is "closed shape = block", and users draw
+        // circles, blobs, and diamonds expecting exactly that.
+        let hull = convexHull(points)
+        let solidity = hullSolidity(points, hull: hull)
+        guard solidity >= 0.72 else { return nil }
+
         let corners = detectCorners(points)
 
         switch corners.count {
         case 0...2:
-            // Smooth closed curve. Require reasonable roundness before
-            // calling it an ellipse (a scribble is also "closed").
+            // Smooth closed curve. Roundness picks ellipse; anything else
+            // solid still converts (as a rectangle-presented block).
             let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
             let area = polygonArea(points)
             let circularity = 4 * .pi * area / (perimeter * perimeter)
-            return circularity > 0.55 ? .ellipse(bounds) : nil
+            return circularity > 0.55 ? .ellipse(bounds) : .rectangle(bounds)
 
         case 3...5:
             // Quadrilateral-ish. Rectangle if corners sit near the bounding
@@ -93,11 +111,48 @@ public enum StrokeRecognizer {
             if toMidpoints < toBoxCorners, toMidpoints < 0.18 {
                 return .diamond(bounds)
             }
-            return nil
+            // Solid closed quad that fits neither template cleanly (rotated,
+            // skewed): still a block.
+            return .rectangle(bounds)
 
         default:
-            return nil
+            // Solid but many corners (hexagon-ish sketch, sloppy box with
+            // extra kinks): still a block. Solidity already rejected scribbles.
+            return .rectangle(bounds)
         }
+    }
+
+    // MARK: Solidity
+
+    /// Monotone-chain convex hull.
+    static func convexHull(_ input: [Point]) -> [Point] {
+        let points = input.sorted { ($0.x, $0.y) < ($1.x, $1.y) }
+        guard points.count > 2 else { return points }
+        func cross(_ o: Point, _ a: Point, _ b: Point) -> Double {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+        var lower: [Point] = []
+        for point in points {
+            while lower.count >= 2, cross(lower[lower.count - 2], lower[lower.count - 1], point) <= 0 {
+                lower.removeLast()
+            }
+            lower.append(point)
+        }
+        var upper: [Point] = []
+        for point in points.reversed() {
+            while upper.count >= 2, cross(upper[upper.count - 2], upper[upper.count - 1], point) <= 0 {
+                upper.removeLast()
+            }
+            upper.append(point)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
+    }
+
+    /// Stroke area / hull area: ~1 for clean convex shapes, low for scribbles.
+    static func hullSolidity(_ points: [Point], hull: [Point]) -> Double {
+        let hullArea = polygonArea(hull)
+        guard hullArea > 0 else { return 0 }
+        return polygonArea(points) / hullArea
     }
 
     /// Indices of sharp direction changes along a resampled stroke.

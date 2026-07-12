@@ -41,13 +41,13 @@ final class UITestDriver {
         step5UndoRedo()
         step6ConnectTwoBlocks()
         step7EdgeFollowsMove()
-        step8CascadeDelete()
+        step8DanglingDeleteAndSnapIn()
         step9DrawScribbleStaysInk()
         step10SketchRectangleBecomesBlock()
         step11SketchStrokeBecomesConnector()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, cascade, ink, sketch-to-structure verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure verified")
             exit(0)
         } else {
             for failure in failures {
@@ -270,34 +270,67 @@ final class UITestDriver {
         expect(onBorder, "edge endpoint \(end) should sit on moved block border \(movedFrame)")
     }
 
-    private func step8CascadeDelete() {
-        guard let edge = edgeElements().first?.edge,
+    private func step8DanglingDeleteAndSnapIn() {
+        guard let edgeID = edgeElements().first?.id,
+              let edge = edgeElements().first?.edge,
               let bID = edge.to.elementID,
               let bFrame = nodeFrame(bID) else {
-            expect(false, "no edge for cascade test")
+            expect(false, "no edge for dangling test")
             return
         }
         let elementsBefore = document.board.elements.count
 
-        // Select B and delete it: its connector must go too, in one undo step.
+        // Delete B: the connector must SURVIVE, visibly dangling.
         let bCenter = canvasView.viewport.toView(Point(x: bFrame.midX, y: bFrame.midY))
         click(at: bCenter, clickCount: 1)
         pumpRunLoop()
         key(51) // delete
         pumpRunLoop()
 
-        expect(edgeElements().isEmpty, "deleting a block must cascade to its edges")
+        expect(edgeElements().count == 1, "deleting a block must keep its connector")
         expect(
-            document.board.elements.count == elementsBefore - 2,
-            "cascade should remove block + edge"
+            document.board.elements.count == elementsBefore - 1,
+            "only the block should be removed"
+        )
+        if let dangling = document.board.elements[edgeID]?.edge {
+            expect(document.board.isDangling(dangling), "surviving connector should be dangling")
+        }
+
+        // Double-click near the loose endpoint: the new block snaps it in.
+        // (Clamped into the view — the moved block can sit near the edge.)
+        var target = bCenter
+        if let released = document.board.elements[edgeID]?.edge,
+           case .free(let point) = released.to {
+            target = canvasView.viewport.toView(Point(x: point.x - 60, y: point.y))
+        }
+        target.x = min(max(target.x, 30), canvasView.bounds.width - 30)
+        target.y = min(max(target.y, 60), canvasView.bounds.height - 30)
+        click(at: target, clickCount: 1)
+        click(at: target, clickCount: 2)
+        pumpRunLoop()
+        key(53) // escape the label editor
+        pumpRunLoop()
+        canvasView.commitLabelEditor()
+        pumpRunLoop()
+
+        guard let snapped = document.board.elements[edgeID]?.edge else {
+            expect(false, "edge disappeared during snap-in")
+            return
+        }
+        let nodeFrames = document.board.elements.values.compactMap(\.node?.frame)
+        expect(
+            !document.board.isDangling(snapped),
+            "new block should snap the connector back in (to=\(snapped.to), clickView=\(bCenter), nodeFrames=\(nodeFrames))"
         )
 
+        // One undo removes the block AND releases the endpoint again.
         document.undoManager?.undo()
         pumpRunLoop()
-        expect(
-            document.board.elements.count == elementsBefore && edgeElements().count == 1,
-            "one undo should restore block + edge together (elements=\(document.board.elements.count)/\(elementsBefore) edges=\(edgeElements().count) canUndo=\(document.undoManager?.canUndo ?? false) undoName='\(document.undoManager?.undoActionName ?? "")' redoName='\(document.undoManager?.redoActionName ?? "")')"
-        )
+        if let released = document.board.elements[edgeID]?.edge {
+            expect(document.board.isDangling(released), "undo should release the endpoint")
+        }
+        document.undoManager?.redo()
+        pumpRunLoop()
     }
 
     private func inkCount() -> Int {

@@ -20,11 +20,16 @@ public final class CanvasView: NSView {
             spatialIndex = SpatialIndex(board: board, edgeRoutes: routeCache)
             edgeBatchCache = nil
             boardRevision += 1
+            // zOrderedElements FIRST — the derived caches below read it.
+            zOrderedElements = board.elementsInZOrder
             inkElementIDs = zOrderedElements.compactMap {
                 if case .ink = $0.content { return $0.id }
                 return nil
             }
-            zOrderedElements = board.elementsInZOrder
+            danglingEdgeIDs = Set(zOrderedElements.compactMap { element in
+                guard let edge = element.edge, board.isDangling(edge) else { return nil }
+                return element.id
+            })
             selection.formIntersection(Set(board.elements.keys))
             needsDisplay = true
         }
@@ -64,6 +69,8 @@ public final class CanvasView: NSView {
     private var nodeBatchCache: (revision: Int, excluded: Set<ElementID>, paths: [(color: CGColor, path: CGPath)])?
     /// Ink elements are rare; they draw individually on the fast path.
     private var inkElementIDs: [ElementID] = []
+    /// Edges with an unattached endpoint — warning style, excluded from batches.
+    private var danglingEdgeIDs: Set<ElementID> = []
 
     private func nodeBatchPaths(excluding excluded: Set<ElementID>) -> [(color: CGColor, path: CGPath)] {
         if let cache = nodeBatchCache, cache.revision == boardRevision, cache.excluded == excluded {
@@ -136,8 +143,12 @@ public final class CanvasView: NSView {
             window?.invalidateCursorRects(for: self)
             updateCursor(at: nil)
             needsDisplay = true
+            toolChanged?(tool)
         }
     }
+
+    /// Observers (toolbar) are told when the tool changes, however it changes.
+    public var toolChanged: ((Tool) -> Void)?
 
     private enum GestureState {
         case idle
@@ -241,10 +252,19 @@ public final class CanvasView: NSView {
             // per-node batching cost ~11ms/frame at 6k elements; this path
             // does a handful of CG calls regardless of element count.
             renderer.strokeEdgeBatch(
-                edgeBatchPath(excluding: dragAffectedEdges),
+                edgeBatchPath(excluding: dragAffectedEdges.union(danglingEdgeIDs)),
                 in: context,
                 viewport: viewport
             )
+            // Dangling connectors keep their warning style at any zoom.
+            for id in danglingEdgeIDs where !dragAffectedEdges.contains(id) {
+                guard let element = board.elements[id], isOnVisibleLayer(element),
+                      let edge = element.edge, let route = routeFor(element) else { continue }
+                renderer.drawEdge(
+                    edge, route: route, in: context, viewport: viewport,
+                    isSelected: selection.contains(id), isDangling: true, simplified: true
+                )
+            }
             probe("edges")
 
             renderer.fillNodeBatch(
@@ -260,13 +280,16 @@ public final class CanvasView: NSView {
                       let edge = element.edge, let route = routeFor(element) else { continue }
                 renderer.drawEdge(
                     edge, route: route, in: context, viewport: viewport,
-                    isSelected: selection.contains(id), simplified: true
+                    isSelected: selection.contains(id),
+                    isDangling: danglingEdgeIDs.contains(id),
+                    simplified: true
                 )
             }
             for id in selection {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
                 if let edge = element.edge {
-                    guard !dragAffectedEdges.contains(id), let route = routeFor(element) else { continue }
+                    guard !dragAffectedEdges.contains(id), !danglingEdgeIDs.contains(id),
+                          let route = routeFor(element) else { continue }
                     renderer.drawEdge(
                         edge, route: route, in: context, viewport: viewport,
                         isSelected: true, simplified: true
@@ -312,7 +335,8 @@ public final class CanvasView: NSView {
                         renderer.drawEdge(
                             edge, route: route,
                             in: context, viewport: viewport,
-                            isSelected: selection.contains(element.id)
+                            isSelected: selection.contains(element.id),
+                            isDangling: danglingEdgeIDs.contains(element.id)
                         )
                     }
                 } else {
@@ -695,19 +719,13 @@ public final class CanvasView: NSView {
 
     @objc public func deleteSelection(_ sender: Any?) {
         guard !selection.isEmpty else { return }
-        // Deleting a node takes its connectors with it — one undo step.
-        var doomed = selection.filter { board.elements[$0] != nil }
-        for id in doomed {
-            for edge in board.edges(anchoredTo: id) {
-                doomed.insert(edge.id)
-            }
-        }
+        // Deleting a node keeps its connectors, detached and visibly dangling
+        // (they snap back in when a node lands near the free endpoint).
+        let doomed = selection.filter { board.elements[$0] != nil }
+        let operations = board.deleteDetachingEdges(doomed)
+        guard !operations.isEmpty else { return }
         selection = []
-        delegate?.canvasView(
-            self,
-            perform: .batch(doomed.map { .removeElement($0) }),
-            actionName: "Delete"
-        )
+        delegate?.canvasView(self, perform: .batch(operations), actionName: "Delete")
     }
 
     @objc public func addBlock(_ sender: Any?) {
@@ -799,6 +817,9 @@ public final class CanvasView: NSView {
         labelEditor = nil
         editingElementID = nil
         needsDisplay = true
+        // Always hand keyboard focus back to the canvas — even when the text
+        // didn't change — or shortcuts go dead until the next click.
+        window?.makeFirstResponder(self)
 
         guard var element = board.elements[id], currentLabel(of: element) != text else { return }
         switch element.content {
@@ -812,7 +833,6 @@ public final class CanvasView: NSView {
             return
         }
         delegate?.canvasView(self, perform: .replaceElement(element), actionName: "Rename")
-        window?.makeFirstResponder(self)
     }
 
     // MARK: Edge editor popover

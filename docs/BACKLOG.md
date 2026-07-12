@@ -48,6 +48,15 @@ ink strokes, and edge waypoints. Should be one undo step (batch operation —
 the operation layer already supports this). UI: replace the current
 single-selection-only handle box with a multi-selection variant.
 
+### P3. Hand-drawn ("sketchy") render style, toggleable
+*Requested 2026-07-12 by Yarden. Post-MVP.*
+An Excalidraw-style roughness option: blocks, connectors, and text render
+with hand-drawn jitter/wobble even after structurizing — keeps diagrams
+feeling informal. Must be a per-board (or per-export?) toggle, default off.
+Implementation sketch: deterministic per-element seed, rough path generation
+(2 passes with offset control points), rough fills (hachure or solid),
+hand-style font option. Applies to SVG/PNG export too.
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input

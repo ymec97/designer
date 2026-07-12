@@ -311,6 +311,96 @@ final class StrokeRecognizerTests: XCTestCase {
         }, "all ink should be converted")
     }
 
+    func testSloppyClosedShapesStillConvert() {
+        // Rotated diamond-ish quad, wobbly circle, and a pentagon-ish blob:
+        // per user feedback these must all become blocks, not stay ink.
+        let rotatedQuad = strokePoints((0...40).map { i -> Point in
+            let t = Double(i) / 40 * 2 * .pi
+            // Superellipse-ish rounded square rotated ~30°.
+            let r = 80 / pow(pow(abs(cos(t)), 4) + pow(abs(sin(t)), 4), 0.25)
+            let angle = t + .pi / 6
+            return Point(x: 200 + cos(angle) * r + jitter(2), y: 200 + sin(angle) * r + jitter(2))
+        })
+        let blob = strokePoints((0...36).map { i -> Point in
+            let t = Double(i) / 36 * 2 * .pi * 0.96
+            let r = 70 + 12 * sin(t * 5) // five soft lobes
+            return Point(x: 500 + cos(t) * r, y: 300 + sin(t) * r * 0.8)
+        })
+        for (label, stroke) in [("rotatedQuad", rotatedQuad), ("blob", blob)] {
+            let result = StrokeRecognizer.recognize(stroke)
+            let isShape: Bool
+            switch result {
+            case .rectangle, .ellipse, .diamond: isShape = true
+            default: isShape = false
+            }
+            XCTAssertTrue(isShape, "\(label) should convert to a block, got \(String(describing: result))")
+        }
+    }
+
+    func testCurvedStrokeBetweenBlocksConverts() throws {
+        var (board, layer) = makeBoard()
+        let a = Element(
+            layerIDs: [layer], sortKey: "i",
+            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
+        )
+        let b = Element(
+            layerIDs: [layer], sortKey: "j",
+            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
+        )
+        try board.apply(.insertElement(a))
+        try board.apply(.insertElement(b))
+
+        // Strongly bowed arrow — previously rejected by the deviation test.
+        let ink = inkElement(
+            sketchLine(from: Point(x: 105, y: 30), to: Point(x: 395, y: 30), jitterAmount: 2, bow: 70),
+            layer: layer
+        )
+        try board.apply(.insertElement(ink))
+        let conversion = try XCTUnwrap(
+            SketchConversion.conversion(for: ink, in: board),
+            "curved strokes between blocks must convert"
+        )
+        try board.apply(conversion.operation)
+        XCTAssertNotNil(board.elements[conversion.producedID]?.edge)
+    }
+
+    func testReverseStrokeMakesConnectionBidirectional() throws {
+        var (board, layer) = makeBoard()
+        let a = Element(
+            layerIDs: [layer], sortKey: "i",
+            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
+        )
+        let b = Element(
+            layerIDs: [layer], sortKey: "j",
+            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
+        )
+        try board.apply(.insertElement(a))
+        try board.apply(.insertElement(b))
+
+        // First stroke A→B creates the edge.
+        let first = inkElement(
+            sketchLine(from: Point(x: 105, y: 30), to: Point(x: 395, y: 30), jitterAmount: 1),
+            layer: layer
+        )
+        try board.apply(.insertElement(first))
+        let firstConversion = try XCTUnwrap(SketchConversion.conversion(for: first, in: board))
+        try board.apply(firstConversion.operation)
+
+        // Second stroke B→A upgrades it instead of duplicating.
+        let second = inkElement(
+            sketchLine(from: Point(x: 395, y: 40), to: Point(x: 105, y: 40), jitterAmount: 1),
+            layer: layer
+        )
+        try board.apply(.insertElement(second))
+        let secondConversion = try XCTUnwrap(SketchConversion.conversion(for: second, in: board))
+        XCTAssertEqual(secondConversion.actionName, "Make Bidirectional")
+        try board.apply(secondConversion.operation)
+
+        let edges = board.elements.values.filter { $0.edge != nil }
+        XCTAssertEqual(edges.count, 1, "no duplicate edge")
+        XCTAssertEqual(edges.first?.edge?.semantic.direction, .both)
+    }
+
     func testConversionUndoRestoresInk() throws {
         var (board, layer) = makeBoard()
         let ink = inkElement(
