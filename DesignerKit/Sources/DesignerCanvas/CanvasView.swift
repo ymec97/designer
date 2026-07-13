@@ -507,14 +507,41 @@ public final class CanvasView: NSView {
     private var simulationColor: NSColor = Graphite.accent
     /// The flow being played back, if any (nil = flood mode).
     public private(set) var playingFlowID: FlowID?
+    /// Edges traversed opposite to their storage order (a bidirectional edge
+    /// walked to→from, or a backward edge): the packet must fly the traversal
+    /// direction, not the storage direction.
+    public private(set) var reversedSimulationEdges: Set<ElementID> = []
+
+    /// Derives traversal reversal from delivery: an edge whose step delivers
+    /// to its *storage-from* endpoint was walked backwards. Loop-closing edges
+    /// (delivering to an already-lit node, absent from step.nodes) fall back
+    /// to the semantic direction.
+    private func reversedEdges(in steps: [TrafficSimulation.Step]) -> Set<ElementID> {
+        var reversed: Set<ElementID> = []
+        for step in steps {
+            let delivered = Set(step.nodes)
+            for edgeID in step.edges {
+                guard let edge = board.elements[edgeID]?.edge,
+                      let from = edge.from.elementID, let to = edge.to.elementID else { continue }
+                if delivered.contains(from), !delivered.contains(to) {
+                    reversed.insert(edgeID)
+                } else if !delivered.contains(from), !delivered.contains(to),
+                          edge.semantic.direction == .backward {
+                    reversed.insert(edgeID)
+                }
+            }
+        }
+        return reversed
+    }
 
     public func startSimulation(from source: ElementID) {
         guard board.elements[source]?.node != nil else { return }
-        let sim = TrafficSimulator(source: source, board: board)
-        guard !sim.isEmpty else { return }
+        let steps = TrafficSimulation.steps(from: source, in: board)
+        guard !steps.isEmpty else { return }
         simulationColor = Graphite.accent
         playingFlowID = nil
-        startSimulator(sim)
+        reversedSimulationEdges = reversedEdges(in: steps)
+        startSimulator(TrafficSimulator(source: source, steps: steps))
     }
 
     /// Plays a recorded flow: exactly its steps, in its color, skipping any
@@ -526,6 +553,7 @@ public final class CanvasView: NSView {
         cancelFlowRecording()
         simulationColor = Graphite.flowColors[flow.colorIndex % Graphite.flowColors.count]
         playingFlowID = flow.id
+        reversedSimulationEdges = reversedEdges(in: steps)
         startSimulator(TrafficSimulator(source: flow.source, steps: steps))
     }
 
@@ -570,6 +598,7 @@ public final class CanvasView: NSView {
         simulator = nil
         simulationPaused = false
         playingFlowID = nil
+        reversedSimulationEdges = []
         simulationStateChanged?(false, false)
         needsDisplay = true
     }
@@ -613,10 +642,13 @@ public final class CanvasView: NSView {
         }
 
         // Travelling packets at the head of each active edge, with the edge's
-        // condition surfaced while it transits ("only when gRPC").
+        // condition surfaced while it transits ("only when gRPC"). Reversed
+        // traversals (bidirectional walked to→from, backward edges) fly the
+        // traversal direction, not the storage direction.
         for active in frame.activeEdges {
             guard let route = routeCache[active.id] else { continue }
-            let world = route.point(atFraction: active.progress)
+            let fraction = reversedSimulationEdges.contains(active.id) ? 1 - active.progress : active.progress
+            let world = route.point(atFraction: fraction)
             let view = viewport.toView(world)
             renderer.drawSimulationPacket(at: view, in: context, viewport: viewport, color: simulationColor)
             if let edge = board.elements[active.id]?.edge,

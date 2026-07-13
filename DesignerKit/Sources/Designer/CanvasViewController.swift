@@ -216,7 +216,32 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         toggleFlowFocus(flow.id)
         guard canvasView.emphasizedElements == nil else { return "flow focus didn't clear" }
 
-        document.undoManager?.undo() // remove flow
+        // Reverse traversal (Yarden's bug): a bidirectional edge recorded
+        // to→from must play the packet in traversal order, not storage order.
+        let biEdge = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                             content: .edge(Edge(
+                                 semantic: EdgeSemantic(direction: .both),
+                                 from: .element(a.id, side: nil, offset: nil),
+                                 to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.insertElement(biEdge), actionName: "Bi Edge")
+        var reverseRecorder = FlowRecorder(source: b.id)
+        guard let backCandidate = reverseRecorder.candidates(in: document.board)
+                .first(where: { $0.edge == biEdge.id && $0.from == b.id && $0.to == a.id }) else {
+            return "bidirectional edge not offered from its 'to' side"
+        }
+        reverseRecorder.record(backCandidate, in: document.board)
+        let reverseFlow = reverseRecorder.finish(name: "reverse", colorIndex: 2)
+        document.perform(.insertFlow(reverseFlow, at: document.board.flows.count), actionName: "Record Flow")
+        canvasView.startFlowPlayback(reverseFlow)
+        guard canvasView.reversedSimulationEdges.contains(biEdge.id) else {
+            canvasView.stopSimulation()
+            return "reverse traversal not detected — packet would fly storage direction"
+        }
+        canvasView.stopSimulation()
+
+        document.undoManager?.undo() // remove reverse flow
+        document.undoManager?.undo() // remove bi edge
+        document.undoManager?.undo() // remove first flow
         document.undoManager?.undo() // remove test graph
         guard document.board.flows.isEmpty || !document.board.flows.contains(where: { $0.id == flow.id }) else {
             return "undo did not remove the flow"
@@ -273,6 +298,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.flowRecordingChanged = { [weak self] active, connectors in
             self?.recordBarModel.recording = active
             self?.recordBarModel.connectors = connectors
+            self?.flowsModel.recording = active
+            self?.flowsModel.recordingConnectors = connectors
         }
         // Track play state for the panel's play/stop buttons.
         let existingHandler = canvasView.simulationStateChanged

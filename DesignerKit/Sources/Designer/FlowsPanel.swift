@@ -15,6 +15,10 @@ final class FlowsPanelModel: ObservableObject {
     @Published var focusedFlowID: FlowID?
     @Published var playingFlowID: FlowID?
     @Published var visible = false
+    /// Live recording state, mirrored into the panel so the in-progress flow
+    /// is visible where flows live (not only in the bottom bar).
+    @Published var recording = false
+    @Published var recordingConnectors = 0
 }
 
 struct FlowsPanelActions {
@@ -50,12 +54,30 @@ struct FlowsPanel: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
 
+            if model.recording {
+                Divider()
+                HStack(spacing: 8) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    Text(model.recordingConnectors == 0
+                         ? "Recording — click a highlighted connector"
+                         : "Recording · \(model.recordingConnectors) connector\(model.recordingConnectors == 1 ? "" : "s")")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(GraphiteStyle.ink)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(GraphiteStyle.accentSoft.opacity(0.35))
+            }
+
             if model.flows.isEmpty {
-                Text("Record how a request travels:\nselect its source block, press Record,\nthen click each connector it takes.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(GraphiteStyle.inkDim)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
+                if !model.recording {
+                    Text("Record how a request travels:\nselect its source block, press Record,\nthen click each connector it takes.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(GraphiteStyle.inkDim)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
             } else {
                 Divider()
                 VStack(spacing: 0) {
