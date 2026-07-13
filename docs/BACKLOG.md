@@ -89,6 +89,29 @@ strokes, chain strokes whose endpoints meet within tolerance into a single
 virtual stroke, then run normal closed-shape recognition on the chain.
 Live mode could also try chaining the last few strokes on stroke-end.
 
+## Requested features (approved-pending, post-MVP)
+
+### F1. Home / catalog start screen
+*Requested 2026-07-13 by Yarden.*
+On app open, show a catalog: first tile "New Canvas", remaining tiles are
+previously created boards with thumbnails, sorted by last-modified, click to
+open. Key decision: source of "previous canvases" — recommend a default
+managed "Boards" folder (new boards auto-save there; Save As elsewhere still
+allowed) indexed alongside NSDocumentController recent documents, deduped.
+Reuse BoardSnapshot for thumbnails and the LibraryStore folder-index pattern.
+
+### F2. Traffic / data-flow simulation
+*Requested 2026-07-13 by Yarden.* Ties directly to core intent (data
+transmission legibility).
+Select a node, press Play (affordance appears near the selection / in a
+transport control), and watch data propagate: highlight the source node, then
+its outgoing connectors, then the next nodes, then their connectors — a
+staged, wave-by-wave animation. Directed BFS from the source respecting edge
+direction (forward/both/backward); visited-set for cycles. Animate a moving
+packet along edge routes + node pulses; play/pause/restart + speed; a
+non-destructive read-only "Simulate" mode (esc to exit). Must stay smooth
+(display-link driven, dirty-region redraw) and respect Reduce Motion.
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input
