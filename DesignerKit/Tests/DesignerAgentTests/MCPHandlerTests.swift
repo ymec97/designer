@@ -45,17 +45,26 @@ final class MCPHandlerTests: XCTestCase {
         let result = r["result"] as! [String: Any]
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "Designer")
         XCTAssertNotNil(result["protocolVersion"])
+        let instructions = result["instructions"] as? String ?? ""
+        XCTAssertTrue(instructions.contains("propose_board"), "initialize must carry the agent guide")
+        XCTAssertTrue(instructions.contains("ellipse"), "guide must include shape conventions")
+    }
+
+    func testGuideTool() {
+        let text = toolText(call(#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_guide","arguments":{}}}"#))
+        XCTAssertTrue(text.contains("Flows"), "guide should cover app features")
+        XCTAssertTrue(text.contains("kind"), "guide should cover authoring conventions")
     }
 
     func testNotificationGetsNoReply() {
         XCTAssertNil(handler.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
     }
 
-    func testToolsListHasFourTools() {
+    func testToolsListHasFiveTools() {
         let r = call(#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
         let tools = (r["result"] as! [String: Any])["tools"] as! [[String: Any]]
         XCTAssertEqual(Set(tools.map { $0["name"] as! String }),
-                       ["describe_board", "get_board", "search_board", "propose_board"])
+                       ["get_guide", "describe_board", "get_board", "search_board", "propose_board"])
     }
 
     func testDescribeBoard() {

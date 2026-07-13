@@ -32,13 +32,17 @@ public enum LLMInterchange {
     # This JSON describes a software-architecture diagram. Edit it and paste it
     # back into Designer to apply changes.
     # - nodes: components. `id` is a stable slug you reference from edges.
-    #   `kind` ∈ service|database|queue|cache|gateway|client|external|generic.
-    #   `shape` ∈ rectangle|ellipse|diamond|triangle. `at` = [x, y] top-left,
-    #   `size` = [width, height] in points. Omit `at`/`size` for new nodes and
-    #   they will be auto-arranged left-to-right in data-flow order.
-    # - edges: connections. `from`/`to` are node ids. `direction` ∈
-    #   forward|backward|both|none. `protocol`, `data`, `condition` describe
-    #   the data transmission; any other key/value goes under `props`.
+    #   ALWAYS set a human-readable `name` and a `kind` ∈ service|database|
+    #   queue|cache|gateway|client|external|generic (kind drives the tint).
+    #   `shape` ∈ rectangle|ellipse|diamond|triangle — convention: ellipse for
+    #   databases/data stores, diamond for decision points, triangle for
+    #   alerts, rectangle otherwise. `at` = [x, y] top-left, `size` =
+    #   [width, height] in points. Omit `at`/`size` for new nodes and they
+    #   will be auto-arranged left-to-right in data-flow order.
+    # - edges: connections. `from`/`to` are node ids. ALWAYS set `label`
+    #   (what happens) and `protocol` (HTTPS, gRPC, SQL, Kafka…). `direction` ∈
+    #   forward|backward|both|none. `data`, `condition` describe the payload
+    #   and when it fires; any other key/value goes under `props`.
     # - notes: free-text annotations with `at` and `size`.
     # Add, remove, relabel, and reconnect freely; keep ids unique.
     """

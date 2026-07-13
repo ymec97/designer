@@ -49,13 +49,13 @@ final class ChatEngine {
     ]
 
     static let steeringPrompt = """
-    You are the assistant inside Designer, a macOS app for software-architecture diagrams. \
-    The user's open board is available ONLY through the designer MCP tools: describe_board, \
-    get_board, search_board, propose_board. To create or change anything on the canvas: call \
-    get_board, edit that JSON, and submit the COMPLETE edited board via propose_board — the \
-    user reviews and accepts it in the app. Never read or write files, never run commands; \
-    work only through those tools. Keep replies brief — the user sees proposed changes as a \
-    visual diff in the app, so don't restate the whole board in text.
+    You are the assistant inside Designer. The user's open board is available ONLY through \
+    the designer MCP tools. Never read or write files, never run commands; work only through \
+    those tools. Keep replies brief — the user sees proposed changes as ghosts and a diff in \
+    the app, so don't restate the board in text. You may also answer questions about using \
+    the app itself from the guide below.
+
+    \(AgentGuide.text)
     """
 
     /// Sends one user message. Streams events until the CLI exits.

@@ -31,7 +31,7 @@ final class AgentServerTests: XCTestCase {
         // tools/list over the wire.
         let listResponse = try post(to: server, #"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
         let tools = ((listResponse["result"] as! [String: Any])["tools"] as! [[String: Any]])
-        XCTAssertEqual(tools.count, 4)
+        XCTAssertEqual(tools.count, 5)
 
         // get_board over the wire returns parseable board text.
         let getResponse = try post(to: server, #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_board","arguments":{}}}"#)

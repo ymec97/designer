@@ -135,13 +135,16 @@ extension WireBoard {
             } else {
                 frame = autoFrames[wireNode.id] ?? Rect(x: 80, y: 80, width: 160, height: 80)
             }
+            // A missing name falls back to the id slug — an agent that only
+            // sets `id` must still produce labeled, recognizable blocks.
+            let name = (wireNode.name?.isEmpty == false) ? wireNode.name! : wireNode.id
             let element = Element(
                 layerIDs: [layer],
                 sortKey: board.topSortKey,
                 content: .node(Node(
                     semantic: NodeSemantic(
                         kind: wireNode.kind.map(NodeKind.init(rawValue:)) ?? .generic,
-                        name: wireNode.name ?? ""
+                        name: name
                     ),
                     frame: frame,
                     shape: wireNode.shape.map(NodeShape.init(rawValue:)) ?? .rectangle,

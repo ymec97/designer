@@ -42,6 +42,9 @@ public final class MCPHandler {
                 "protocolVersion": (requested?.isEmpty == false) ? requested! : Self.protocolVersion,
                 "capabilities": ["tools": [:] as [String: Any]],
                 "serverInfo": ["name": Self.serverName, "version": "1"],
+                // Clients inject this into the agent's context: how to author
+                // boards well and what the app can do.
+                "instructions": AgentGuide.text,
             ]))
         case "ping":
             return encode(result(id: id, [:]))
@@ -63,6 +66,7 @@ public final class MCPHandler {
         let arguments = params["arguments"] as? [String: Any] ?? [:]
 
         switch name {
+        case "get_guide": return toolResult(id: id, .text(AgentGuide.text))
         case "describe_board": return toolResult(id: id, describeBoard())
         case "get_board": return toolResult(id: id, getBoard())
         case "search_board": return toolResult(id: id, searchBoard(query: arguments["query"] as? String ?? ""))
@@ -197,6 +201,11 @@ public final class MCPHandler {
     // MARK: Tool schemas
 
     static let toolDefinitions: [[String: Any]] = [
+        [
+            "name": "get_guide",
+            "description": "Read Designer's authoring guide: node kinds and shape conventions, connector labeling (protocol/data/condition), the propose workflow, and the app features (layers, flows, simulation) you can explain to the user. Read this before your first edit.",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]],
+        ],
         [
             "name": "describe_board",
             "description": "Summarize the software-architecture diagram currently open in Designer: its blocks (components), connectors, and layers.",

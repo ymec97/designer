@@ -46,6 +46,14 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertGreaterThan(frame(b, "b").x, 80 - 1, "auto node still placed")
     }
 
+    func testMissingNameFallsBackToID() {
+        let b = board(#"{"nodes":[{"id":"orders-cache","kind":"cache"}],"edges":[]}"#)
+        let node = b.elements.values.first { $0.node != nil }!.node!
+        XCTAssertEqual(node.semantic.name, "orders-cache",
+                       "an agent that only sets id must still produce a labeled block")
+        XCTAssertEqual(node.semantic.kind, .cache)
+    }
+
     func testNoEdgesFallsBackToGrid() {
         let b = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)
         // Same row, different x — the grid path.
