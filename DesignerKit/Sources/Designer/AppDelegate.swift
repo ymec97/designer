@@ -1,9 +1,37 @@
 import AppKit
+import DesignerModel
 import DesignerPersistence
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let hasLaunchedKey = "HasLaunchedBefore"
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MainMenu.build()
+    }
+
+    /// First launch (no --flags) opens the example board instead of a blank
+    /// document, so a new user sees a real diagram immediately.
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        let isTestRun = CommandLine.arguments.contains { $0.hasPrefix("--") }
+        if isTestRun { return false }
+        if !UserDefaults.standard.bool(forKey: Self.hasLaunchedKey) {
+            UserDefaults.standard.set(true, forKey: Self.hasLaunchedKey)
+            DispatchQueue.main.async { self.openExampleBoard(nil) }
+            return false
+        }
+        return true
+    }
+
+    @objc func openExampleBoard(_ sender: Any?) {
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else {
+            return
+        }
+        document.board = ExampleBoard.make()
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
     }
 
     private var perfTestDriver: PerfTestDriver?
@@ -66,10 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         perfTestDriver = driver
         // Give the window one runloop turn to lay out before measuring.
         DispatchQueue.main.async { driver.start() }
-    }
-
-    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        true
     }
 
     /// Headless end-to-end check of the real NSDocument pipeline: create an

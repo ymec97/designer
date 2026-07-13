@@ -63,7 +63,7 @@ build/Designer.app/Contents/MacOS/Designer --perf-test
 
 ## Status
 
-Milestone M5 (library) — see the brief's §8 for the roadmap.
+Milestone M6 (export + LLM interchange + polish) — MVP feature-complete.
 Done: document model, versioned persistence, operation layer with undo/redo,
 canvas with pan/zoom/select/drag/resize/create/label-edit, and semantic
 connectors (border-drag to connect, auto-anchoring that survives move/resize/
@@ -72,4 +72,6 @@ badges, popover editor, cascade delete) — fluid at 2k nodes + 4k edges.
 Freehand ink (mouse/trackpad + tablet pressure), geometric stroke recognition (rectangle/ellipse/diamond/line), live sketch-to-structure conversion, ⌘R structurize.
 Layers: floating panel (⌘L), multi-membership, active layer, show/hide/lock/tint/duplicate/reorder, focus mode dimming.
 Library (⌘Y): save selections/boards as tagged, searchable, thumbnailed patterns in a folder; insert with fresh IDs centered on the view.
-Next: M6 export (PNG/SVG) + LLM interchange + polish.
+Alignment snapping with guides, ⌘K command palette, first-run example board.
+
+All MVP milestones (M0–M6) complete: see docs/PRODUCT_BRIEF.md §3 for the feature list and docs/BACKLOG.md for post-MVP work.

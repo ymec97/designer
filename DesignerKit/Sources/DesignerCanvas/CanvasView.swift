@@ -146,6 +146,28 @@ public final class CanvasView: NSView {
     /// Frames shown during an in-flight drag/resize, committed as one
     /// operation (= one undo step) at gesture end.
     private var transientFrames: [ElementID: Rect] = [:]
+    /// Alignment guides to draw during a snapping move.
+    private var snapGuides: [SnapEngine.Guide] = []
+
+    private func union(of rects: some Collection<Rect>) -> Rect? {
+        guard var result = rects.first else { return nil }
+        for rect in rects.dropFirst() {
+            let minX = min(result.x, rect.x), minY = min(result.y, rect.y)
+            let maxX = max(result.maxX, rect.maxX), maxY = max(result.maxY, rect.maxY)
+            result = Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        }
+        return result
+    }
+
+    /// Node/note frames eligible as snap targets (visible, not being dragged).
+    private func snapCandidates(excluding movingIDs: Set<ElementID>) -> [Rect] {
+        let visibleWorld = viewport.visibleWorldRect(viewSize: bounds.size)
+        return spatialIndex.query(visibleWorld).compactMap { id -> Rect? in
+            guard !movingIDs.contains(id), let element = board.elements[id],
+                  element.node != nil || isNote(element) else { return nil }
+            return SpatialIndex.boundingRect(of: element)
+        }
+    }
 
     /// Active interaction tool. Select is the default; Draw captures ink.
     public enum Tool {
@@ -426,6 +448,10 @@ public final class CanvasView: NSView {
             renderer.drawResizeHandles(around: handleBox, in: context)
         }
 
+        for guide in snapGuides {
+            renderer.drawSnapGuide(guide, in: context, viewport: viewport)
+        }
+
         drawInFlightGesture(in: context)
     }
 
@@ -596,13 +622,24 @@ public final class CanvasView: NSView {
 
         case .move(let originals, let startWorld):
             let world = viewport.toWorld(point)
-            let dx = world.x - startWorld.x
-            let dy = world.y - startWorld.y
+            var dx = world.x - startWorld.x
+            var dy = world.y - startWorld.y
+
+            // Alignment snapping (suppressed while ⌘ is held) against nearby
+            // elements not being dragged.
+            snapGuides = []
+            if !event.modifierFlags.contains(.command), let movingUnion = union(of: originals.values) {
+                let moved = movingUnion.offsetBy(dx: dx, dy: dy)
+                let movingIDs = Set(originals.keys)
+                let others = snapCandidates(excluding: movingIDs)
+                let snap = SnapEngine.snap(movingBox: moved, others: others, threshold: 7 / viewport.scale)
+                dx += snap.dx
+                dy += snap.dy
+                snapGuides = snap.guides
+            }
+
             for (id, original) in originals {
-                transientFrames[id] = Rect(
-                    x: original.x + dx, y: original.y + dy,
-                    width: original.width, height: original.height
-                )
+                transientFrames[id] = original.offsetBy(dx: dx, dy: dy)
             }
             needsDisplay = true
 
@@ -649,6 +686,7 @@ public final class CanvasView: NSView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        snapGuides = []
         switch gesture {
         case .move, .resize:
             commitTransientFrames(actionName: {

@@ -483,6 +483,23 @@ final class BoardRenderer {
         }
     }
 
+    func drawSnapGuide(_ guide: SnapEngine.Guide, in context: CGContext, viewport: CanvasViewport) {
+        context.setStrokeColor(Palette.snapGuide.cgColor)
+        context.setLineWidth(1)
+        context.beginPath()
+        switch guide.axis {
+        case .vertical:
+            let x = viewport.toView(Point(x: guide.position, y: guide.start)).x
+            context.move(to: CGPoint(x: x, y: viewport.toView(Point(x: guide.position, y: guide.start)).y))
+            context.addLine(to: CGPoint(x: x, y: viewport.toView(Point(x: guide.position, y: guide.end)).y))
+        case .horizontal:
+            let y = viewport.toView(Point(x: guide.start, y: guide.position)).y
+            context.move(to: CGPoint(x: viewport.toView(Point(x: guide.start, y: guide.position)).x, y: y))
+            context.addLine(to: CGPoint(x: viewport.toView(Point(x: guide.end, y: guide.position)).x, y: y))
+        }
+        context.strokePath()
+    }
+
     func drawRubberBand(_ rect: CGRect, in context: CGContext) {
         context.setFillColor(Palette.selection.withAlphaComponent(0.08).cgColor)
         context.fill(rect)
@@ -570,6 +587,7 @@ enum Palette {
     static let edgeStroke = NSColor.secondaryLabelColor
     /// Detached connectors: unmistakably "not currently connected".
     static let danglingEdge = NSColor.systemOrange
+    static let snapGuide = NSColor.systemPink
     /// Slightly translucent so captions sit on lines without hard boxes.
     static let captionBackground = NSColor.windowBackgroundColor.withAlphaComponent(0.88)
     static let nodeText = NSColor.labelColor

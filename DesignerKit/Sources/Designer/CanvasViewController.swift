@@ -68,6 +68,85 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installToolbar()
         installLayersPanel()
         installLibraryPanel()
+        installCommandPalette()
+    }
+
+    // MARK: Command palette (⌘K)
+
+    private let paletteModel = CommandPaletteModel()
+    private weak var paletteHost: NSView?
+
+    @objc func toggleCommandPalette(_ sender: Any?) {
+        if paletteModel.isVisible {
+            paletteModel.isVisible = false
+            paletteHost?.isHidden = true
+            view.window?.makeFirstResponder(canvasView)
+        } else {
+            paletteModel.query = ""
+            paletteModel.commands = buildCommands()
+            paletteModel.isVisible = true
+            paletteHost?.isHidden = false
+        }
+    }
+
+    private func installCommandPalette() {
+        let container = CommandPaletteContainer(model: paletteModel) { [weak self] in
+            self?.paletteModel.isVisible = false
+            self?.view.window?.makeFirstResponder(self?.canvasView)
+        }
+        // Frame-based autoresizing (not Auto Layout) so this full-size overlay
+        // never entangles the canvas's own sizing.
+        let host = PalettePassthroughHostingView(rootView: container)
+        host.isActive = { [weak self] in self?.paletteModel.isVisible ?? false }
+        host.isHidden = true // hidden views don't hit-test; shown only with the palette
+        host.frame = view.bounds
+        host.autoresizingMask = [.width, .height]
+        view.addSubview(host)
+        paletteHost = host
+    }
+
+    private func buildCommands() -> [PaletteCommand] {
+        [
+            PaletteCommand(title: "Add Block", shortcut: "⌘B", systemImage: "plus.square") { [weak self] in
+                self?.canvasView.addBlock(nil)
+            },
+            PaletteCommand(title: "Draw Tool", shortcut: "D", systemImage: "pencil.line") { [weak self] in
+                self?.canvasView.activateDrawTool(nil)
+            },
+            PaletteCommand(title: "Select Tool", shortcut: "V", systemImage: "cursorarrow") { [weak self] in
+                self?.canvasView.activateSelectTool(nil)
+            },
+            PaletteCommand(title: "Structurize Sketch into Shapes", shortcut: "⌘R", systemImage: "wand.and.stars") { [weak self] in
+                self?.structurize(nil)
+            },
+            PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
+                self?.toggleLayersPanel(nil)
+            },
+            PaletteCommand(title: "Toggle Library", shortcut: "⌘Y", systemImage: "books.vertical") { [weak self] in
+                self?.toggleLibraryPanel(nil)
+            },
+            PaletteCommand(title: "Save Selection to Library", shortcut: "⌥⌘S", systemImage: "square.and.arrow.down") { [weak self] in
+                self?.saveSelectionToLibrary(nil)
+            },
+            PaletteCommand(title: "Copy for LLM", shortcut: "⇧⌘C", systemImage: "text.bubble") { [weak self] in
+                self?.copyForLLM(nil)
+            },
+            PaletteCommand(title: "Import Board from Clipboard", shortcut: "⇧⌘V", systemImage: "square.and.arrow.down.on.square") { [weak self] in
+                self?.importBoardFromClipboard(nil)
+            },
+            PaletteCommand(title: "Export as PNG…", shortcut: nil, systemImage: "photo") { [weak self] in
+                self?.exportAsPNG(nil)
+            },
+            PaletteCommand(title: "Export as SVG…", shortcut: nil, systemImage: "square.on.circle") { [weak self] in
+                self?.exportAsSVG(nil)
+            },
+            PaletteCommand(title: "Zoom to Fit", shortcut: "⌘9", systemImage: "arrow.up.left.and.arrow.down.right") { [weak self] in
+                self?.canvasView.zoomToFit(nil)
+            },
+            PaletteCommand(title: "Actual Size", shortcut: "⌘0", systemImage: "1.magnifyingglass") { [weak self] in
+                self?.canvasView.zoomActualSize(nil)
+            },
+        ]
     }
 
     // MARK: Layers

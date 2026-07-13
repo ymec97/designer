@@ -13,7 +13,16 @@ enum MainMenu {
         mainMenu.addItem(boardMenuItem())
         mainMenu.addItem(viewMenuItem())
         mainMenu.addItem(windowMenuItem())
+        mainMenu.addItem(helpMenuItem())
         return mainMenu
+    }
+
+    private static func helpMenuItem() -> NSMenuItem {
+        let menu = NSMenu(title: "Help")
+        menu.addItem(withTitle: "Open Example Board",
+                     action: #selector(AppDelegate.openExampleBoard(_:)),
+                     keyEquivalent: "")
+        return wrapped(menu)
     }
 
     private static func boardMenuItem() -> NSMenuItem {
@@ -68,6 +77,9 @@ enum MainMenu {
                      action: #selector(CanvasView.zoomToFit(_:)),
                      keyEquivalent: "9")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Command Palette",
+                     action: Selector(("toggleCommandPalette:")),
+                     keyEquivalent: "k")
         menu.addItem(withTitle: "Show Library",
                      action: Selector(("toggleLibraryPanel:")),
                      keyEquivalent: "y")
