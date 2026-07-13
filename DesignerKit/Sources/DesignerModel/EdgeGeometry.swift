@@ -36,6 +36,26 @@ public enum EdgeGeometry {
             return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
         }
 
+        /// The point a fraction (0…1) of the way along the route by arc length
+        /// — used to animate a packet travelling the connector.
+        public func point(atFraction fraction: Double) -> Point {
+            guard points.count >= 2 else { return start }
+            let clamped = max(0, min(1, fraction))
+            let lengths = zip(points, points.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }
+            let total = lengths.reduce(0, +)
+            guard total > 0 else { return start }
+            var remaining = clamped * total
+            for (index, length) in lengths.enumerated() {
+                if remaining <= length {
+                    let t = length > 0 ? remaining / length : 0
+                    let a = points[index], b = points[index + 1]
+                    return Point(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+                }
+                remaining -= length
+            }
+            return end
+        }
+
         /// Distance from a point to the nearest segment of the route.
         public func distance(to point: Point) -> Double {
             guard points.count >= 2 else {

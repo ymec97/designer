@@ -69,6 +69,93 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installLayersPanel()
         installLibraryPanel()
         installCommandPalette()
+        installSimulationTransport()
+    }
+
+    // MARK: Traffic simulation (F2)
+
+    private let simulationModel = SimulationTransportModel()
+
+    @objc func simulateTraffic(_ sender: Any?) {
+        guard canvasView.selection.count == 1, let source = canvasView.selection.first,
+              document.board.elements[source]?.node != nil else {
+            NSSound.beep(); return
+        }
+        guard canvasView.canSimulate(from: source) else {
+            // Nothing flows out of this node — tell the user why, gently.
+            let alert = NSAlert()
+            alert.messageText = "No outgoing connections"
+            alert.informativeText = "Connect this block to others (with the arrow pointing away) to simulate traffic flowing from it."
+            alert.runModal()
+            return
+        }
+        canvasView.startSimulation(from: source)
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    /// Headless simulate check for --ui-test: builds a small A→B→C graph,
+    /// runs and stops a simulation, verifies activation + model reachability.
+    func runSimulationSelfTest() -> String? {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 900, width: 100, height: 50))))
+        }
+        let a = node("sim-a", 0), b = node("sim-b", 200), c = node("sim-c", 400)
+        func edge(_ from: Element, _ to: Element) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .edge(Edge(from: .element(from.id, side: nil, offset: nil),
+                                        to: .element(to.id, side: nil, offset: nil))))
+        }
+        document.perform(.batch([
+            .insertElement(a), .insertElement(b), .insertElement(c),
+            .insertElement(edge(a, b)), .insertElement(edge(b, c)),
+        ]), actionName: "Sim Test Graph")
+
+        let steps = TrafficSimulation.steps(from: a.id, in: document.board)
+        guard steps.count == 2 else { return "expected 2 waves, got \(steps.count)" }
+
+        canvasView.select([a.id])
+        canvasView.startSimulation(from: a.id)
+        guard canvasView.isSimulating else { return "startSimulation did not activate" }
+
+        let reached = TrafficSimulation.reached(from: a.id, in: document.board)
+        guard reached.nodes.isSuperset(of: [a.id, b.id, c.id]) else { return "did not reach a→b→c" }
+
+        canvasView.stopSimulation()
+        guard !canvasView.isSimulating else { return "stopSimulation did not deactivate" }
+
+        document.undoManager?.undo() // remove the test graph
+        return nil
+    }
+
+    private func installSimulationTransport() {
+        canvasView.simulationStateChanged = { [weak self] active, paused in
+            self?.simulationModel.active = active
+            self?.simulationModel.paused = paused
+        }
+        let actions = SimulationTransportActions(
+            togglePause: { [weak self] in
+                guard let self else { return }
+                if self.simulationModel.paused { self.canvasView.resumeSimulation() }
+                else { self.canvasView.pauseSimulation() }
+            },
+            restart: { [weak self] in self?.canvasView.restartSimulation() },
+            setSpeed: { [weak self] speed in
+                self?.canvasView.simulationSpeed = speed
+                self?.simulationModel.speed = speed
+            },
+            exit: { [weak self] in self?.canvasView.stopSimulation() }
+        )
+        let transport = SimulationTransport(model: simulationModel, actions: actions)
+        let host = NSHostingView(rootView: transport)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            host.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
+        ])
     }
 
     // MARK: Command palette (⌘K)
@@ -118,6 +205,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Structurize Sketch into Shapes", shortcut: "⌘R", systemImage: "wand.and.stars") { [weak self] in
                 self?.structurize(nil)
+            },
+            PaletteCommand(title: "Simulate Traffic from Selection", shortcut: nil, systemImage: "play.circle") { [weak self] in
+                self?.simulateTraffic(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
                 self?.toggleLayersPanel(nil)
@@ -681,6 +771,9 @@ extension CanvasViewController: NSMenuItemValidation {
             return true
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty
+        case #selector(simulateTraffic(_:)):
+            return canvasView.selection.count == 1
+                && canvasView.selection.first.map { document.board.elements[$0]?.node != nil } == true
         case #selector(saveBoardToLibrary(_:)),
              #selector(exportAsPNG(_:)), #selector(exportAsSVG(_:)),
              #selector(copyForLLM(_:)):

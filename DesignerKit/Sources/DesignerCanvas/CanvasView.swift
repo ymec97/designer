@@ -457,7 +457,134 @@ public final class CanvasView: NSView {
             renderer.drawSnapGuide(guide, in: context, viewport: viewport)
         }
 
+        drawSimulationOverlay(in: context)
         drawInFlightGesture(in: context)
+    }
+
+    // MARK: Traffic simulation (F2)
+
+    private var simulator: TrafficSimulator?
+    private var simulationDisplayLink: CADisplayLink?
+    private var simulationClock: TimeInterval = 0   // accumulated simulation seconds
+    private var lastSimulationTick: CFTimeInterval = 0
+    private var simulationPaused = false
+
+    /// Simulation speed multiplier (1 = normal).
+    public var simulationSpeed: Double = 1
+
+    public var isSimulating: Bool { simulator != nil }
+    /// Fires when a simulation starts, pauses/resumes, or ends (so chrome can
+    /// show/update the transport). Bool = running (unpaused).
+    public var simulationStateChanged: ((_ active: Bool, _ paused: Bool) -> Void)?
+
+    /// Whether the given node can be a simulation source (a node with outgoing
+    /// flow), so callers can offer the affordance only when it's meaningful.
+    public func canSimulate(from id: ElementID) -> Bool {
+        !TrafficSimulation.steps(from: id, in: board).isEmpty
+    }
+
+    public func startSimulation(from source: ElementID) {
+        guard board.elements[source]?.node != nil else { return }
+        let sim = TrafficSimulator(source: source, board: board)
+        guard !sim.isEmpty else { return }
+        simulator = sim
+        simulationClock = 0
+        simulationPaused = false
+        lastSimulationTick = CACurrentMediaTime()
+
+        let link = displayLink(target: self, selector: #selector(simulationTick(_:)))
+        link.add(to: .main, forMode: .common)
+        simulationDisplayLink = link
+        simulationStateChanged?(true, false)
+        needsDisplay = true
+    }
+
+    public func pauseSimulation() {
+        guard isSimulating, !simulationPaused else { return }
+        simulationPaused = true
+        simulationStateChanged?(true, true)
+    }
+
+    public func resumeSimulation() {
+        guard isSimulating, simulationPaused else { return }
+        simulationPaused = false
+        lastSimulationTick = CACurrentMediaTime()
+        simulationStateChanged?(true, false)
+    }
+
+    public func restartSimulation() {
+        guard isSimulating else { return }
+        simulationClock = 0
+        simulationPaused = false
+        lastSimulationTick = CACurrentMediaTime()
+        simulationStateChanged?(true, false)
+        needsDisplay = true
+    }
+
+    public func stopSimulation() {
+        simulationDisplayLink?.invalidate()
+        simulationDisplayLink = nil
+        simulator = nil
+        simulationPaused = false
+        simulationStateChanged?(false, false)
+        needsDisplay = true
+    }
+
+    @objc private func simulationTick(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        let delta = now - lastSimulationTick
+        lastSimulationTick = now
+        guard let sim = simulator, !simulationPaused else { return }
+        simulationClock += delta * simulationSpeed
+        // Loop with a short pause at the end so the flow reads as continuous.
+        if simulationClock > sim.totalDuration + 0.9 {
+            simulationClock = 0
+        }
+        needsDisplay = true
+    }
+
+    private func drawSimulationOverlay(in context: CGContext) {
+        guard let sim = simulator else { return }
+        let frame = sim.frame(at: simulationClock)
+        let frames = board.frameProvider(overrides: transientFrames)
+
+        renderer.drawSimulationScrim(bounds, in: context)
+
+        // Lit edges (done first, then active) in accent.
+        for edgeID in frame.doneEdges {
+            guard let route = routeCache[edgeID] else { continue }
+            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false)
+        }
+        for active in frame.activeEdges {
+            guard let route = routeCache[active.id] else { continue }
+            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: true)
+        }
+
+        // Lit nodes with a glow; source and freshly-reached pulse brightest.
+        for nodeID in frame.litNodes {
+            guard let element = board.elements[nodeID], let node = element.node else { continue }
+            let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
+            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 1)
+        }
+
+        // Travelling packets at the head of each active edge.
+        for active in frame.activeEdges {
+            guard let route = routeCache[active.id] else { continue }
+            let world = route.point(atFraction: active.progress)
+            renderer.drawSimulationPacket(at: viewport.toView(world), in: context, viewport: viewport)
+        }
+    }
+
+    private func nodeGlowPath(for node: Node, id: ElementID, frames: EdgeGeometry.FrameProvider) -> CGPath {
+        let frame = frames(id) ?? node.frame
+        let rect = viewport.toView(frame)
+        switch node.shape {
+        case .ellipse: return CGPath(ellipseIn: rect, transform: nil)
+        default:
+            let r = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
+            return CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
+        }
     }
 
     /// In-flight gesture overlays (rubber band, live ink stroke, connect
@@ -547,6 +674,9 @@ public final class CanvasView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         Self.debugTrace?("mouseDown clicks=\(event.clickCount) window=\(event.locationInWindow)")
+        // Simulation is a read-only mode; ignore edit gestures (pan/zoom still
+        // work via scroll/pinch). The transport controls it.
+        if isSimulating { return }
         commitLabelEditor()
         let point = convert(event.locationInWindow, from: nil)
 
@@ -825,6 +955,10 @@ public final class CanvasView: NSView {
             case "d": return activateDrawTool(nil)
             default: break
             }
+        }
+        if isSimulating, event.keyCode == 53 { // escape exits simulation
+            stopSimulation()
+            return
         }
         switch event.keyCode {
         case 51, 117: // delete, forward delete

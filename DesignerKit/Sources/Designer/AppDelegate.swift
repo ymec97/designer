@@ -104,6 +104,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Loads the example board, runs a simulation, and captures a mid-flow
+    /// frame — for reviewing the animation styling.
+    private func runSimulationScreenshot(saveTo url: URL) {
+        if CommandLine.arguments.contains("--dark") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else {
+            exit(1)
+        }
+        document.board = ExampleBoard.make()
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let window = document.windowControllers.first?.window,
+              let canvasController = window.contentViewController as? CanvasViewController else { exit(1) }
+        window.setContentSize(NSSize(width: 1140, height: 700))
+        window.makeKeyAndOrderFront(nil)
+
+        // Source = the gateway (fans out to services).
+        let source = document.board.elements.values.first { $0.node?.semantic.name == "api-gateway" }?.id
+            ?? document.board.elements.values.first { $0.node != nil }?.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let source { canvasController.canvasView.startSimulation(from: source) }
+            canvasController.canvasView.simulationSpeed = 0.6
+            // Capture partway through the flow.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                let view = canvasController.view
+                guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) {
+                    try? png.write(to: url)
+                    print("SIM-SHOT PASS: \(url.path)")
+                }
+                exit(0)
+            }
+        }
+    }
+
     @objc func showCatalog(_ sender: Any?) {
         CatalogWindowController.shared.present()
     }
@@ -166,6 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot-catalog"),
            CommandLine.arguments.indices.contains(index + 1) {
             runCatalogScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshot-sim"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            runSimulationScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot"),
            CommandLine.arguments.indices.contains(index + 1) {

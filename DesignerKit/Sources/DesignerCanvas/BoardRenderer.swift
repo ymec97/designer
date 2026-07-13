@@ -536,6 +536,54 @@ final class BoardRenderer {
         }
     }
 
+    // MARK: Traffic simulation
+
+    /// A translucent scrim that quiets the board so the flowing path pops.
+    func drawSimulationScrim(_ bounds: CGRect, in context: CGContext) {
+        context.setFillColor(Graphite.canvas.withAlphaComponent(0.62).cgColor)
+        context.fill(bounds)
+    }
+
+    /// A lit node: an accent glow halo, brighter when it has just been reached.
+    func drawSimulationNodeGlow(
+        _ path: CGPath, in context: CGContext, viewport: CanvasViewport, intensity: CGFloat
+    ) {
+        context.saveGState()
+        context.setShadow(
+            offset: .zero, blur: 14 * viewport.scale,
+            color: Graphite.accent.withAlphaComponent(0.55 * intensity).cgColor
+        )
+        context.setStrokeColor(Graphite.accent.withAlphaComponent(0.9).cgColor)
+        context.setLineWidth(2 * viewport.scale)
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// An edge the flow has used: a bright accent overlay on its route.
+    func drawSimulationEdge(
+        _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport, active: Bool
+    ) {
+        guard viewPoints.count >= 2 else { return }
+        context.setStrokeColor(Graphite.accent.withAlphaComponent(active ? 0.95 : 0.7).cgColor)
+        context.setLineWidth((active ? 2.4 : 1.8) * viewport.scale)
+        context.setLineCap(.round)
+        strokePolyline(viewPoints, in: context)
+    }
+
+    /// The travelling packet — a glowing accent dot at the head of the flow.
+    func drawSimulationPacket(at point: CGPoint, in context: CGContext, viewport: CanvasViewport) {
+        let r = 5 * viewport.scale
+        context.saveGState()
+        context.setShadow(offset: .zero, blur: 8 * viewport.scale, color: Graphite.accent.cgColor)
+        context.setFillColor(Graphite.accent.cgColor)
+        context.fillEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2))
+        context.setFillColor(NSColor.white.withAlphaComponent(0.9).cgColor)
+        let ri = r * 0.4
+        context.fillEllipse(in: CGRect(x: point.x - ri, y: point.y - ri, width: ri * 2, height: ri * 2))
+        context.restoreGState()
+    }
+
     func drawSnapGuide(_ guide: SnapEngine.Guide, in context: CGContext, viewport: CanvasViewport) {
         context.setStrokeColor(Palette.snapGuide.cgColor)
         context.setLineWidth(1)

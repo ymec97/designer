@@ -48,9 +48,10 @@ final class UITestDriver {
         step12LayerVisibilityLockingAndActive()
         step13LibraryRoundTrip()
         step14LLMInterchangeAndExport()
+        step15TrafficSimulation()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate verified")
             exit(0)
         } else {
             for failure in failures {
@@ -528,6 +529,16 @@ final class UITestDriver {
         }
         if let failure = controller.runLLMInterchangeSelfTest() {
             expect(false, "LLM/export round-trip failed: \(failure)")
+        }
+    }
+
+    private func step15TrafficSimulation() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for simulation test")
+            return
+        }
+        if let failure = controller.runSimulationSelfTest() {
+            expect(false, "traffic simulation failed: \(failure)")
         }
     }
 

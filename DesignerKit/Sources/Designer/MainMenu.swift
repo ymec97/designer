@@ -42,6 +42,10 @@ enum MainMenu {
         menu.addItem(withTitle: "Structurize Sketch into Shapes",
                      action: Selector(("structurize:")),
                      keyEquivalent: "r")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Simulate Traffic from Selection",
+                     action: Selector(("simulateTraffic:")),
+                     keyEquivalent: "")
         menu.addItem(withTitle: "Convert Sketches Automatically",
                      action: Selector(("toggleLiveRecognition:")),
                      keyEquivalent: "")
