@@ -109,12 +109,16 @@ enum MainMenu {
 
     private static func fileMenuItem() -> NSMenuItem {
         let menu = NSMenu(title: "File")
-        menu.addItem(withTitle: "New Board",
-                     action: #selector(NSDocumentController.newDocument(_:)),
+        menu.addItem(withTitle: "New Canvas",
+                     action: Selector(("newCanvasMenu:")),
                      keyEquivalent: "n")
         menu.addItem(withTitle: "Open…",
                      action: #selector(NSDocumentController.openDocument(_:)),
                      keyEquivalent: "o")
+        let catalog = menu.addItem(withTitle: "All Boards…",
+                                   action: Selector(("showCatalog:")),
+                                   keyEquivalent: "o")
+        catalog.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(.separator())
         menu.addItem(withTitle: "Close",
                      action: #selector(NSWindow.performClose(_:)),
