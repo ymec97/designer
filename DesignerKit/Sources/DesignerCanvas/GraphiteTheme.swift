@@ -34,6 +34,17 @@ public enum Graphite {
     public static let accent       = dynamic(light: "#3B5BDB", dark: "#7D97FF")
     public static let accentSoft   = dynamic(light: "#E7ECFD", dark: "#26305A")
 
+    /// Palette for recorded flows (F5): distinct hues that read on both
+    /// canvas grounds. Index 0 is the app accent; assignment cycles.
+    public static let flowColors: [NSColor] = [
+        accent,
+        dynamic(light: "#0CA678", dark: "#38D9A9"),  // teal
+        dynamic(light: "#E8590C", dark: "#FFA94D"),  // orange
+        dynamic(light: "#AE3EC9", dark: "#DA77F2"),  // violet
+        dynamic(light: "#E03131", dark: "#FF8787"),  // red
+        dynamic(light: "#1098AD", dark: "#66D9E8"),  // cyan
+    ]
+
     // Canvas semantics
     public static let nodeStroke   = dynamic(light: "#D5D9E2", dark: "#3A404D")
     public static let edge         = dynamic(light: "#9AA0AD", dark: "#6C7280")

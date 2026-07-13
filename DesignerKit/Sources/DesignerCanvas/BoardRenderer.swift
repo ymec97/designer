@@ -544,44 +544,96 @@ final class BoardRenderer {
         context.fill(bounds)
     }
 
-    /// A lit node: an accent glow halo, brighter when it has just been reached.
+    /// A lit node: a colored glow halo, brighter when it has just been reached.
     func drawSimulationNodeGlow(
-        _ path: CGPath, in context: CGContext, viewport: CanvasViewport, intensity: CGFloat
+        _ path: CGPath, in context: CGContext, viewport: CanvasViewport, intensity: CGFloat,
+        color: NSColor = Graphite.accent
     ) {
         context.saveGState()
         context.setShadow(
             offset: .zero, blur: 14 * viewport.scale,
-            color: Graphite.accent.withAlphaComponent(0.55 * intensity).cgColor
+            color: color.withAlphaComponent(0.55 * intensity).cgColor
         )
-        context.setStrokeColor(Graphite.accent.withAlphaComponent(0.9).cgColor)
+        context.setStrokeColor(color.withAlphaComponent(0.9).cgColor)
         context.setLineWidth(2 * viewport.scale)
         context.addPath(path)
         context.strokePath()
         context.restoreGState()
     }
 
-    /// An edge the flow has used: a bright accent overlay on its route.
+    /// An edge the flow has used: a bright colored overlay on its route.
     func drawSimulationEdge(
-        _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport, active: Bool
+        _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport, active: Bool,
+        color: NSColor = Graphite.accent
     ) {
         guard viewPoints.count >= 2 else { return }
-        context.setStrokeColor(Graphite.accent.withAlphaComponent(active ? 0.95 : 0.7).cgColor)
+        context.setStrokeColor(color.withAlphaComponent(active ? 0.95 : 0.7).cgColor)
         context.setLineWidth((active ? 2.4 : 1.8) * viewport.scale)
         context.setLineCap(.round)
         strokePolyline(viewPoints, in: context)
     }
 
-    /// The travelling packet — a glowing accent dot at the head of the flow.
-    func drawSimulationPacket(at point: CGPoint, in context: CGContext, viewport: CanvasViewport) {
+    /// The travelling packet — a glowing colored dot at the head of the flow.
+    func drawSimulationPacket(
+        at point: CGPoint, in context: CGContext, viewport: CanvasViewport,
+        color: NSColor = Graphite.accent
+    ) {
         let r = 5 * viewport.scale
         context.saveGState()
-        context.setShadow(offset: .zero, blur: 8 * viewport.scale, color: Graphite.accent.cgColor)
-        context.setFillColor(Graphite.accent.cgColor)
+        context.setShadow(offset: .zero, blur: 8 * viewport.scale, color: color.cgColor)
+        context.setFillColor(color.cgColor)
         context.fillEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2))
         context.setFillColor(NSColor.white.withAlphaComponent(0.9).cgColor)
         let ri = r * 0.4
         context.fillEllipse(in: CGRect(x: point.x - ri, y: point.y - ri, width: ri * 2, height: ri * 2))
         context.restoreGState()
+    }
+
+    /// A recordable connector during flow recording: dashed colored highlight.
+    func drawFlowCandidate(
+        _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport
+    ) {
+        guard viewPoints.count >= 2 else { return }
+        context.saveGState()
+        context.setStrokeColor(Graphite.accent.withAlphaComponent(0.85).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 5 * viewport.scale])
+        strokePolyline(viewPoints, in: context)
+        context.restoreGState()
+    }
+
+    /// A small tag surfaced during playback (an edge's `condition`, e.g.
+    /// "only when gRPC"), drawn near the travelling packet.
+    func drawSimulationTag(
+        _ text: String, at point: CGPoint, in context: CGContext, viewport: CanvasViewport,
+        color: NSColor
+    ) {
+        let font = NSFont.systemFont(ofSize: max(10, 11 * viewport.scale), weight: .medium)
+        let attributed = NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: Graphite.ink,
+        ])
+        let size = attributed.size()
+        let padding: CGFloat = 5
+        let rect = CGRect(
+            x: point.x + 10, y: point.y - size.height - 12,
+            width: size.width + padding * 2, height: size.height + padding
+        )
+        let capsule = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)
+        context.saveGState()
+        context.setFillColor(Graphite.panel.withAlphaComponent(0.95).cgColor)
+        context.addPath(capsule)
+        context.fillPath()
+        context.setStrokeColor(color.withAlphaComponent(0.7).cgColor)
+        context.setLineWidth(1)
+        context.addPath(capsule)
+        context.strokePath()
+        context.restoreGState()
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        attributed.draw(at: CGPoint(x: rect.minX + padding, y: rect.minY + padding / 2))
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     func drawSnapGuide(_ guide: SnapEngine.Guide, in context: CGContext, viewport: CanvasViewport) {

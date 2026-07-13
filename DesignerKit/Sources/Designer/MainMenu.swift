@@ -47,6 +47,13 @@ enum MainMenu {
                                     action: Selector(("simulateTraffic:")),
                                     keyEquivalent: "\r")
         simulate.keyEquivalentModifierMask = [.command]
+        let recordFlow = menu.addItem(withTitle: "Record Flow from Selection",
+                                      action: Selector(("recordFlow:")),
+                                      keyEquivalent: "\r")
+        recordFlow.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(withTitle: "Flows",
+                     action: Selector(("toggleFlowsPanel:")),
+                     keyEquivalent: "j")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Enable Agent Access",
                      action: Selector(("toggleAgentAccess:")),

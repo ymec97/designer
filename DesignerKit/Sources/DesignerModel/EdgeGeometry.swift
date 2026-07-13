@@ -83,7 +83,10 @@ public enum EdgeGeometry {
 
     /// Resolves an edge into a drawable route. Returns nil when an anchored
     /// element doesn't exist (e.g. mid-batch during cascade deletes).
-    public static func route(for edge: Edge, frames: FrameProvider) -> Route? {
+    /// `parallelOffset` bows a direct route perpendicular to its line so
+    /// parallel connectors between the same nodes separate visually (P4/F5 —
+    /// you must be able to see *which* of two connectors carries a flow).
+    public static func route(for edge: Edge, frames: FrameProvider, parallelOffset: Double = 0) -> Route? {
         guard
             let fromResolution = resolve(edge.from, toward: edge.to, frames: frames),
             let toResolution = resolve(edge.to, toward: edge.from, frames: frames)
@@ -100,7 +103,50 @@ public enum EdgeGeometry {
             if result.last != point { result.append(point) }
         }
         guard points.count >= 2 else { return nil }
+
+        // Bow parallels: only direct, waypoint-less lines participate (manual
+        // waypoints are the user's routing; orthogonal parallels are rare).
+        if parallelOffset != 0, points.count == 2, edge.waypoints.isEmpty {
+            let a = points[0], b = points[1]
+            let dx = b.x - a.x, dy = b.y - a.y
+            let length = (dx * dx + dy * dy).squareRoot()
+            if length > 1 {
+                let nx = -dy / length, ny = dx / length
+                func bowed(_ t: Double, _ factor: Double) -> Point {
+                    Point(x: a.x + dx * t + nx * parallelOffset * factor,
+                          y: a.y + dy * t + ny * parallelOffset * factor)
+                }
+                points = [a, bowed(0.25, 0.8), bowed(0.5, 1), bowed(0.75, 0.8), b]
+            }
+        }
         return Route(points: points)
+    }
+
+    /// Perpendicular offsets that fan out edges sharing the same node pair
+    /// (±9, ±18, …, sign-canonicalized so opposite-direction edges land on
+    /// opposite sides rather than colliding). Edges with manual waypoints are
+    /// left alone. Empty result for boards without parallels.
+    public static func parallelOffsets(in board: Board) -> [ElementID: Double] {
+        var groups: [String: [ElementID]] = [:]
+        var flipped: Set<ElementID> = []
+        for element in board.elementsInZOrder {
+            guard let edge = element.edge, edge.waypoints.isEmpty,
+                  let a = edge.from.elementID, let b = edge.to.elementID, a != b else { continue }
+            let canonical = a.rawValue < b.rawValue
+            if !canonical { flipped.insert(element.id) }
+            let key = canonical ? "\(a.rawValue)|\(b.rawValue)" : "\(b.rawValue)|\(a.rawValue)"
+            groups[key, default: []].append(element.id)
+        }
+        var offsets: [ElementID: Double] = [:]
+        let spacing = 28.0
+        for ids in groups.values where ids.count > 1 {
+            let base = -spacing * Double(ids.count - 1) / 2
+            for (index, id) in ids.enumerated() {
+                let canonicalOffset = base + spacing * Double(index)
+                offsets[id] = flipped.contains(id) ? -canonicalOffset : canonicalOffset
+            }
+        }
+        return offsets
     }
 
     // MARK: Anchor resolution

@@ -15,6 +15,9 @@ public enum BoardOperation: Equatable, Sendable {
     case removeLayer(LayerID)
     case replaceLayer(Layer)
     case moveLayer(LayerID, to: Int)
+    case insertFlow(Flow, at: Int)
+    case removeFlow(FlowID)
+    case replaceFlow(Flow)
     /// Applied in order, inverted in reverse order. Atomic: if any child
     /// fails, the already-applied prefix is rolled back.
     case batch([BoardOperation])
@@ -28,6 +31,9 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
     case layerIndexOutOfRange(Int)
     case cannotRemoveLastLayer
     case layerInUse(LayerID, elementCount: Int)
+    case flowAlreadyExists(FlowID)
+    case flowNotFound(FlowID)
+    case flowIndexOutOfRange(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -39,6 +45,9 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
         case .cannotRemoveLastLayer: return "A board must keep at least one layer."
         case .layerInUse(let id, let count):
             return "Layer \(id) still contains \(count) element(s)."
+        case .flowAlreadyExists(let id): return "A flow with id \(id) already exists."
+        case .flowNotFound(let id): return "No flow with id \(id)."
+        case .flowIndexOutOfRange(let index): return "Flow index \(index) is out of range."
         }
     }
 }
@@ -116,6 +125,31 @@ extension Board {
             let layer = layers.remove(at: currentIndex)
             layers.insert(layer, at: index)
             return .moveLayer(id, to: currentIndex)
+
+        case .insertFlow(let flow, let index):
+            guard !flows.contains(where: { $0.id == flow.id }) else {
+                throw BoardOperationError.flowAlreadyExists(flow.id)
+            }
+            guard (0...flows.count).contains(index) else {
+                throw BoardOperationError.flowIndexOutOfRange(index)
+            }
+            flows.insert(flow, at: index)
+            return .removeFlow(flow.id)
+
+        case .removeFlow(let id):
+            guard let index = flows.firstIndex(where: { $0.id == id }) else {
+                throw BoardOperationError.flowNotFound(id)
+            }
+            let removed = flows.remove(at: index)
+            return .insertFlow(removed, at: index)
+
+        case .replaceFlow(let flow):
+            guard let index = flows.firstIndex(where: { $0.id == flow.id }) else {
+                throw BoardOperationError.flowNotFound(flow.id)
+            }
+            let old = flows[index]
+            flows[index] = flow
+            return .replaceFlow(old)
 
         case .batch(let operations):
             var inverses: [BoardOperation] = []

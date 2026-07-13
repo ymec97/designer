@@ -39,9 +39,10 @@ public enum BoardSnapshot {
 
         let renderer = BoardRenderer()
         let frames = board.frameProvider()
+        let offsets = EdgeGeometry.parallelOffsets(in: board)
         for element in board.elementsInZOrder {
             if let edge = element.edge {
-                if let route = EdgeGeometry.route(for: edge, frames: frames) {
+                if let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0) {
                     renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false)
                 }
             } else {

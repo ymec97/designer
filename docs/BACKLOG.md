@@ -24,14 +24,12 @@ migration, or periodically renumber keys in an idle pass.
 
 ## Open questions (no decision yet)
 
-### Q1. Should saved traffic paths / simulations be layers?
-*Raised 2026-07-13 by Yarden — undecided, do not act.* Musing whether a
-traffic simulation (a chosen source + its resulting flow) should be
-persistable as a layer/view you can toggle, rather than only an ephemeral
-animation. Pros: reusable "this is how checkout flows" views, shareable in
-exports; fits the "same board, many concerns" model. Cons: conflates the
-concern-layer concept with a derived/computed view; a flow is a function of
-edges, so it can drift from the diagram. Revisit deliberately before building.
+### Q1. Should saved traffic paths / simulations be layers? — RESOLVED 2026-07-13
+Decision (Yarden, during the F5 design cycle): **flows are their own concept**,
+not layers. Layers keep solving grouping/visibility of concerns; Flows (F5,
+shipped) solve sequence + correlation — named, recorded paths that pick
+specific edges among parallels. A flow's eye-toggle gives the layer-like
+"isolate this traffic" view. Possible future bridge: "Create layer from flow".
 
 ### F4-refine. Agent-proposal review polish
 *Noted 2026-07-13 while building the MCP agent surface (F4).*
@@ -94,6 +92,10 @@ hand-style font option. Applies to SVG/PNG export too.
 
 ### P4. Edge-density visual QA: hubs and parallel connections
 *Requested 2026-07-12 by Yarden. Run during M6 polish; fixes post-MVP if needed.*
+*Partially addressed 2026-07-13 (F5): parallel edges between the same node pair
+now fan apart (perpendicular bow, ±14pt steps) on canvas, snapshots, and SVG.
+Remaining: label decluttering at density (labels of parallel edges can still
+crowd), fan-out anchor spreading at hub nodes.*
 Build/test a complex board where (a) one node has many parallel connections
 to the same other node, and (b) a hub node fans out to many nodes. Judge
 whether it reads clearly or becomes an unclear mess. Likely fixes to evaluate

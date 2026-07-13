@@ -16,6 +16,7 @@ public final class CanvasView: NSView {
 
     public var board = Board(title: "") {
         didSet {
+            parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
             routeCache = SpatialIndex.resolveRoutes(for: board)
             spatialIndex = SpatialIndex(board: board, edgeRoutes: routeCache)
             edgeBatchCache = nil
@@ -40,6 +41,9 @@ public final class CanvasView: NSView {
     /// Resolved edge routes — rebuilt on board changes; only edges touched by
     /// an in-flight drag are re-resolved per frame.
     private var routeCache: [ElementID: EdgeGeometry.Route] = [:]
+    /// Perpendicular fan-out for parallel connectors (same node pair), so
+    /// drag-time re-resolution matches the cached routes.
+    private var parallelOffsetCache: [ElementID: Double] = [:]
     /// World-space paths holding every edge except `excluded` — stroked in
     /// single CG calls through the CTM, split into full-opacity and dimmed
     /// groups when focus mode is on. Rebuilt when the exclusion set changes
@@ -221,7 +225,19 @@ public final class CanvasView: NSView {
         return id
     }
 
+    /// When non-nil, only these elements render at full opacity (flow focus:
+    /// "show me just this journey"). Independent of layer focus.
+    public var emphasizedElements: Set<ElementID>? {
+        didSet {
+            guard emphasizedElements != oldValue else { return }
+            edgeBatchCache = nil
+            nodeBatchCache = nil
+            needsDisplay = true
+        }
+    }
+
     private func isDimmed(_ element: Element) -> Bool {
+        if let emphasized = emphasizedElements, !emphasized.contains(element.id) { return true }
         guard let focusID = focusLayerID else { return false }
         return !element.layerIDs.contains(focusID)
     }
@@ -314,9 +330,11 @@ public final class CanvasView: NSView {
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
-        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache] element in
+        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache] element in
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
-                return EdgeGeometry.route(for: edge, frames: overrideFrames)
+                return EdgeGeometry.route(
+                    for: edge, frames: overrideFrames,
+                    parallelOffset: parallelOffsetCache[element.id] ?? 0)
             }
             return routeCache[element.id]
         }
@@ -458,6 +476,7 @@ public final class CanvasView: NSView {
         }
 
         drawSimulationOverlay(in: context)
+        drawFlowRecordingOverlay(in: context)
         drawInFlightGesture(in: context)
     }
 
@@ -483,10 +502,34 @@ public final class CanvasView: NSView {
         !TrafficSimulation.steps(from: id, in: board).isEmpty
     }
 
+    /// Color of the running simulation's lit path (a flow's color, or the
+    /// accent for flood mode).
+    private var simulationColor: NSColor = Graphite.accent
+    /// The flow being played back, if any (nil = flood mode).
+    public private(set) var playingFlowID: FlowID?
+
     public func startSimulation(from source: ElementID) {
         guard board.elements[source]?.node != nil else { return }
         let sim = TrafficSimulator(source: source, board: board)
         guard !sim.isEmpty else { return }
+        simulationColor = Graphite.accent
+        playingFlowID = nil
+        startSimulator(sim)
+    }
+
+    /// Plays a recorded flow: exactly its steps, in its color, skipping any
+    /// connectors deleted since recording.
+    public func startFlowPlayback(_ flow: Flow) {
+        guard board.elements[flow.source]?.node != nil else { return }
+        let steps = flow.liveSteps(in: board).map { TrafficSimulation.Step(edges: $0.edges, nodes: $0.nodes) }
+        guard !steps.isEmpty else { return }
+        cancelFlowRecording()
+        simulationColor = Graphite.flowColors[flow.colorIndex % Graphite.flowColors.count]
+        playingFlowID = flow.id
+        startSimulator(TrafficSimulator(source: flow.source, steps: steps))
+    }
+
+    private func startSimulator(_ sim: TrafficSimulator) {
         simulator = sim
         simulationClock = 0
         simulationPaused = false
@@ -526,6 +569,7 @@ public final class CanvasView: NSView {
         simulationDisplayLink = nil
         simulator = nil
         simulationPaused = false
+        playingFlowID = nil
         simulationStateChanged?(false, false)
         needsDisplay = true
     }
@@ -550,14 +594,14 @@ public final class CanvasView: NSView {
 
         renderer.drawSimulationScrim(bounds, in: context)
 
-        // Lit edges (done first, then active) in accent.
+        // Lit edges (done first, then active) in the simulation color.
         for edgeID in frame.doneEdges {
             guard let route = routeCache[edgeID] else { continue }
-            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false)
+            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false, color: simulationColor)
         }
         for active in frame.activeEdges {
             guard let route = routeCache[active.id] else { continue }
-            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: true)
+            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: true, color: simulationColor)
         }
 
         // Lit nodes with a glow; source and freshly-reached pulse brightest.
@@ -565,14 +609,158 @@ public final class CanvasView: NSView {
             guard let element = board.elements[nodeID], let node = element.node else { continue }
             let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
             renderer.draw(element, in: context, viewport: viewport, isSelected: false)
-            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 1)
+            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 1, color: simulationColor)
         }
 
-        // Travelling packets at the head of each active edge.
+        // Travelling packets at the head of each active edge, with the edge's
+        // condition surfaced while it transits ("only when gRPC").
         for active in frame.activeEdges {
             guard let route = routeCache[active.id] else { continue }
             let world = route.point(atFraction: active.progress)
-            renderer.drawSimulationPacket(at: viewport.toView(world), in: context, viewport: viewport)
+            let view = viewport.toView(world)
+            renderer.drawSimulationPacket(at: view, in: context, viewport: viewport, color: simulationColor)
+            if let edge = board.elements[active.id]?.edge,
+               let condition = edge.semantic.properties[WellKnownEdgeProperty.condition],
+               !condition.isEmpty {
+                renderer.drawSimulationTag(condition, at: view, in: context, viewport: viewport, color: simulationColor)
+            }
+        }
+    }
+
+    // MARK: Flow recording (F5)
+
+    public private(set) var flowRecorder: FlowRecorder?
+    public var isRecordingFlow: Bool { flowRecorder != nil }
+    /// Fires when recording starts/advances/ends. `connectors` = clicks so far.
+    public var flowRecordingChanged: ((_ active: Bool, _ connectors: Int) -> Void)?
+    /// Pending candidates when a click was ambiguous (parallel edges); the
+    /// chooser menu resolves into `recordFlowCandidate`.
+    private var pendingFlowChoices: [FlowRecorder.Candidate] = []
+
+    @discardableResult
+    public func startFlowRecording(from source: ElementID) -> Bool {
+        guard board.elements[source]?.node != nil else { return false }
+        stopSimulation()
+        commitLabelEditor()
+        flowRecorder = FlowRecorder(source: source)
+        select([])
+        flowRecordingChanged?(true, 0)
+        needsDisplay = true
+        return true
+    }
+
+    public func cancelFlowRecording() {
+        guard flowRecorder != nil else { return }
+        flowRecorder = nil
+        pendingFlowChoices = []
+        flowRecordingChanged?(false, 0)
+        needsDisplay = true
+    }
+
+    /// Ends recording and returns the recorder for the app layer to name and
+    /// persist (nil when nothing was recorded).
+    public func finishFlowRecording() -> FlowRecorder? {
+        guard let recorder = flowRecorder else { return nil }
+        flowRecorder = nil
+        pendingFlowChoices = []
+        flowRecordingChanged?(false, 0)
+        needsDisplay = true
+        return recorder.isEmpty ? nil : recorder
+    }
+
+    public func undoLastFlowConnector() {
+        guard var recorder = flowRecorder else { return }
+        recorder.undoLast()
+        flowRecorder = recorder
+        flowRecordingChanged?(true, recorder.recordedEdges.count)
+        needsDisplay = true
+    }
+
+    /// A click while recording: find candidate connectors near the point.
+    /// One hit records immediately; several (parallel edges) open a chooser.
+    private func handleFlowRecordingClick(at point: CGPoint, event: NSEvent) {
+        guard let recorder = flowRecorder else { return }
+        let world = viewport.toWorld(point)
+        let tolerance = 14 / viewport.scale
+        var hits: [(candidate: FlowRecorder.Candidate, distance: Double)] = []
+        for candidate in recorder.candidates(in: board) {
+            guard let route = routeCache[candidate.edge] else { continue }
+            let distance = route.distance(to: world)
+            if distance < Double(tolerance) { hits.append((candidate, distance)) }
+        }
+        guard !hits.isEmpty else { return }
+        hits.sort { $0.distance < $1.distance }
+
+        if hits.count == 1 {
+            recordFlowCandidateNow(hits[0].candidate)
+        } else {
+            // Parallel/overlapping connectors: let the user pick by label.
+            pendingFlowChoices = hits.map(\.candidate)
+            let menu = NSMenu()
+            for (index, choice) in pendingFlowChoices.enumerated() {
+                let item = NSMenuItem(title: flowCandidateTitle(choice),
+                                      action: #selector(flowChoiceSelected(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = index
+                menu.addItem(item)
+            }
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+    }
+
+    @objc private func flowChoiceSelected(_ sender: NSMenuItem) {
+        guard pendingFlowChoices.indices.contains(sender.tag) else { return }
+        recordFlowCandidateNow(pendingFlowChoices[sender.tag])
+        pendingFlowChoices = []
+    }
+
+    private func recordFlowCandidateNow(_ candidate: FlowRecorder.Candidate) {
+        guard var recorder = flowRecorder else { return }
+        guard recorder.record(candidate, in: board) else { return }
+        flowRecorder = recorder
+        flowRecordingChanged?(true, recorder.recordedEdges.count)
+        needsDisplay = true
+    }
+
+    private func flowCandidateTitle(_ candidate: FlowRecorder.Candidate) -> String {
+        func name(_ id: ElementID) -> String {
+            let n = board.elements[id]?.node?.semantic.name ?? ""
+            return n.isEmpty ? "untitled" : n
+        }
+        var parts: [String] = []
+        if let edge = board.elements[candidate.edge]?.edge {
+            if let label = edge.semantic.label, !label.isEmpty { parts.append(label) }
+            if let proto = edge.semantic.properties[WellKnownEdgeProperty.protocolKey], !proto.isEmpty {
+                parts.append(proto)
+            }
+        }
+        let detail = parts.isEmpty ? "connector" : parts.joined(separator: " · ")
+        return "\(name(candidate.from)) → \(name(candidate.to))  (\(detail))"
+    }
+
+    /// Recording overlay: scrim, the recorded path so far in accent, dashed
+    /// highlights on the connectors that can be recorded next.
+    private func drawFlowRecordingOverlay(in context: CGContext) {
+        guard let recorder = flowRecorder else { return }
+        let frames = board.frameProvider(overrides: transientFrames)
+
+        renderer.drawSimulationScrim(bounds, in: context)
+
+        for step in recorder.steps {
+            for edgeID in step.edges {
+                guard let route = routeCache[edgeID] else { continue }
+                renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false)
+            }
+        }
+        for candidate in recorder.candidates(in: board) {
+            guard let route = routeCache[candidate.edge] else { continue }
+            renderer.drawFlowCandidate(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
+        }
+        for nodeID in recorder.reachedNodes {
+            guard let element = board.elements[nodeID], let node = element.node else { continue }
+            let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
+            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 0.8)
         }
     }
 
@@ -677,6 +865,10 @@ public final class CanvasView: NSView {
         // Simulation is a read-only mode; ignore edit gestures (pan/zoom still
         // work via scroll/pinch). The transport controls it.
         if isSimulating { return }
+        if isRecordingFlow {
+            handleFlowRecordingClick(at: convert(event.locationInWindow, from: nil), event: event)
+            return
+        }
         commitLabelEditor()
         let point = convert(event.locationInWindow, from: nil)
 
@@ -958,6 +1150,17 @@ public final class CanvasView: NSView {
         }
         if isSimulating, event.keyCode == 53 { // escape exits simulation
             stopSimulation()
+            return
+        }
+        if isRecordingFlow {
+            switch event.keyCode {
+            case 53: // escape cancels the recording
+                cancelFlowRecording()
+            case 51, 117: // delete removes the last recorded connector
+                undoLastFlowConnector()
+            default:
+                break // return/enter handled by the record bar's Save button
+            }
             return
         }
         switch event.keyCode {

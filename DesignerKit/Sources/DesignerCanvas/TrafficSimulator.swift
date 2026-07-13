@@ -20,9 +20,15 @@ struct TrafficSimulator {
     /// 1 = normal; higher is faster.
     var speed: Double = 1
 
+    /// Flood mode: BFS everything reachable from the source.
     init(source: ElementID, board: Board) {
+        self.init(source: source, steps: TrafficSimulation.steps(from: source, in: board))
+    }
+
+    /// Scripted mode: play exactly these steps (a recorded flow).
+    init(source: ElementID, steps: [TrafficSimulation.Step]) {
         self.source = source
-        self.steps = TrafficSimulation.steps(from: source, in: board)
+        self.steps = steps
         var starts: [Double] = []
         var t = Self.nodeDwell // source pulses briefly before emitting
         for _ in steps {

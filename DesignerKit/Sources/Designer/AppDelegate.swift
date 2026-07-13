@@ -148,6 +148,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         CatalogWindowController.shared.present()
     }
 
+    /// Builds the correlated-traffic demo (parallel gRPC+HTTP connectors),
+    /// records the gRPC journey as a flow, opens the Flows panel, and captures
+    /// playback mid-flight — for reviewing the F5 visuals.
+    private func runFlowsScreenshot(saveTo url: URL) {
+        if CommandLine.arguments.contains("--dark") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        var board = Board(title: "Correlated traffic")
+        let layer = board.layers[0].id
+        func node(_ name: String, _ kind: NodeKind, _ x: Double, _ y: Double) -> Element {
+            let element = Element(layerIDs: [layer], sortKey: board.topSortKey,
+                                  content: .node(Node(semantic: NodeSemantic(kind: kind, name: name),
+                                                      frame: Rect(x: x, y: y, width: 150, height: 70))))
+            try? board.apply(.insertElement(element))
+            return element
+        }
+        func edge(_ from: Element, _ to: Element, _ proto: String, label: String, condition: String? = nil) -> Element {
+            var properties = [WellKnownEdgeProperty.protocolKey: proto]
+            if let condition { properties[WellKnownEdgeProperty.condition] = condition }
+            let element = Element(layerIDs: [layer], sortKey: board.topSortKey,
+                                  content: .edge(Edge(
+                                      semantic: EdgeSemantic(label: label, properties: properties),
+                                      from: .element(from.id, side: nil, offset: nil),
+                                      to: .element(to.id, side: nil, offset: nil))))
+            try? board.apply(.insertElement(element))
+            return element
+        }
+        let a = node("service-a", .service, 120, 240)
+        let b = node("service-b", .service, 480, 240)
+        let c = node("service-c", .service, 840, 240)
+        let abGRPC = edge(a, b, "gRPC", label: "create order")
+        _ = edge(a, b, "HTTP", label: "health")
+        let bcGRPC = edge(b, c, "gRPC", label: "reserve stock", condition: "only when gRPC in")
+        _ = edge(b, c, "HTTP", label: "metrics")
+
+        let flow = Flow(name: "gRPC journey", source: a.id, steps: [
+            Flow.Step(edges: [abGRPC.id], nodes: [b.id]),
+            Flow.Step(edges: [bcGRPC.id], nodes: [c.id]),
+        ], colorIndex: 1)
+        board.flows = [flow]
+
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else { exit(1) }
+        document.board = board
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let window = document.windowControllers.first?.window,
+              let canvasController = window.contentViewController as? CanvasViewController else { exit(1) }
+        window.setContentSize(NSSize(width: 1140, height: 700))
+        window.makeKeyAndOrderFront(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            canvasController.toggleFlowsPanel(nil)
+            canvasController.canvasView.simulationSpeed = 0.55
+            canvasController.canvasView.startFlowPlayback(flow)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
+                let view = canvasController.view
+                guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) {
+                    try? png.write(to: url)
+                    print("FLOWS-SHOT PASS: \(url.path)")
+                }
+                exit(0)
+            }
+        }
+    }
+
     /// Headless end-to-end agent check: opens the example board, enables the
     /// real MCP server, and drives it over actual localhost HTTP the way
     /// Claude Desktop would — initialize, get_board, then propose_board with
@@ -388,6 +458,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot-proposal"),
            CommandLine.arguments.indices.contains(index + 1) {
             runProposalScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshot-flows"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            runFlowsScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot"),
            CommandLine.arguments.indices.contains(index + 1) {

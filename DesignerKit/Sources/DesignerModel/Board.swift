@@ -17,6 +17,8 @@ public struct Board: Equatable, Sendable {
     /// canonical JSON form is an array sorted by ID.
     public var elements: [ElementID: Element]
     public var groups: [Group]
+    /// Recorded traffic journeys (F5), in panel order.
+    public var flows: [Flow]
     public var extra: [String: JSONValue]
 
     public init(
@@ -28,6 +30,7 @@ public struct Board: Equatable, Sendable {
         layers: [Layer] = [Layer(name: "Base")],
         elements: [Element] = [],
         groups: [Group] = [],
+        flows: [Flow] = [],
         extra: [String: JSONValue] = [:]
     ) {
         self.schemaVersion = schemaVersion
@@ -38,6 +41,7 @@ public struct Board: Equatable, Sendable {
         self.layers = layers
         self.elements = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
         self.groups = groups
+        self.flows = flows
         self.extra = extra
     }
 
@@ -58,7 +62,7 @@ public struct Board: Equatable, Sendable {
 
 extension Board: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, id, title, createdAt, modifiedAt, layers, elements, groups
+        case schemaVersion, id, title, createdAt, modifiedAt, layers, elements, groups, flows
     }
 
     public init(from decoder: Decoder) throws {
@@ -82,6 +86,7 @@ extension Board: Codable {
             }
         }
         groups = try container.decodeIfPresent([Group].self, forKey: .groups) ?? []
+        flows = try container.decodeIfPresent([Flow].self, forKey: .flows) ?? []
         extra = try decoder.unknownFields(excluding: CodingKeys.knownKeys)
     }
 
@@ -96,6 +101,7 @@ extension Board: Codable {
         // Sorted by ID: stable across sessions and immune to mutation order (NFR M3).
         try container.encode(elements.values.sorted { $0.id < $1.id }, forKey: .elements)
         try container.encode(groups, forKey: .groups)
+        try container.encode(flows, forKey: .flows)
         try encoder.encodeUnknownFields(extra)
     }
 }

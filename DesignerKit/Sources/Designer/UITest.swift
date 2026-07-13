@@ -51,9 +51,10 @@ final class UITestDriver {
         step15TrafficSimulation()
         step16Clipboard()
         step17AgentProposal()
+        step18Flows()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows verified")
             exit(0)
         } else {
             for failure in failures {
@@ -561,6 +562,16 @@ final class UITestDriver {
         }
         if let failure = controller.runAgentProposalSelfTest() {
             expect(false, "agent proposal failed: \(failure)")
+        }
+    }
+
+    private func step18Flows() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for flows test")
+            return
+        }
+        if let failure = controller.runFlowSelfTest() {
+            expect(false, "flows failed: \(failure)")
         }
     }
 

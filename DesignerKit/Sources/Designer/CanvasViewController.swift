@@ -59,6 +59,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             } else if self.layersModel.activeLayerID == nil {
                 self.setActiveLayer(board.layers.first?.id)
             }
+            self.refreshFlowsPanel(board)
         }
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
@@ -72,6 +73,213 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installCommandPalette()
         installSimulationTransport()
         installAgentProposalPanel()
+        installFlowsPanel()
+    }
+
+    // MARK: Flows (F5)
+
+    private let flowsModel = FlowsPanelModel()
+    private let recordBarModel = FlowRecordBarModel()
+    private var flowsPanelHost: NSView?
+
+    private func refreshFlowsPanel(_ board: Board) {
+        flowsModel.flows = board.flows.map {
+            FlowRowInfo(id: $0.id, name: $0.name, colorIndex: $0.colorIndex,
+                        hops: $0.steps.reduce(0) { $0 + $1.edges.count },
+                        stale: $0.isStale(in: board))
+        }
+        // Clear focus/playing state for flows that no longer exist.
+        if let focused = flowsModel.focusedFlowID, !board.flows.contains(where: { $0.id == focused }) {
+            flowsModel.focusedFlowID = nil
+            canvasView.emphasizedElements = nil
+        }
+    }
+
+    @objc func toggleFlowsPanel(_ sender: Any?) {
+        flowsModel.visible.toggle()
+        flowsPanelHost?.isHidden = !flowsModel.visible
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    @objc func recordFlow(_ sender: Any?) {
+        guard canvasView.selection.count == 1, let source = canvasView.selection.first,
+              document.board.elements[source]?.node != nil else {
+            let alert = NSAlert()
+            alert.messageText = "Select a source block first"
+            alert.informativeText = "Click the block the traffic starts from, then Record Flow: you'll walk the journey by clicking each connector it takes."
+            alert.runModal()
+            return
+        }
+        if !flowsModel.visible { toggleFlowsPanel(nil) }
+        canvasView.startFlowRecording(from: source)
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    private func saveRecordedFlow() {
+        guard let recorder = canvasView.finishFlowRecording() else { return }
+        let alert = NSAlert()
+        alert.messageText = "Name this flow"
+        alert.informativeText = "e.g. “Checkout (gRPC)” or “Login journey”"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = "Flow \(document.board.flows.count + 1)"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let flow = recorder.finish(
+            name: name.isEmpty ? "Untitled flow" : name,
+            colorIndex: document.board.flows.count % Graphite.flowColors.count
+        )
+        document.perform(.insertFlow(flow, at: document.board.flows.count), actionName: "Record Flow")
+    }
+
+    private func playFlow(_ id: FlowID) {
+        if flowsModel.playingFlowID == id {
+            canvasView.stopSimulation()
+            return
+        }
+        guard let flow = document.board.flows.first(where: { $0.id == id }) else { return }
+        canvasView.startFlowPlayback(flow)
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    private func toggleFlowFocus(_ id: FlowID) {
+        if flowsModel.focusedFlowID == id {
+            flowsModel.focusedFlowID = nil
+            canvasView.emphasizedElements = nil
+        } else if let flow = document.board.flows.first(where: { $0.id == id }) {
+            flowsModel.focusedFlowID = id
+            canvasView.emphasizedElements = flow.memberElements
+        }
+    }
+
+    /// Headless flows check for --ui-test: builds the correlated-traffic
+    /// scenario (parallel gRPC+HTTP connectors A→B and B→C), records the gRPC
+    /// journey, saves it, plays it, and verifies only the recorded connectors
+    /// participate — the thing flood simulation can't express.
+    func runFlowSelfTest() -> String? {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 1400, width: 100, height: 50))))
+        }
+        func edge(_ from: Element, _ to: Element, _ proto: String) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .edge(Edge(
+                        semantic: EdgeSemantic(properties: [WellKnownEdgeProperty.protocolKey: proto]),
+                        from: .element(from.id, side: nil, offset: nil),
+                        to: .element(to.id, side: nil, offset: nil))))
+        }
+        let a = node("flow-a", 0), b = node("flow-b", 250), c = node("flow-c", 500)
+        let abGRPC = edge(a, b, "gRPC"), abHTTP = edge(a, b, "HTTP")
+        let bcGRPC = edge(b, c, "gRPC"), bcHTTP = edge(b, c, "HTTP")
+        document.perform(.batch([
+            .insertElement(a), .insertElement(b), .insertElement(c),
+            .insertElement(abGRPC), .insertElement(abHTTP),
+            .insertElement(bcGRPC), .insertElement(bcHTTP),
+        ]), actionName: "Flow Test Graph")
+
+        // Record the gRPC journey: both parallel edges must be offered, and
+        // the recorder must let us take exactly the gRPC one at each hop.
+        var recorder = FlowRecorder(source: a.id)
+        let first = recorder.candidates(in: document.board)
+        guard first.count == 2 else { return "expected 2 parallel candidates at A, got \(first.count)" }
+        guard let firstGRPC = first.first(where: { $0.edge == abGRPC.id }),
+              recorder.record(firstGRPC, in: document.board) else { return "couldn't record A→B gRPC" }
+        guard let secondGRPC = recorder.candidates(in: document.board).first(where: { $0.edge == bcGRPC.id }),
+              recorder.record(secondGRPC, in: document.board) else { return "couldn't record B→C gRPC" }
+
+        let flow = recorder.finish(name: "gRPC journey", colorIndex: 1)
+        document.perform(.insertFlow(flow, at: document.board.flows.count), actionName: "Record Flow")
+        guard document.board.flows.contains(where: { $0.id == flow.id }) else { return "flow not saved" }
+
+        // The recorded flow touches only the gRPC edges.
+        let members = flow.memberElements
+        guard members.contains(abGRPC.id), members.contains(bcGRPC.id),
+              !members.contains(abHTTP.id), !members.contains(bcHTTP.id) else {
+            return "flow members include HTTP edges (correlation broken)"
+        }
+
+        // Playback runs and is attributed to the flow.
+        canvasView.startFlowPlayback(flow)
+        guard canvasView.isSimulating, canvasView.playingFlowID == flow.id else {
+            return "flow playback did not start"
+        }
+        canvasView.stopSimulation()
+
+        // Focus isolates the journey.
+        toggleFlowFocus(flow.id)
+        guard canvasView.emphasizedElements == members else { return "flow focus wrong" }
+        toggleFlowFocus(flow.id)
+        guard canvasView.emphasizedElements == nil else { return "flow focus didn't clear" }
+
+        document.undoManager?.undo() // remove flow
+        document.undoManager?.undo() // remove test graph
+        guard document.board.flows.isEmpty || !document.board.flows.contains(where: { $0.id == flow.id }) else {
+            return "undo did not remove the flow"
+        }
+        return nil
+    }
+
+    private func installFlowsPanel() {
+        let panel = FlowsPanel(
+            model: flowsModel,
+            actions: FlowsPanelActions(
+                record: { [weak self] in self?.recordFlow(nil) },
+                play: { [weak self] id in self?.playFlow(id) },
+                toggleFocus: { [weak self] id in self?.toggleFlowFocus(id) },
+                delete: { [weak self] id in
+                    guard let self else { return }
+                    if self.flowsModel.focusedFlowID == id { self.toggleFlowFocus(id) }
+                    self.document.perform(.removeFlow(id), actionName: "Delete Flow")
+                },
+                rename: { [weak self] id, name in
+                    guard let self, var flow = self.document.board.flows.first(where: { $0.id == id }),
+                          !name.trimmingCharacters(in: .whitespaces).isEmpty, flow.name != name else { return }
+                    flow.name = name
+                    self.document.perform(.replaceFlow(flow), actionName: "Rename Flow")
+                }
+            )
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            host.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
+        ])
+        flowsPanelHost = host
+
+        let bar = FlowRecordBar(
+            model: recordBarModel,
+            actions: FlowRecordBarActions(
+                undo: { [weak self] in self?.canvasView.undoLastFlowConnector() },
+                cancel: { [weak self] in self?.canvasView.cancelFlowRecording() },
+                save: { [weak self] in self?.saveRecordedFlow() }
+            )
+        )
+        let barHost = NSHostingView(rootView: bar)
+        barHost.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(barHost)
+        NSLayoutConstraint.activate([
+            barHost.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            barHost.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
+        ])
+
+        canvasView.flowRecordingChanged = { [weak self] active, connectors in
+            self?.recordBarModel.recording = active
+            self?.recordBarModel.connectors = connectors
+        }
+        // Track play state for the panel's play/stop buttons.
+        let existingHandler = canvasView.simulationStateChanged
+        canvasView.simulationStateChanged = { [weak self] active, paused in
+            existingHandler?(active, paused)
+            self?.flowsModel.playingFlowID = active ? self?.canvasView.playingFlowID : nil
+        }
     }
 
     // MARK: Traffic simulation (F2)
@@ -359,6 +567,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Simulate Traffic from Selection", shortcut: "⌘↩", systemImage: "play.circle") { [weak self] in
                 self?.simulateTraffic(nil)
+            },
+            PaletteCommand(title: "Record Flow from Selection", shortcut: "⇧⌘↩", systemImage: "record.circle") { [weak self] in
+                self?.recordFlow(nil)
+            },
+            PaletteCommand(title: "Show Flows Panel", shortcut: "⌘J", systemImage: "point.topleft.down.curvedto.point.bottomright.up") { [weak self] in
+                self?.toggleFlowsPanel(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
                 self?.toggleLayersPanel(nil)
