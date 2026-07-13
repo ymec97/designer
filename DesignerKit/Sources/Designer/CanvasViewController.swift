@@ -77,6 +77,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private let simulationModel = SimulationTransportModel()
 
     @objc func simulateTraffic(_ sender: Any?) {
+        // ⌘↩ / the toolbar button toggle: a running simulation stops.
+        if canvasView.isSimulating {
+            canvasView.stopSimulation()
+            return
+        }
         guard canvasView.selection.count == 1, let source = canvasView.selection.first,
               document.board.elements[source]?.node != nil else {
             NSSound.beep(); return
@@ -174,6 +179,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.simulationStateChanged = { [weak self] active, paused in
             self?.simulationModel.active = active
             self?.simulationModel.paused = paused
+            self?.toolbarState.simulating = active
         }
         let actions = SimulationTransportActions(
             togglePause: { [weak self] in
@@ -392,6 +398,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             onLibrary: { [weak self] in
                 guard let self else { return }
                 self.toggleLibraryPanel(nil)
+                self.view.window?.makeFirstResponder(self.canvasView)
+            },
+            onSimulate: { [weak self] in
+                guard let self else { return }
+                self.simulateTraffic(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
             }
         )
@@ -812,6 +823,7 @@ extension CanvasViewController: NSMenuItemValidation {
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty
         case #selector(simulateTraffic(_:)):
+            if canvasView.isSimulating { return true } // ⌘↩ again stops
             return canvasView.selection.count == 1
                 && canvasView.selection.first.map { document.board.elements[$0]?.node != nil } == true
         case #selector(saveBoardToLibrary(_:)),

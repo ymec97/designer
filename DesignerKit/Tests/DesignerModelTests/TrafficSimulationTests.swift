@@ -71,13 +71,24 @@ final class TrafficSimulationTests: XCTestCase {
         XCTAssertEqual(names(TrafficSimulation.steps(from: node("b"), in: board).first?.nodes ?? []), ["a"])
     }
 
-    func testCycleTerminates() {
-        connect("a", "b"); connect("b", "c"); connect("c", "a")
+    func testCycleTerminatesButShowsClosingEdge() {
+        connect("a", "b"); connect("b", "c"); let closing = connect("c", "a")
         let steps = TrafficSimulation.steps(from: node("a"), in: board)
-        // a→b, b→c, c→a(visited, stop). Two steps reaching b then c.
-        XCTAssertEqual(steps.count, 2)
+        // a→b, b→c, then c→a lights the closing edge but adds no new node.
+        XCTAssertEqual(steps.count, 3)
         XCTAssertEqual(names(steps[0].nodes), ["b"])
         XCTAssertEqual(names(steps[1].nodes), ["c"])
+        XCTAssertTrue(steps[2].nodes.isEmpty, "closing step re-lights no node")
+        XCTAssertEqual(steps[2].edges, [closing], "the loop-closing edge still animates")
+    }
+
+    func testEdgeAnimatesOnlyOnce() {
+        // Diamond a→b, a→c, b→d, c→d: d reached once; both incoming edges show.
+        connect("a", "b"); connect("a", "c"); connect("b", "d"); connect("c", "d")
+        let steps = TrafficSimulation.steps(from: node("a"), in: board)
+        let allEdges = steps.flatMap(\.edges)
+        XCTAssertEqual(allEdges.count, Set(allEdges).count, "no edge animates twice")
+        XCTAssertEqual(allEdges.count, 4, "all four edges animate")
     }
 
     func testNoneDirectionCarriesNoFlow() {

@@ -22,6 +22,17 @@ thousands of elements over their lifetime will accumulate long keys. Fix:
 adopt integer-part fractional keys (jitter-style "a0/a1/b00" scheme) with a
 migration, or periodically renumber keys in an idle pass.
 
+## Open questions (no decision yet)
+
+### Q1. Should saved traffic paths / simulations be layers?
+*Raised 2026-07-13 by Yarden — undecided, do not act.* Musing whether a
+traffic simulation (a chosen source + its resulting flow) should be
+persistable as a layer/view you can toggle, rather than only an ephemeral
+animation. Pros: reusable "this is how checkout flows" views, shareable in
+exports; fits the "same board, many concerns" model. Cons: conflates the
+concern-layer concept with a derived/computed view; a flow is a function of
+edges, so it can drift from the diagram. Revisit deliberately before building.
+
 ## Post-MVP problems to design for
 
 ### P1. Zoom-level drift makes content sizes inconsistent (Excalidraw pain)

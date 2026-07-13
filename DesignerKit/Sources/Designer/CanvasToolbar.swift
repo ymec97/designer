@@ -8,6 +8,7 @@ final class ToolbarState: ObservableObject {
     @Published var tool: CanvasView.Tool = .select
     @Published var layersPanelVisible = false
     @Published var libraryPanelVisible = false
+    @Published var simulating = false
 }
 
 struct CanvasToolbar: View {
@@ -18,6 +19,7 @@ struct CanvasToolbar: View {
     let onStructurize: () -> Void
     let onLayers: () -> Void
     let onLibrary: () -> Void
+    let onSimulate: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
@@ -38,6 +40,13 @@ struct CanvasToolbar: View {
                 icon: "wand.and.stars", hint: "⌘R", label: "Structurize",
                 help: "Structurize (⌘R) — turn selected freehand sketches into clean blocks & connectors",
                 isActive: false, action: onStructurize
+            )
+            toolButton(
+                icon: state.simulating ? "stop.fill" : "play.fill",
+                hint: "⌘↩",
+                label: state.simulating ? "Stop" : "Simulate",
+                help: "Simulate traffic (⌘↩) — select a node, then watch data flow from it",
+                isActive: state.simulating, action: onSimulate
             )
             Divider().frame(height: 22).padding(.horizontal, 3)
             toolButton(

@@ -41,7 +41,8 @@ public enum TrafficSimulation {
             }
         }
 
-        var visited: Set<ElementID> = [source]
+        var visitedNodes: Set<ElementID> = [source]
+        var traversedEdges: Set<ElementID> = []
         var frontier: [ElementID] = [source]
         var steps: [Step] = []
 
@@ -53,16 +54,23 @@ public enum TrafficSimulation {
             for node in frontier {
                 for link in outgoing[node] ?? [] {
                     guard board.elements[link.target]?.node != nil else { continue }
-                    guard !visited.contains(link.target) else { continue }
+                    // Animate each edge once, even one that closes a loop back
+                    // to an already-visited node — that path is real and the
+                    // user may have drawn it deliberately.
+                    guard traversedEdges.insert(link.edge).inserted else { continue }
                     stepEdges.append(link.edge)
-                    if seenThisStep.insert(link.target).inserted {
+                    // Only unvisited targets expand the frontier (terminates
+                    // cycles); a visited target just lights its incoming edge.
+                    if !visitedNodes.contains(link.target), seenThisStep.insert(link.target).inserted {
                         stepNodes.append(link.target)
                     }
                 }
             }
 
-            guard !stepNodes.isEmpty else { break }
-            for node in stepNodes { visited.insert(node) }
+            // Emit the step whenever any edge fired (so loop-closing edges show
+            // even when they add no new node); frontier advances to new nodes.
+            guard !stepEdges.isEmpty else { break }
+            for node in stepNodes { visitedNodes.insert(node) }
             steps.append(Step(edges: stepEdges, nodes: stepNodes))
             frontier = stepNodes
         }
