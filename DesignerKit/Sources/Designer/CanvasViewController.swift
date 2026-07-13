@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import DesignerAgent
 import DesignerCanvas
 import DesignerInterop
 import DesignerModel
@@ -70,6 +71,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installLibraryPanel()
         installCommandPalette()
         installSimulationTransport()
+        installAgentProposalPanel()
     }
 
     // MARK: Traffic simulation (F2)
@@ -173,6 +175,109 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
         document.undoManager?.undo() // remove the test graph
         return nil
+    }
+
+    // MARK: Agent proposals (F4)
+
+    private let proposalModel = AgentProposalModel()
+    private var pendingProposal: Board?
+
+    /// Stage a proposed board for review. Computes the diff, shows the banner,
+    /// and returns the diff (echoed to the agent). Nothing is applied yet.
+    @discardableResult
+    func presentAgentProposal(_ proposed: Board, note: String?) -> BoardDiff {
+        let diff = LLMInterchange.diff(current: document.board, proposed: proposed)
+        if diff.isEmpty {
+            pendingProposal = nil
+            proposalModel.pending = nil
+            return diff
+        }
+        pendingProposal = proposed
+        proposalModel.pending = AgentProposalPending(
+            summary: diff.summaryLine, detail: diff.detail, note: note
+        )
+        view.window?.makeKeyAndOrderFront(nil)
+        return diff
+    }
+
+    @objc func acceptAgentProposal(_ sender: Any?) {
+        guard let proposed = pendingProposal else { return }
+        let layer = document.board.layers.first?.id ?? proposed.layers[0].id
+        let operation = ProposalApply.replaceOperation(
+            current: document.board, proposed: proposed, targetLayer: layer)
+        document.perform(operation, actionName: "Accept Claude’s Proposal")
+        canvasView.select([])
+        clearAgentProposal()
+    }
+
+    @objc func rejectAgentProposal(_ sender: Any?) {
+        clearAgentProposal()
+    }
+
+    private func clearAgentProposal() {
+        pendingProposal = nil
+        proposalModel.pending = nil
+    }
+
+    /// Whether a proposal is awaiting review (for the self-test and menus).
+    var hasPendingProposal: Bool { pendingProposal != nil }
+
+    /// The board the agent bridge reads (keeps `document` private to the class).
+    func agentCurrentBoard() -> Board { document.board }
+
+    /// Headless check for --ui-test: stage a proposal that adds a block, verify
+    /// it's pending (not applied), accept it, verify it applied as one undo step.
+    func runAgentProposalSelfTest() -> String? {
+        let baseCount = document.board.elements.count
+        let currentText = LLMInterchange.export(document.board)
+        guard var parsed = try? LLMInterchange.parse(currentText).board else {
+            return "couldn't round-trip current board"
+        }
+        // Add one node to the parsed copy, then re-serialize as the proposal.
+        let layer = parsed.layers[0].id
+        try? parsed.apply(.insertElement(Element(
+            layerIDs: [layer], sortKey: parsed.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "agent-added"),
+                                frame: Rect(x: 40, y: 40, width: 120, height: 60))))))
+        let proposedText = LLMInterchange.export(parsed)
+        guard let proposed = try? LLMInterchange.parse(proposedText).board else {
+            return "couldn't parse proposal"
+        }
+
+        let diff = presentAgentProposal(proposed, note: "test")
+        guard !diff.isEmpty, hasPendingProposal else { return "proposal not staged" }
+        guard document.board.elements.count == baseCount else {
+            return "proposal was applied before approval"
+        }
+
+        acceptAgentProposal(nil)
+        guard !hasPendingProposal else { return "proposal not cleared after accept" }
+        guard document.board.elements.count == baseCount + 1 else {
+            return "accept did not add the block (\(document.board.elements.count) vs \(baseCount + 1))"
+        }
+        document.undoManager?.undo()
+        guard document.board.elements.count == baseCount else {
+            return "accept was not a single undo step"
+        }
+        return nil
+    }
+
+    private func installAgentProposalPanel() {
+        let panel = AgentProposalPanel(
+            model: proposalModel,
+            actions: AgentProposalActions(
+                accept: { [weak self] in self?.acceptAgentProposal(nil) },
+                reject: { [weak self] in self?.rejectAgentProposal(nil) }
+            )
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            // Below the floating toolbar (which sits at the top center).
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+        ])
     }
 
     private func installSimulationTransport() {

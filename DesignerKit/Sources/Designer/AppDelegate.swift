@@ -2,7 +2,7 @@ import AppKit
 import DesignerModel
 import DesignerPersistence
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private static let hasLaunchedKey = "HasLaunchedBefore"
 
     private var isTestRun: Bool { CommandLine.arguments.contains { $0.hasPrefix("--") } }
@@ -148,6 +148,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CatalogWindowController.shared.present()
     }
 
+    /// Opens the example board, stages an agent proposal (add a cache), and
+    /// captures the review banner — for reviewing the proposal UI.
+    private func runProposalScreenshot(saveTo url: URL) {
+        if CommandLine.arguments.contains("--dark") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else { exit(1) }
+        document.board = ExampleBoard.make()
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let window = document.windowControllers.first?.window,
+              let canvasController = window.contentViewController as? CanvasViewController else { exit(1) }
+        window.setContentSize(NSSize(width: 1140, height: 720))
+        window.makeKeyAndOrderFront(nil)
+
+        // Propose: relabel a service and add a cache in front of it.
+        var proposed = document.board
+        if let orders = proposed.elements.values.first(where: { $0.node?.semantic.name == "orders-svc" }),
+           var node = orders.node {
+            let layer = proposed.layers[0].id
+            let cache = Element(layerIDs: [layer], sortKey: proposed.topSortKey,
+                                content: .node(Node(semantic: NodeSemantic(kind: .cache, name: "orders-cache"),
+                                                    frame: Rect(x: node.frame.x, y: node.frame.y - 160, width: 150, height: 70))))
+            try? proposed.apply(.insertElement(cache))
+            node.semantic.name = "orders-service"
+            var updated = orders; updated.content = .node(node)
+            try? proposed.apply(.replaceElement(updated))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            canvasController.presentAgentProposal(proposed, note: "Add a read cache in front of orders and rename it for clarity.")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                let view = canvasController.view
+                guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) {
+                    try? png.write(to: url)
+                    print("PROPOSAL-SHOT PASS: \(url.path)")
+                }
+                exit(0)
+            }
+        }
+    }
+
+    /// Toggle the local agent (MCP) server. On enable, show the endpoint the
+    /// user pastes into Claude Desktop (or any MCP client); it stays local.
+    @objc func toggleAgentAccess(_ sender: Any?) {
+        if AgentController.shared.isEnabled {
+            AgentController.shared.disable()
+            return
+        }
+        do {
+            try AgentController.shared.enable { port in
+                let alert = NSAlert()
+                alert.messageText = "Agent access is on"
+                alert.informativeText = """
+                An agent on this Mac can now read your board and propose edits \
+                (you approve each change). Add this as a custom connector in \
+                Claude Desktop or another MCP client:
+
+                http://127.0.0.1:\(port)/mcp
+
+                It listens on this Mac only. Turn it off from the Board menu.
+                """
+                alert.addButton(withTitle: "Copy Endpoint")
+                alert.addButton(withTitle: "Done")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(AgentController.shared.endpointURL, forType: .string)
+                }
+            }
+        } catch {
+            NSApp.presentError(error)
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleAgentAccess(_:)) {
+            menuItem.state = AgentController.shared.isEnabled ? .on : .off
+        }
+        return true
+    }
+
     @objc func newCanvasMenu(_ sender: Any?) { newCanvas() }
 
     /// A new canvas is saved into the managed Boards folder immediately, so it
@@ -210,6 +295,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot-sim"),
            CommandLine.arguments.indices.contains(index + 1) {
             runSimulationScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--screenshot-proposal"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            runProposalScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot"),
            CommandLine.arguments.indices.contains(index + 1) {

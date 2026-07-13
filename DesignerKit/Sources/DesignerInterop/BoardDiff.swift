@@ -12,6 +12,8 @@ public struct BoardDiff: Equatable, Sendable {
         public let after: String
     }
 
+    public init() {}
+
     public var addedNodes: [String] = []       // display names / ids
     public var removedNodes: [String] = []
     public var changedNodes: [FieldChange] = []

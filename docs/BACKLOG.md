@@ -33,6 +33,19 @@ exports; fits the "same board, many concerns" model. Cons: conflates the
 concern-layer concept with a derived/computed view; a flow is a function of
 edges, so it can drift from the diagram. Revisit deliberately before building.
 
+### F4-refine. Agent-proposal review polish
+*Noted 2026-07-13 while building the MCP agent surface (F4).*
+Two refinements deferred from the first cut:
+- **Rename-aware diff.** The diff keys nodes by name-slug, so renaming a block
+  reads as remove-old + add-new (and its edges as removed+added) rather than a
+  single "renamed" change. Detect a removed/added pair with matching
+  kind/shape and incident edges and collapse it into a rename.
+- **On-canvas ghost preview.** Show the proposed additions (green ghost) and
+  removals (red ghost) directly on the canvas during review, not just the
+  textual diff in the banner. Needs coordinate reconciliation since the
+  proposed board's positions/ids differ; render the proposed board's own
+  layout as a translucent overlay keyed off the diff.
+
 ### F3. Version history (Confluence-style) for boards
 *Requested 2026-07-13 by Yarden while designing the MCP agent surface.*
 A named-version history per board: snapshot points (manual "save version" and/or

@@ -47,6 +47,10 @@ enum MainMenu {
                                     action: Selector(("simulateTraffic:")),
                                     keyEquivalent: "\r")
         simulate.keyEquivalentModifierMask = [.command]
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Enable Agent Access",
+                     action: Selector(("toggleAgentAccess:")),
+                     keyEquivalent: "")
         menu.addItem(withTitle: "Convert Sketches Automatically",
                      action: Selector(("toggleLiveRecognition:")),
                      keyEquivalent: "")
