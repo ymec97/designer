@@ -121,6 +121,13 @@ enum MainMenu {
                      action: #selector(NSDocument.move(_:)),
                      keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Export as PNG…",
+                     action: Selector(("exportAsPNG:")),
+                     keyEquivalent: "")
+        menu.addItem(withTitle: "Export as SVG…",
+                     action: Selector(("exportAsSVG:")),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
         let saveSelection = menu.addItem(withTitle: "Save Selection to Library",
                                          action: Selector(("saveSelectionToLibrary:")),
                                          keyEquivalent: "s")
@@ -147,6 +154,15 @@ enum MainMenu {
         menu.addItem(withTitle: "Select All",
                      action: #selector(NSText.selectAll(_:)),
                      keyEquivalent: "a")
+        menu.addItem(.separator())
+        let copyForLLM = menu.addItem(withTitle: "Copy for LLM",
+                                      action: Selector(("copyForLLM:")),
+                                      keyEquivalent: "c")
+        copyForLLM.keyEquivalentModifierMask = [.command, .shift]
+        let importLLM = menu.addItem(withTitle: "Import Board from Clipboard",
+                                     action: Selector(("importBoardFromClipboard:")),
+                                     keyEquivalent: "v")
+        importLLM.keyEquivalentModifierMask = [.command, .shift]
         return wrapped(menu)
     }
 

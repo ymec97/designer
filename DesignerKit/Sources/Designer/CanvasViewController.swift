@@ -2,9 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 import DesignerCanvas
+import DesignerInterop
 import DesignerModel
 import DesignerPersistence
 import DesignerRecognition
+import UniformTypeIdentifiers
 
 /// Binds a CanvasView to a BoardDocument: board changes flow down via
 /// Combine, operations flow up into the document's undo-tracked perform.
@@ -437,6 +439,135 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         alert.runModal()
     }
 
+    // MARK: LLM interchange (D16)
+
+    /// Copies the board (or selection) as canonical, LLM-legible text.
+    @objc func copyForLLM(_ sender: Any?) {
+        let selection = canvasView.selection.isEmpty ? nil : canvasView.selection
+        let text = LLMInterchange.export(document.board, selection: selection)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Imports board text from the clipboard into a NEW document (so it never
+    /// clobbers the current board unexpectedly).
+    @objc func importBoardFromClipboard(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            NSSound.beep(); return
+        }
+        do {
+            let result = try LLMInterchange.parse(text)
+            openImportedBoard(result.board)
+            if !result.warnings.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = "Imported with \(result.warnings.count) note\(result.warnings.count == 1 ? "" : "s")"
+                alert.informativeText = result.warnings.prefix(8).joined(separator: "\n")
+                alert.runModal()
+            }
+        } catch {
+            showError(error)
+        }
+    }
+
+    private func openImportedBoard(_ board: Board) {
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else {
+            return
+        }
+        document.board = board
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+    }
+
+    // MARK: Export
+
+    @objc func exportAsPNG(_ sender: Any?) {
+        runExportPanel(defaultName: exportBaseName(), extension: "png") { [weak self] url in
+            guard let self else { return }
+            let board = self.exportSource()
+            guard let png = BoardSnapshot.pngThumbnail(
+                of: board, pointSize: self.exportPixelSize(for: board)
+            ) else {
+                self.showError(ExportError.renderFailed); return
+            }
+            try png.write(to: url)
+        }
+    }
+
+    @objc func exportAsSVG(_ sender: Any?) {
+        runExportPanel(defaultName: exportBaseName(), extension: "svg") { [weak self] url in
+            guard let self else { return }
+            let selection = self.canvasView.selection.isEmpty ? nil : self.canvasView.selection
+            let svg = SVGExporter.export(self.document.board, selection: selection)
+            try svg.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private enum ExportError: Error, LocalizedError {
+        case renderFailed
+        var errorDescription: String? { "Couldn't render the board for export." }
+    }
+
+    private func exportSource() -> Board {
+        let selection = canvasView.selection
+        return selection.isEmpty ? document.board : document.board.makeClip(of: selection)
+    }
+
+    private func exportBaseName() -> String {
+        let name = document.displayName ?? "Board"
+        return canvasView.selection.isEmpty ? name : "\(name) selection"
+    }
+
+    private func exportPixelSize(for board: Board) -> CGSize {
+        let bounds = board.contentBounds() ?? Rect(x: 0, y: 0, width: 800, height: 600)
+        // 2× the content size, capped so huge boards don't blow up memory.
+        let scale = 2.0
+        return CGSize(
+            width: min((bounds.width + 48) * scale, 6000),
+            height: min((bounds.height + 48) * scale, 6000)
+        )
+    }
+
+    private func runExportPanel(defaultName: String, extension ext: String, write: @escaping (URL) throws -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(defaultName).\(ext)"
+        if let type = UTType(filenameExtension: ext) { panel.allowedContentTypes = [type] }
+        panel.canCreateDirectories = true
+        let window = view.window
+        let complete: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do { try write(url) } catch { self?.showError(error) }
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: complete)
+        } else {
+            complete(panel.runModal())
+        }
+    }
+
+    /// Headless copy→import round-trip for --ui-test.
+    func runLLMInterchangeSelfTest() -> String? {
+        let text = LLMInterchange.export(document.board)
+        do {
+            let result = try LLMInterchange.parse(text)
+            let originalNodes = document.board.elements.values.filter { $0.node != nil }.count
+            let importedNodes = result.board.elements.values.filter { $0.node != nil }.count
+            guard originalNodes == importedNodes else {
+                return "node count changed on round-trip (\(originalNodes) → \(importedNodes))"
+            }
+            guard !result.board.elements.isEmpty else { return "imported board is empty" }
+            // SVG must be well-formed.
+            let svg = SVGExporter.export(document.board)
+            guard XMLParser(data: Data(svg.utf8)).parse() else { return "SVG not well-formed" }
+            return nil
+        } catch {
+            return "\(error)"
+        }
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(canvasView)
@@ -471,7 +602,9 @@ extension CanvasViewController: NSMenuItemValidation {
             return true
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty
-        case #selector(saveBoardToLibrary(_:)):
+        case #selector(saveBoardToLibrary(_:)),
+             #selector(exportAsPNG(_:)), #selector(exportAsSVG(_:)),
+             #selector(copyForLLM(_:)):
             return !document.board.elements.isEmpty
         case #selector(toggleLibraryPanel(_:)):
             menuItem.state = libraryModel.isVisible ? .on : .off

@@ -1,0 +1,148 @@
+import Foundation
+import DesignerModel
+
+/// LLM text interchange (D16, phase 1): a canonical, human- and LLM-legible
+/// representation of a board that any chat model can read, analyze, and edit,
+/// then be pasted back. Nodes are addressed by readable slug ids (derived
+/// from names) rather than UUIDs, so a model can reliably talk about "the edge
+/// from api-gateway to orders-db".
+public enum LLMInterchange {
+    public static let formatName = "designer-board"
+    public static let formatVersion = 1
+
+    // MARK: Export
+
+    /// A primer paragraph followed by the board as pretty JSON. `selection`,
+    /// if given, exports only those elements (as a self-contained clip).
+    public static func export(_ board: Board, selection: Set<ElementID>? = nil) -> String {
+        let source: Board
+        if let selection, !selection.isEmpty {
+            source = board.makeClip(of: selection, title: board.title)
+        } else {
+            source = board
+        }
+        let wire = WireBoard(from: source)
+        let data = (try? Self.encoder.encode(wire)) ?? Data()
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        return primer + "\n\n" + json + "\n"
+    }
+
+    static let primer = """
+    # Designer board (\(formatName) v\(formatVersion))
+    # This JSON describes a software-architecture diagram. Edit it and paste it
+    # back into Designer to apply changes.
+    # - nodes: components. `id` is a stable slug you reference from edges.
+    #   `kind` ∈ service|database|queue|cache|gateway|client|external|generic.
+    #   `shape` ∈ rectangle|ellipse|diamond|triangle. `at` = [x, y] top-left,
+    #   `size` = [width, height] in points. Omit `at`/`size` for new nodes and
+    #   they will be auto-placed.
+    # - edges: connections. `from`/`to` are node ids. `direction` ∈
+    #   forward|backward|both|none. `protocol`, `data`, `condition` describe
+    #   the data transmission; any other key/value goes under `props`.
+    # - notes: free-text annotations with `at` and `size`.
+    # Add, remove, relabel, and reconnect freely; keep ids unique.
+    """
+
+    // MARK: Import
+
+    public struct ParseResult {
+        public let board: Board
+        /// Non-fatal issues (e.g. an edge referencing an unknown node id).
+        public let warnings: [String]
+    }
+
+    public enum ImportError: Error, LocalizedError, Equatable {
+        case noJSONObject
+        case invalidJSON(String)
+        case wrongFormat(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .noJSONObject:
+                return "Couldn't find a JSON object in the pasted text."
+            case .invalidJSON(let detail):
+                return "The board JSON is invalid: \(detail)"
+            case .wrongFormat(let detail):
+                return "This doesn't look like a Designer board: \(detail)"
+            }
+        }
+    }
+
+    /// Parses pasted text (which may contain surrounding prose or ``` fences)
+    /// into a board. Tolerant of missing positions and unknown edge endpoints.
+    public static func parse(_ text: String) throws -> ParseResult {
+        guard let jsonString = extractJSONObject(from: text) else {
+            throw ImportError.noJSONObject
+        }
+        let wire: WireBoard
+        do {
+            wire = try decoder.decode(WireBoard.self, from: Data(jsonString.utf8))
+        } catch let error as DecodingError {
+            throw ImportError.invalidJSON(Self.describe(error))
+        } catch {
+            throw ImportError.invalidJSON((error as NSError).localizedDescription)
+        }
+        guard wire.format == nil || wire.format == formatName else {
+            throw ImportError.wrongFormat("format is '\(wire.format ?? "")'")
+        }
+        return wire.toBoard()
+    }
+
+    /// Finds the outermost balanced `{ … }` (ignoring braces inside strings),
+    /// so prose or Markdown fences around the JSON are tolerated.
+    static func extractJSONObject(from text: String) -> String? {
+        let chars = Array(text)
+        guard let start = chars.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for i in start..<chars.count {
+            let c = chars[i]
+            if inString {
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"": inString = true
+            case "{": depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 { return String(chars[start...i]) }
+            default: break
+            }
+        }
+        return nil
+    }
+
+    // MARK: JSON config (canonical for stable diffs)
+
+    static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }()
+
+    static let decoder = JSONDecoder()
+
+    private static func describe(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, let context):
+            return "missing '\(key.stringValue)' at \(path(context))"
+        case .typeMismatch(_, let context):
+            return "wrong type at \(path(context)): \(context.debugDescription)"
+        case .valueNotFound(_, let context):
+            return "null at \(path(context))"
+        case .dataCorrupted(let context):
+            return context.debugDescription
+        @unknown default:
+            return String(describing: error)
+        }
+    }
+
+    private static func path(_ context: DecodingError.Context) -> String {
+        let joined = context.codingPath.map(\.stringValue).joined(separator: ".")
+        return joined.isEmpty ? "(root)" : joined
+    }
+}

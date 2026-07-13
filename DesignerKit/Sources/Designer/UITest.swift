@@ -47,9 +47,10 @@ final class UITestDriver {
         step11SketchStrokeBecomesConnector()
         step12LayerVisibilityLockingAndActive()
         step13LibraryRoundTrip()
+        step14LLMInterchangeAndExport()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export verified")
             exit(0)
         } else {
             for failure in failures {
@@ -517,6 +518,16 @@ final class UITestDriver {
         }
         if let failure = controller.runLibrarySelfTest() {
             expect(false, "library round-trip failed: \(failure)")
+        }
+    }
+
+    private func step14LLMInterchangeAndExport() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for LLM test")
+            return
+        }
+        if let failure = controller.runLLMInterchangeSelfTest() {
+            expect(false, "LLM/export round-trip failed: \(failure)")
         }
     }
 
