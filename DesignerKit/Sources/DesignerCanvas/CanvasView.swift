@@ -736,6 +736,12 @@ public final class CanvasView: NSView {
         selection = ids.filter { board.elements[$0] != nil }
     }
 
+    /// World point at the center of the visible canvas — the natural drop
+    /// location for inserted library clips.
+    public var visibleCenterWorld: Point {
+        viewport.toWorld(CGPoint(x: bounds.midX, y: bounds.midY))
+    }
+
     /// Inside the node but within a thin band of its border (or slightly
     /// outside it) — the affordance for starting a connection.
     private func isInConnectBand(_ viewPoint: CGPoint, of element: Element) -> Bool {

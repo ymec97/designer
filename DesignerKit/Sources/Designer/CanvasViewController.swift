@@ -3,6 +3,7 @@ import Combine
 import SwiftUI
 import DesignerCanvas
 import DesignerModel
+import DesignerPersistence
 import DesignerRecognition
 
 /// Binds a CanvasView to a BoardDocument: board changes flow down via
@@ -64,6 +65,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         }
         installToolbar()
         installLayersPanel()
+        installLibraryPanel()
     }
 
     // MARK: Layers
@@ -175,6 +177,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 guard let self else { return }
                 self.toggleLayersPanel(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
+            },
+            onLibrary: { [weak self] in
+                guard let self else { return }
+                self.toggleLibraryPanel(nil)
+                self.view.window?.makeFirstResponder(self.canvasView)
             }
         )
         let host = NSHostingView(rootView: toolbar)
@@ -223,6 +230,213 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         liveRecognitionEnabled.toggle()
     }
 
+    // MARK: Library
+
+    private let libraryModel = LibraryPanelModel()
+    private lazy var libraryStore = LibraryStore(
+        rootURL: (try? LibraryStore.defaultRootURL())
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("DesignerLibrary")
+    )
+
+    @objc func toggleLibraryPanel(_ sender: Any?) {
+        libraryModel.isVisible.toggle()
+        toolbarState.libraryPanelVisible = libraryModel.isVisible
+        if libraryModel.isVisible { reloadLibrary() }
+    }
+
+    @objc func saveSelectionToLibrary(_ sender: Any?) {
+        let ids = canvasView.selection
+        guard !ids.isEmpty else { NSSound.beep(); return }
+        saveToLibrary(ids: ids, suggestedName: "Pattern")
+    }
+
+    @objc func saveBoardToLibrary(_ sender: Any?) {
+        let ids = Set(document.board.elements.keys)
+        guard !ids.isEmpty else { NSSound.beep(); return }
+        saveToLibrary(ids: ids, suggestedName: document.displayName ?? "Board")
+    }
+
+    private func saveToLibrary(ids: Set<ElementID>, suggestedName: String) {
+        guard let name = promptForText(
+            title: "Save to Library",
+            message: "Name this reusable pattern.",
+            defaultvalue: suggestedName
+        ), !name.isEmpty else { return }
+
+        let clip = document.board.makeClip(of: ids, title: name)
+        let entry = LibraryEntry(name: name, tags: parseTags(from: name))
+        let thumbnail = BoardSnapshot.pngThumbnail(of: clip)
+        do {
+            try libraryStore.save(clip, as: entry, thumbnailPNG: thumbnail)
+            reloadLibrary()
+            if !libraryModel.isVisible { toggleLibraryPanel(nil) }
+        } catch {
+            showError(error)
+        }
+    }
+
+    /// No tag parsing from the name for now; tags are added via rename later.
+    private func parseTags(from name: String) -> [String] { [] }
+
+    /// Headless save→list→load→insert round-trip through the real clip/store/
+    /// instantiate path, into a throwaway library folder. Returns nil on
+    /// success or a failure message (used by --ui-test, which can't drive the
+    /// modal save prompt). Leaves the board unchanged (undoes its insert).
+    func runLibrarySelfTest() -> String? {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibSelfTest-\(UUID().uuidString)")
+        let store = LibraryStore(rootURL: tempRoot)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let ids = Set(document.board.elements.keys)
+        guard !ids.isEmpty else { return "no elements to save" }
+        let clip = document.board.makeClip(of: ids, title: "SelfTest")
+        do {
+            let entry = try store.save(clip, as: LibraryEntry(name: "SelfTest", tags: ["t"]))
+            guard try store.list().contains(where: { $0.id == entry.id }) else { return "entry not listed" }
+            guard try store.search("selftest").contains(where: { $0.id == entry.id }) else { return "search miss" }
+            let loaded = try store.loadBoard(entry.id)
+            let before = document.board.elements.count
+            let layer = activeLayerID() ?? document.board.layers.first!.id
+            let (operations, newIDs) = document.board.instantiateOperations(
+                from: loaded, offsetBy: 800, 800, onto: layer
+            )
+            document.perform(.batch(operations), actionName: "Insert SelfTest")
+            guard document.board.elements.count == before + loaded.elements.count else {
+                return "insert count wrong (\(document.board.elements.count) vs \(before + loaded.elements.count))"
+            }
+            for id in newIDs {
+                guard let edge = document.board.elements[id]?.edge else { continue }
+                if let from = edge.from.elementID, !newIDs.contains(from) { return "edge 'from' not remapped" }
+                if let to = edge.to.elementID, !newIDs.contains(to) { return "edge 'to' not remapped" }
+            }
+            document.undoManager?.undo()
+            guard document.board.elements.count == before else { return "undo did not restore" }
+            return nil
+        } catch {
+            return "\(error)"
+        }
+    }
+
+    private func installLibraryPanel() {
+        let actions = LibraryPanelActions(
+            insert: { [weak self] entry in self?.insert(entry) },
+            promptRename: { [weak self] entry in self?.renameLibraryEntry(entry) },
+            delete: { [weak self] entry in self?.deleteLibraryEntry(entry) },
+            saveSelection: { [weak self] in self?.saveSelectionToLibrary(nil) }
+        )
+        let panel = LibraryPanelContainer(model: libraryModel, actions: actions)
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            // Below the layers panel's top anchor so both can be open.
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 320),
+        ])
+    }
+
+    private func reloadLibrary() {
+        let entries = (try? libraryStore.list()) ?? []
+        libraryModel.entries = entries
+        var thumbnails: [UUID: Data] = [:]
+        for entry in entries {
+            if let data = libraryStore.loadThumbnail(entry.id) {
+                thumbnails[entry.id] = data
+            }
+        }
+        libraryModel.thumbnails = thumbnails
+    }
+
+    private func insert(_ entry: LibraryEntry) {
+        do {
+            let clip = try libraryStore.loadBoard(entry.id)
+            let layerID = activeLayerID() ?? document.board.layers.first?.id
+            guard let layerID else { return }
+
+            // Center the clip on the visible canvas center.
+            let center = canvasView.visibleCenterWorld
+            var dx = 0.0, dy = 0.0
+            if let bounds = clip.contentBounds() {
+                dx = center.x - bounds.midX
+                dy = center.y - bounds.midY
+            }
+            let (operations, newIDs) = document.board.instantiateOperations(
+                from: clip, offsetBy: dx, dy, onto: layerID
+            )
+            guard !operations.isEmpty else { return }
+            document.perform(.batch(operations), actionName: "Insert “\(entry.name)”")
+            canvasView.select(newIDs)
+            view.window?.makeFirstResponder(canvasView)
+        } catch {
+            showError(error)
+        }
+    }
+
+    private func activeLayerID() -> LayerID? {
+        if let id = layersModel.activeLayerID,
+           let layer = document.board.layers.first(where: { $0.id == id }),
+           layer.isVisible, !layer.isLocked {
+            return id
+        }
+        return document.board.layers.first { $0.isVisible && !$0.isLocked }?.id
+    }
+
+    private func renameLibraryEntry(_ entry: LibraryEntry) {
+        guard let name = promptForText(
+            title: "Rename Pattern",
+            message: "Enter a new name (comma-separated tags optional after “#”).",
+            defaultvalue: entry.name
+        ), !name.isEmpty else { return }
+        // Support "Name #tag1, tag2" to set tags inline.
+        var updated = entry
+        if let hash = name.firstIndex(of: "#") {
+            updated.name = String(name[..<hash]).trimmingCharacters(in: .whitespaces)
+            updated.tags = name[name.index(after: hash)...]
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        } else {
+            updated.name = name
+        }
+        do {
+            try libraryStore.update(updated)
+            reloadLibrary()
+        } catch {
+            showError(error)
+        }
+    }
+
+    private func deleteLibraryEntry(_ entry: LibraryEntry) {
+        do {
+            try libraryStore.delete(entry.id)
+            reloadLibrary()
+        } catch {
+            showError(error)
+        }
+    }
+
+    /// Modal text prompt (NSAlert with an input field).
+    private func promptForText(title: String, message: String, defaultvalue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = defaultvalue
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func showError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.runModal()
+    }
+
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(canvasView)
@@ -254,6 +468,13 @@ extension CanvasViewController: NSMenuItemValidation {
             }
         case #selector(toggleLiveRecognition(_:)):
             menuItem.state = liveRecognitionEnabled ? .on : .off
+            return true
+        case #selector(saveSelectionToLibrary(_:)):
+            return !canvasView.selection.isEmpty
+        case #selector(saveBoardToLibrary(_:)):
+            return !document.board.elements.isEmpty
+        case #selector(toggleLibraryPanel(_:)):
+            menuItem.state = libraryModel.isVisible ? .on : .off
             return true
         default:
             return true

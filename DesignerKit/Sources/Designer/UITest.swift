@@ -46,9 +46,10 @@ final class UITestDriver {
         step10SketchRectangleBecomesBlock()
         step11SketchStrokeBecomesConnector()
         step12LayerVisibilityLockingAndActive()
+        step13LibraryRoundTrip()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library verified")
             exit(0)
         } else {
             for failure in failures {
@@ -507,6 +508,16 @@ final class UITestDriver {
         canvasView.focusActiveLayer = false
         canvasView.activeLayerID = nil
         pumpRunLoop()
+    }
+
+    private func step13LibraryRoundTrip() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for library test")
+            return
+        }
+        if let failure = controller.runLibrarySelfTest() {
+            expect(false, "library round-trip failed: \(failure)")
+        }
     }
 
     // MARK: Event synthesis

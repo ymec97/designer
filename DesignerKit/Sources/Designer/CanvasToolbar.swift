@@ -7,6 +7,7 @@ import DesignerCanvas
 final class ToolbarState: ObservableObject {
     @Published var tool: CanvasView.Tool = .select
     @Published var layersPanelVisible = false
+    @Published var libraryPanelVisible = false
 }
 
 struct CanvasToolbar: View {
@@ -16,6 +17,7 @@ struct CanvasToolbar: View {
     let onAddBlock: () -> Void
     let onStructurize: () -> Void
     let onLayers: () -> Void
+    let onLibrary: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
@@ -42,6 +44,11 @@ struct CanvasToolbar: View {
                 icon: "square.3.layers.3d", hint: "⌘L", label: "Layers",
                 help: "Layers (⌘L) — view the same board through different concerns",
                 isActive: state.layersPanelVisible, action: onLayers
+            )
+            toolButton(
+                icon: "books.vertical", hint: "⌘Y", label: "Library",
+                help: "Library (⌘Y) — save & reuse patterns; ⌥⌘S saves the selection",
+                isActive: state.libraryPanelVisible, action: onLibrary
             )
         }
         .padding(.horizontal, 8)

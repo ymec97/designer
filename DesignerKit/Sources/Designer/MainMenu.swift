@@ -67,6 +67,10 @@ enum MainMenu {
         menu.addItem(withTitle: "Zoom to Fit",
                      action: #selector(CanvasView.zoomToFit(_:)),
                      keyEquivalent: "9")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Show Library",
+                     action: Selector(("toggleLibraryPanel:")),
+                     keyEquivalent: "y")
         return wrapped(menu)
     }
 
@@ -115,6 +119,14 @@ enum MainMenu {
                      keyEquivalent: "")
         menu.addItem(withTitle: "Move To…",
                      action: #selector(NSDocument.move(_:)),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
+        let saveSelection = menu.addItem(withTitle: "Save Selection to Library",
+                                         action: Selector(("saveSelectionToLibrary:")),
+                                         keyEquivalent: "s")
+        saveSelection.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(withTitle: "Save Board to Library",
+                     action: Selector(("saveBoardToLibrary:")),
                      keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Revert to Saved",
