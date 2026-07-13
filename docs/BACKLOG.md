@@ -33,6 +33,17 @@ exports; fits the "same board, many concerns" model. Cons: conflates the
 concern-layer concept with a derived/computed view; a flow is a function of
 edges, so it can drift from the diagram. Revisit deliberately before building.
 
+### F3. Version history (Confluence-style) for boards
+*Requested 2026-07-13 by Yarden while designing the MCP agent surface.*
+A named-version history per board: snapshot points (manual "save version" and/or
+automatic on significant edits or on accepting an agent proposal), a version list,
+a visual diff between any two versions, and revert-to-version. Think Confluence
+page history. For now the agent-proposal flow relies on ⌘Z undo as the safety
+net; this replaces that with durable, browsable, revertible history. Likely
+model: store BoardSnapshot + board.json per version in the .designerboard
+package (or a sidecar), reuse the MCP proposal diff engine for the version diff
+view. Revisit after the MCP surface (F4) lands.
+
 ## Post-MVP problems to design for
 
 ### P1. Zoom-level drift makes content sizes inconsistent (Excalidraw pain)

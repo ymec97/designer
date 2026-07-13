@@ -1,0 +1,112 @@
+import XCTest
+@testable import DesignerAgent
+import DesignerModel
+import DesignerInterop
+
+private final class StubBridge: AgentBoardBridge {
+    var board: Board?
+    var stagedProposal: Board?
+    var stagedNote: String?
+
+    func currentBoard() -> Board? { board }
+
+    func stageProposal(_ proposed: Board, note: String?) -> BoardDiff {
+        stagedProposal = proposed
+        stagedNote = note
+        return LLMInterchange.diff(current: board ?? Board(title: "empty"), proposed: proposed)
+    }
+}
+
+final class MCPHandlerTests: XCTestCase {
+    private var bridge = StubBridge()
+    private var handler = MCPHandler()
+
+    override func setUp() {
+        bridge = StubBridge()
+        handler = MCPHandler(bridge: bridge)
+        bridge.board = try! LLMInterchange.parse(
+            "# designer-board\n\n" + #"{"nodes":[{"id":"web","name":"web","kind":"client"},{"id":"api","name":"api","kind":"gateway"}],"edges":[{"from":"web","to":"api","protocol":"HTTPS"}]}"# + "\n"
+        ).board
+    }
+
+    private func call(_ json: String) -> [String: Any] {
+        let out = handler.handle(Data(json.utf8))!
+        return try! JSONSerialization.jsonObject(with: out) as! [String: Any]
+    }
+
+    private func toolText(_ response: [String: Any]) -> String {
+        let result = response["result"] as! [String: Any]
+        let content = result["content"] as! [[String: Any]]
+        return content.first?["text"] as? String ?? ""
+    }
+
+    func testInitialize() {
+        let r = call(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+        let result = r["result"] as! [String: Any]
+        XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "Designer")
+        XCTAssertNotNil(result["protocolVersion"])
+    }
+
+    func testNotificationGetsNoReply() {
+        XCTAssertNil(handler.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
+    }
+
+    func testToolsListHasFourTools() {
+        let r = call(#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
+        let tools = (r["result"] as! [String: Any])["tools"] as! [[String: Any]]
+        XCTAssertEqual(Set(tools.map { $0["name"] as! String }),
+                       ["describe_board", "get_board", "search_board", "propose_board"])
+    }
+
+    func testDescribeBoard() {
+        let text = toolText(call(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"describe_board","arguments":{}}}"#))
+        XCTAssertTrue(text.contains("2 blocks"))
+        XCTAssertTrue(text.contains("1 connectors") || text.contains("1 connector"))
+    }
+
+    func testGetBoardRoundTrips() {
+        let text = toolText(call(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_board","arguments":{}}}"#))
+        XCTAssertTrue(text.contains("web"))
+        XCTAssertNoThrow(try LLMInterchange.parse(text))
+    }
+
+    func testSearchBoard() {
+        let text = toolText(call(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_board","arguments":{"query":"gateway"}}}"#))
+        XCTAssertTrue(text.contains("api"))
+        XCTAssertFalse(text.contains("No matches"))
+    }
+
+    func testProposeBoardStagesAndDiffs() {
+        // Add a database node + an edge from api to it.
+        let proposed = #"{"nodes":[{"id":"web","name":"web","kind":"client"},{"id":"api","name":"api","kind":"gateway"},{"id":"db","name":"db","kind":"database"}],"edges":[{"from":"web","to":"api","protocol":"HTTPS"},{"from":"api","to":"db"}]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed, "note": "add a database"]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        let r = try! JSONSerialization.jsonObject(with: handler.handle(data)!) as! [String: Any]
+        let text = toolText(r)
+
+        XCTAssertNotNil(bridge.stagedProposal, "propose_board must stage, not apply")
+        XCTAssertEqual(bridge.stagedNote, "add a database")
+        XCTAssertTrue(text.contains("+1 block"), "diff summary should mention the added block")
+        XCTAssertTrue(text.contains("not been applied"), "must tell the agent it's pending approval")
+    }
+
+    func testProposeInvalidBoardIsError() {
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": "this is not json"]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        let r = try! JSONSerialization.jsonObject(with: handler.handle(data)!) as! [String: Any]
+        let result = r["result"] as! [String: Any]
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertNil(bridge.stagedProposal)
+    }
+
+    func testUnknownMethod() {
+        let r = call(#"{"jsonrpc":"2.0","id":8,"method":"frobnicate","params":{}}"#)
+        XCTAssertNotNil(r["error"])
+    }
+}
