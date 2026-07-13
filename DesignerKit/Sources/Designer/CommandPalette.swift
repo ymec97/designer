@@ -60,9 +60,10 @@ struct CommandPalette: View {
             }
         }
         .frame(width: 460)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(GraphiteStyle.hairline, lineWidth: 0.75))
+        .shadow(color: .black.opacity(0.28), radius: 28, y: 12)
+        .graphiteAccent()
         .onAppear { fieldFocused = true; model.selectedIndex = 0 }
         .onKeyPress(.downArrow) { move(1); return .handled }
         .onKeyPress(.upArrow) { move(-1); return .handled }
@@ -93,7 +94,7 @@ struct CommandPalette: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
-            isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
+            isSelected ? AnyShapeStyle(GraphiteStyle.accent) : AnyShapeStyle(.clear),
             in: RoundedRectangle(cornerRadius: 6)
         )
         .contentShape(Rectangle())

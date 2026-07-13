@@ -65,9 +65,8 @@ struct LibraryPanel: View {
             }
         }
         .frame(width: 260)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .floatingPanel()
+        .graphiteAccent()
     }
 
     private var header: some View {

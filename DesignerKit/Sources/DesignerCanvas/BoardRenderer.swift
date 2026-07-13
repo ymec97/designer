@@ -35,6 +35,11 @@ final class BoardRenderer {
 
     // MARK: Elements
 
+    /// Whether nodes get a soft drop shadow this pass. Elevation is set false
+    /// when many nodes are visible (CoreGraphics shadows are per-node and
+    /// costly) — imperceptible on a dense board, and it keeps the frame budget.
+    var elevateNodes = true
+
     func draw(
         _ element: Element,
         in context: CGContext,
@@ -113,18 +118,48 @@ final class BoardRenderer {
             )
         }
 
+        // Soft elevation (Studio Graphite): a quiet drop shadow lifts the node
+        // off the graphite ground. Skipped on dense boards (elevateNodes) to
+        // protect the frame budget.
+        let fillColor: CGColor
         if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
-            context.setFillColor(parsed.cgColor)
+            fillColor = parsed.cgColor
         } else {
-            context.setFillColor(resolvedNodeFill(for: node.semantic.kind))
+            fillColor = resolvedNodeFill(for: node.semantic.kind)
         }
-        context.addPath(path)
-        context.fillPath()
+        if elevateNodes {
+            context.saveGState()
+            context.setShadow(
+                offset: CGSize(width: 0, height: 1.5),
+                blur: 5 * viewport.scale,
+                color: Graphite.shadowColor.cgColor
+            )
+            context.setFillColor(fillColor)
+            context.addPath(path)
+            context.fillPath()
+            context.restoreGState()
+        } else {
+            context.setFillColor(fillColor)
+            context.addPath(path)
+            context.fillPath()
+        }
 
         context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
-        context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1) * viewport.scale)
+        context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.25) * viewport.scale)
         context.addPath(path)
         context.strokePath()
+
+        // The kind dot — one saturated spot of colour, top-left inside the
+        // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
+        // or triangle's corners crowd it).
+        let dottable = node.shape == .rectangle || node.shape == .ellipse
+        if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
+            let r = 3.4 * viewport.scale
+            let inset = 13 * viewport.scale
+            let anchor = CGPoint(x: rect.minX + inset, y: rect.minY + inset)
+            context.setFillColor(Palette.kindDot(for: node.semantic.kind).cgColor)
+            context.fillEllipse(in: CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2))
+        }
 
         if isSelected {
             strokeSelection(path: path, in: context, viewport: viewport)
@@ -140,6 +175,7 @@ final class BoardRenderer {
             )
         }
     }
+
 
     private func drawNote(
         _ note: Note, frame: Rect,
@@ -448,38 +484,55 @@ final class BoardRenderer {
     /// Centered affordance hint for an empty board — the whole onboarding a
     /// blank canvas needs (D17): what to do, in one line, gone once you do it.
     func drawEmptyHint(in context: CGContext, bounds: CGRect) {
-        let hint = "Double-click to add a block   ·   scroll to pan   ·   pinch or ⌘scroll to zoom"
-        let attributed = NSAttributedString(string: hint, attributes: [
-            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
-            .foregroundColor: Palette.hintText,
-        ])
-        let size = attributed.size()
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        attributed.draw(at: CGPoint(
-            x: bounds.midX - size.width / 2,
-            y: bounds.midY - size.height / 2
-        ))
+
+        let title = NSAttributedString(string: "Start with a block", attributes: [
+            .font: NSFont.systemFont(ofSize: 19, weight: .semibold),
+            .foregroundColor: Graphite.inkDim,
+        ])
+        let hintStyle = NSMutableParagraphStyle()
+        hintStyle.alignment = .center
+        let hint = NSAttributedString(
+            string: "Double-click to create   ·   D to draw   ·   scroll to pan   ·   ⌘K for commands",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+                .foregroundColor: Palette.hintText,
+                .paragraphStyle: hintStyle,
+            ]
+        )
+        let titleSize = title.size()
+        let hintSize = hint.size()
+        let centerY = bounds.midY
+        title.draw(at: CGPoint(x: bounds.midX - titleSize.width / 2, y: centerY - titleSize.height - 4))
+        hint.draw(at: CGPoint(x: bounds.midX - hintSize.width / 2, y: centerY + 6))
         NSGraphicsContext.restoreGraphicsState()
     }
 
     // MARK: Adornments
 
     private func strokeSelection(path: CGPath, in context: CGContext, viewport: CanvasViewport) {
+        // A soft accent halo under a crisp accent outline — reads as "selected"
+        // without the heavy 2px ring the system default would give.
+        context.setStrokeColor(Palette.selection.withAlphaComponent(0.22).cgColor)
+        context.setLineWidth(4)
+        context.addPath(path)
+        context.strokePath()
         context.setStrokeColor(Palette.selection.cgColor)
-        context.setLineWidth(2)
+        context.setLineWidth(1.5)
         context.addPath(path)
         context.strokePath()
     }
 
     func drawResizeHandles(around viewRect: CGRect, in context: CGContext) {
-        context.setFillColor(NSColor.controlBackgroundColor.cgColor)
+        context.setFillColor(Graphite.panel.cgColor)
         context.setStrokeColor(Palette.selection.cgColor)
         context.setLineWidth(1.5)
         for handle in ResizeHandle.allCases {
             let rect = handle.rect(around: viewRect)
-            context.fill(rect)
-            context.stroke(rect)
+            let path = CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+            context.addPath(path); context.fillPath()
+            context.addPath(path); context.strokePath()
         }
     }
 
@@ -579,52 +632,24 @@ final class BoardRenderer {
     }
 }
 
-/// Theme-aware defaults (NFR U4): system dynamic colors so boards read
-/// correctly in light and dark mode without per-element colors.
+/// Canvas palette — a thin façade over the shared Studio Graphite tokens so
+/// the renderer reads cleanly (Palette.selection, Palette.edgeStroke, …).
 enum Palette {
-    static let selection = NSColor.controlAccentColor
-    static let nodeStroke = NSColor.secondaryLabelColor
-    static let edgeStroke = NSColor.secondaryLabelColor
-    /// Detached connectors: unmistakably "not currently connected".
-    static let danglingEdge = NSColor.systemOrange
-    static let snapGuide = NSColor.systemPink
-    /// Slightly translucent so captions sit on lines without hard boxes.
-    static let captionBackground = NSColor.windowBackgroundColor.withAlphaComponent(0.88)
-    static let nodeText = NSColor.labelColor
-    static let noteText = NSColor.secondaryLabelColor
-    static let inkStroke = NSColor.labelColor
-    static let canvasBackground = NSColor.windowBackgroundColor
-    static let grid = NSColor.separatorColor.withAlphaComponent(0.35)
-    static let hintText = NSColor.tertiaryLabelColor
+    static let selection = Graphite.accent
+    static let nodeStroke = Graphite.nodeStroke
+    static let edgeStroke = Graphite.edge
+    static let danglingEdge = Graphite.dangling
+    static let snapGuide = Graphite.snapGuide
+    static let captionBackground = Graphite.captionBackground
+    static let nodeText = Graphite.nodeText
+    static let noteText = Graphite.noteText
+    static let inkStroke = Graphite.ink_stroke
+    static let canvasBackground = Graphite.canvas
+    static let grid = Graphite.grid
+    static let hintText = Graphite.hint
 
-    /// Node surface must contrast with the canvas in BOTH appearances —
-    /// system "background" colors don't (controlBackgroundColor ≈
-    /// windowBackgroundColor in dark mode, which made blocks invisible).
-    private static let nodeSurface = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.27, green: 0.28, blue: 0.30, alpha: 1)
-            : NSColor.white
-    }
-
-    static func nodeFill(for kind: NodeKind) -> NSColor {
-        switch kind {
-        case .database: return nodeSurface.tinted(with: .systemBlue)
-        case .queue: return nodeSurface.tinted(with: .systemOrange)
-        case .cache: return nodeSurface.tinted(with: .systemPurple)
-        case .gateway: return nodeSurface.tinted(with: .systemTeal)
-        case .client: return nodeSurface.tinted(with: .systemGreen)
-        case .external: return nodeSurface.tinted(with: .systemGray)
-        default: return nodeSurface
-        }
-    }
-}
-
-extension NSColor {
-    func tinted(with tint: NSColor) -> NSColor {
-        NSColor(name: nil) { _ in
-            self.blended(withFraction: 0.18, of: tint) ?? self
-        }
-    }
+    static func nodeFill(for kind: NodeKind) -> NSColor { Graphite.nodeFill(for: kind) }
+    static func kindDot(for kind: NodeKind) -> NSColor { Graphite.kindDot(for: kind) }
 }
 
 extension NSColor {

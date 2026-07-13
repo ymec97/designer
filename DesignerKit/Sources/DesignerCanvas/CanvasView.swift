@@ -415,6 +415,11 @@ public final class CanvasView: NSView {
             }
             probe("filter")
 
+            // Elevation shadows only when few nodes are on screen — costly
+            // per-node, imperceptible when dense.
+            let visibleNodeCount = drawables.reduce(0) { $0 + ($1.node != nil ? 1 : 0) }
+            renderer.elevateNodes = visibleNodeCount <= 70
+
             for element in drawables {
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     if let edge = element.edge {

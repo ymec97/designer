@@ -102,6 +102,12 @@ enum ScreenshotDriver {
     }
 
     static func run(saveTo url: URL) {
+        // Optional --dark forces dark appearance for the capture.
+        if CommandLine.arguments.contains("--dark") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        } else if CommandLine.arguments.contains("--light") {
+            NSApp.appearance = NSAppearance(named: .aqua)
+        }
         let controller = NSDocumentController.shared
         guard let typeName = controller.defaultType,
               let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument

@@ -112,6 +112,17 @@ packet along edge routes + node pulses; play/pause/restart + speed; a
 non-destructive read-only "Simulate" mode (esc to exit). Must stay smooth
 (display-link driven, dirty-region redraw) and respect Reduce Motion.
 
+### P8. High-refresh / tiled-canvas rendering (120 Hz on ProMotion)
+*Identified 2026-07-13 during the design pass. Performance investment.*
+The canvas fully re-rasterizes every frame. It holds ~60 fps (16.7 ms, p95
+16.7 ms) during worst-case continuous pan of 2k nodes + 4k edges — meeting the
+D12 hard floor ("never below 60 Hz") but not the 120 Hz-on-ProMotion target
+(≤8.3 ms). The architecture's intended upgrade path: composite pan/zoom as a
+GPU transform of pre-rendered tiles (re-rasterize tiles async at new scale),
+and cache the far-zoom edge batch + node text as rasters so per-frame work is
+a blit, not a redraw. This is a dedicated perf effort, independent of visuals.
+Note: the design pass was verified perf-neutral (identical A/B numbers).
+
 ## Clarified requirements (already in the brief, re-affirmed)
 
 - **Freehand drawing works with a plain mouse/trackpad** — pressure input

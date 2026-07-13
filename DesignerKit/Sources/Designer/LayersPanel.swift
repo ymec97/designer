@@ -68,9 +68,8 @@ struct LayersPanel: View {
             .frame(height: min(CGFloat(document.board.layers.count) * 34 + 12, 300))
         }
         .frame(width: 240)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .floatingPanel()
+        .graphiteAccent()
     }
 
     private var header: some View {
@@ -94,7 +93,7 @@ struct LayersPanel: View {
             if model.focusEnabled, let name = activeLayerName {
                 Label("Focusing “\(name)” — other layers dimmed", systemImage: "scope")
                     .font(.system(size: 9.5))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(GraphiteStyle.accent)
                     .lineLimit(1)
             } else {
                 Text("Click a row to make it active — new items land there")
@@ -144,7 +143,7 @@ struct LayersPanel: View {
                 } label: {
                     Image(systemName: "scope")
                         .font(.system(size: 10, weight: model.focusEnabled ? .bold : .regular))
-                        .foregroundStyle(model.focusEnabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                        .foregroundStyle(model.focusEnabled ? AnyShapeStyle(GraphiteStyle.accent) : AnyShapeStyle(.tertiary))
                         .frame(width: 15)
                 }
                 .buttonStyle(.plain)
@@ -192,7 +191,7 @@ struct LayersPanel: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
         .background(
-            isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
+            isActive ? AnyShapeStyle(GraphiteStyle.accent.opacity(0.18)) : AnyShapeStyle(.clear),
             in: RoundedRectangle(cornerRadius: 6)
         )
         .contentShape(Rectangle())

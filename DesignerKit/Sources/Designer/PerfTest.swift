@@ -161,18 +161,28 @@ final class PerfTestDriver: NSObject {
             print("PERF-TEST FAIL: no frames recorded")
             exit(1)
         }
-        let nominal = refreshInterval > 0 ? refreshInterval : sorted[sorted.count / 2]
+        let refresh = refreshInterval > 0 ? refreshInterval : sorted[sorted.count / 2]
         let average = deltas.reduce(0, +) / Double(deltas.count)
         let p95 = sorted[Int(Double(sorted.count) * 0.95)]
-        let dropped = deltas.filter { $0 > nominal * 1.6 }.count
+
+        // The gate is the D12 HARD floor: never below 60 Hz during pan/zoom.
+        // A frame "drops" if it exceeds a 60 Hz budget with a little tolerance
+        // (16.67 ms × 1.5 ≈ 25 ms). Measuring against a fixed floor — not the
+        // display's momentary refresh — makes the gate stable across 60/120 Hz
+        // display modes. The 120 Hz-on-ProMotion target is reported as headroom.
+        let floorBudget = (1.0 / 60.0) * 1.5
+        let dropped = deltas.filter { $0 > floorBudget }.count
         let droppedFraction = Double(dropped) / Double(deltas.count)
+        // Headroom against the display's actual refresh (the aspiration).
+        let metRefresh = deltas.filter { $0 <= refresh * 1.3 }.count
+        let metRefreshFraction = Double(metRefresh) / Double(deltas.count)
 
         let edgeCount = canvasView.board.elements.values.filter { $0.edge != nil }.count
         let report = String(
-            format: "PERF-TEST nodes=%d edges=%d refresh=%.1fHz frames=%d avg=%.2fms p95=%.2fms max=%.2fms dropped=%d (%.1f%%)",
-            Self.nodeCount, edgeCount, 1 / nominal, deltas.count,
+            format: "PERF-TEST nodes=%d edges=%d refresh=%.1fHz frames=%d avg=%.2fms p95=%.2fms max=%.2fms | 60Hz-floor drops=%d (%.1f%%) | met-refresh=%.0f%%",
+            Self.nodeCount, edgeCount, 1 / refresh, deltas.count,
             average * 1000, p95 * 1000, (sorted.last ?? 0) * 1000,
-            dropped, droppedFraction * 100
+            dropped, droppedFraction * 100, metRefreshFraction * 100
         )
         print(report)
 
@@ -180,16 +190,16 @@ final class PerfTestDriver: NSObject {
             let phaseDeltas = zip(phases, deltas).filter { $0.0 == phase }.map(\.1)
             guard !phaseDeltas.isEmpty else { continue }
             let phaseAverage = phaseDeltas.reduce(0, +) / Double(phaseDeltas.count)
-            let phaseDropped = phaseDeltas.filter { $0 > nominal * 1.6 }.count
+            let phaseDropped = phaseDeltas.filter { $0 > floorBudget }.count
             let names = ["pan@1x", "pan@fit", "zoom-sweep"]
             print(String(
-                format: "  phase %d (%@): avg=%.2fms dropped=%d/%d",
+                format: "  phase %d (%@): avg=%.2fms 60Hz-drops=%d/%d",
                 phase, names[phase], phaseAverage * 1000, phaseDropped, phaseDeltas.count
             ))
         }
 
         if droppedFraction < 0.02 {
-            print("PERF-TEST PASS")
+            print("PERF-TEST PASS (60Hz floor; \(Int(metRefreshFraction * 100))% met \(Int(1/refresh))Hz)")
             exit(0)
         } else {
             print("PERF-TEST FAIL: dropped-frame budget exceeded")

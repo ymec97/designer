@@ -51,14 +51,9 @@ struct CanvasToolbar: View {
                 isActive: state.libraryPanelVisible, action: onLibrary
             )
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 7)
         .padding(.vertical, 5)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.separator, lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .floatingPanel(radius: 12)
     }
 
     private func toolButton(
@@ -67,21 +62,21 @@ struct CanvasToolbar: View {
         isActive: Bool, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: 1) {
+            VStack(spacing: 2) {
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .medium))
                     .frame(height: 17)
                 Text(hint)
                     .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(isActive ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(isActive ? AnyShapeStyle(.white.opacity(0.9)) : AnyShapeStyle(GraphiteStyle.inkFaint))
             }
-            .frame(width: 42, height: 36)
-            .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .frame(width: 42, height: 37)
+            .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(GraphiteStyle.ink))
             .background(
-                isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
-                in: RoundedRectangle(cornerRadius: 7)
+                isActive ? AnyShapeStyle(GraphiteStyle.accent) : AnyShapeStyle(.clear),
+                in: RoundedRectangle(cornerRadius: 8)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .help(help ?? "\(label)  (\(hint))")
