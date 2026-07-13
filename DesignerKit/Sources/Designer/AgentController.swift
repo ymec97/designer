@@ -46,6 +46,10 @@ final class AgentController: NSObject, AgentBoardBridge {
         }
     }
 
+    func hasPendingProposal() -> Bool {
+        DispatchQueue.main.sync { Self.frontmostController()?.hasPendingProposal ?? false }
+    }
+
     /// The controller for the frontmost board window (key window first, then
     /// any board window in z-order).
     static func frontmostController() -> CanvasViewController? {

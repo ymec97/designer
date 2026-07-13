@@ -106,20 +106,19 @@ extension WireBoard {
         let layer = board.layers[0].id
         var warnings: [String] = []
 
-        // Node ids → new element ids; auto-place nodes that omit positions.
+        // Nodes that omit positions get auto-laid-out left→right by data-flow
+        // depth (so an agent-built system reads like an architecture diagram,
+        // not a grid). Falls back to a grid when there are no edges to infer
+        // flow from.
+        let autoFrames = Self.autoLayoutFrames(nodes: nodes, edges: edges)
+
         var elementForSlug: [String: ElementID] = [:]
-        var autoIndex = 0
         for wireNode in nodes {
             let frame: Rect
             if let at = wireNode.at, at.count == 2, let size = wireNode.size, size.count == 2 {
                 frame = Rect(x: at[0], y: at[1], width: max(size[0], 24), height: max(size[1], 24))
             } else {
-                frame = Rect(
-                    x: 80 + Double(autoIndex % 6) * 200,
-                    y: 80 + Double(autoIndex / 6) * 140,
-                    width: 160, height: 80
-                )
-                autoIndex += 1
+                frame = autoFrames[wireNode.id] ?? Rect(x: 80, y: 80, width: 160, height: 80)
             }
             let element = Element(
                 layerIDs: [layer],
@@ -186,7 +185,57 @@ extension WireBoard {
             try? board.apply(.insertElement(element))
         }
 
-        return LLMInterchange.ParseResult(board: board, warnings: warnings)
+        return LLMInterchange.ParseResult(board: board, warnings: warnings, providedTitle: title)
+    }
+
+    /// Frames for nodes that omit `at`/`size`. With edges present: longest-path
+    /// layering (left→right columns by flow depth, cycle-bounded), stacking
+    /// rows within a column. Without edges: a simple grid.
+    static func autoLayoutFrames(nodes: [WireNode], edges: [WireEdge]) -> [String: Rect] {
+        let needing = nodes.filter { !($0.at?.count == 2 && $0.size?.count == 2) }
+        guard !needing.isEmpty else { return [:] }
+        var frames: [String: Rect] = [:]
+
+        guard !edges.isEmpty else {
+            for (index, node) in needing.enumerated() {
+                frames[node.id] = Rect(
+                    x: 80 + Double(index % 6) * 200,
+                    y: 80 + Double(index / 6) * 140,
+                    width: 160, height: 80
+                )
+            }
+            return frames
+        }
+
+        // Longest-path depth from sources; the pass/increment bounds make
+        // cycles terminate with sensible depths.
+        var depth = Dictionary(nodes.map { ($0.id, 0) }, uniquingKeysWith: { first, _ in first })
+        let bound = nodes.count
+        var changed = true
+        var passes = 0
+        while changed, passes < bound {
+            changed = false
+            passes += 1
+            for edge in edges {
+                guard let from = depth[edge.from], let to = depth[edge.to],
+                      from + 1 > to, from + 1 < bound else { continue }
+                depth[edge.to] = from + 1
+                changed = true
+            }
+        }
+
+        var rowInColumn: [Int: Int] = [:]
+        for node in needing {
+            let column = depth[node.id] ?? 0
+            let row = rowInColumn[column, default: 0]
+            rowInColumn[column] = row + 1
+            frames[node.id] = Rect(
+                x: 80 + Double(column) * 260,
+                y: 80 + Double(row) * 140,
+                width: 160, height: 80
+            )
+        }
+        return frames
     }
 }
 

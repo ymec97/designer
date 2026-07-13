@@ -35,7 +35,7 @@ public enum LLMInterchange {
     #   `kind` ∈ service|database|queue|cache|gateway|client|external|generic.
     #   `shape` ∈ rectangle|ellipse|diamond|triangle. `at` = [x, y] top-left,
     #   `size` = [width, height] in points. Omit `at`/`size` for new nodes and
-    #   they will be auto-placed.
+    #   they will be auto-arranged left-to-right in data-flow order.
     # - edges: connections. `from`/`to` are node ids. `direction` ∈
     #   forward|backward|both|none. `protocol`, `data`, `condition` describe
     #   the data transmission; any other key/value goes under `props`.
@@ -49,6 +49,9 @@ public enum LLMInterchange {
         public let board: Board
         /// Non-fatal issues (e.g. an edge referencing an unknown node id).
         public let warnings: [String]
+        /// The title as given in the JSON, or nil if the document omitted it
+        /// (so callers can inherit an existing title instead of "Imported").
+        public let providedTitle: String?
     }
 
     public enum ImportError: Error, LocalizedError, Equatable {

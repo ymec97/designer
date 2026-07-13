@@ -87,13 +87,20 @@ public final class AgentServer {
     }
 
     private func service(_ request: HTTPRequest, on connection: NWConnection) {
-        if request.method == "GET" {
-            respond(on: connection, status: "200 OK", contentType: "text/plain; charset=utf-8",
-                    body: Data("Designer agent endpoint. POST JSON-RPC (MCP) here.\n".utf8))
+        // Reject browser-originated requests: a web page can fire cross-origin
+        // POSTs at localhost even if it can't read the reply. MCP clients
+        // don't send an Origin header; browsers always do.
+        if let origin = request.headers["origin"],
+           !origin.hasPrefix("http://127.0.0.1"), !origin.hasPrefix("http://localhost") {
+            respond(on: connection, status: "403 Forbidden", contentType: "text/plain",
+                    body: Data("Browser origins are not allowed.\n".utf8))
             return
         }
+        // Streamable HTTP: we don't offer a GET/SSE stream, so say so per spec.
         guard request.method == "POST" else {
-            respond(on: connection, status: "405 Method Not Allowed", contentType: "text/plain", body: Data())
+            respond(on: connection, status: "405 Method Not Allowed", contentType: "text/plain",
+                    extraHeaders: ["Allow": "POST"],
+                    body: Data("Designer agent endpoint. POST JSON-RPC (MCP) here.\n".utf8))
             return
         }
         if let responseBody = handler.handle(request.body) {
@@ -104,10 +111,16 @@ public final class AgentServer {
         }
     }
 
-    private func respond(on connection: NWConnection, status: String, contentType: String, body: Data) {
+    private func respond(
+        on connection: NWConnection, status: String, contentType: String,
+        extraHeaders: [String: String] = [:], body: Data
+    ) {
         var header = "HTTP/1.1 \(status)\r\n"
         header += "Content-Type: \(contentType)\r\n"
         header += "Content-Length: \(body.count)\r\n"
+        for (key, value) in extraHeaders {
+            header += "\(key): \(value)\r\n"
+        }
         header += "Connection: close\r\n\r\n"
         var response = Data(header.utf8)
         response.append(body)
@@ -121,6 +134,7 @@ public final class AgentServer {
 private struct HTTPRequest {
     let method: String
     let path: String
+    let headers: [String: String] // keys lowercased
     let body: Data
 
     init?(_ buffer: Data) {
@@ -135,14 +149,15 @@ private struct HTTPRequest {
         method = String(parts[0])
         path = String(parts[1])
 
-        // Content-Length gates how much body we must have.
-        var contentLength = 0
+        var parsedHeaders: [String: String] = [:]
         for line in lines.dropFirst() {
             let pair = line.split(separator: ":", maxSplits: 1)
-            if pair.count == 2, pair[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
-                contentLength = Int(pair[1].trimmingCharacters(in: .whitespaces)) ?? 0
-            }
+            guard pair.count == 2 else { continue }
+            parsedHeaders[pair[0].trimmingCharacters(in: .whitespaces).lowercased()] =
+                pair[1].trimmingCharacters(in: .whitespaces)
         }
+        headers = parsedHeaders
+        let contentLength = Int(parsedHeaders["content-length"] ?? "") ?? 0
         let bodyStart = range.upperBound
         let available = buffer.distance(from: bodyStart, to: buffer.endIndex)
         guard available >= contentLength else { return nil } // wait for more bytes

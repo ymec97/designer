@@ -148,6 +148,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         CatalogWindowController.shared.present()
     }
 
+    /// Headless end-to-end agent check: opens the example board, enables the
+    /// real MCP server, and drives it over actual localhost HTTP the way
+    /// Claude Desktop would — initialize, get_board, then propose_board with
+    /// an added block — verifying the proposal lands as pending in the window.
+    private func runAgentTest() {
+        func fail(_ message: String) {
+            FileHandle.standardError.write(Data("AGENT-TEST FAIL: \(message)\n".utf8))
+            exit(1)
+        }
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else {
+            fail("no document"); return
+        }
+        document.board = ExampleBoard.make()
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let canvasController = document.windowControllers.first?.window?.contentViewController as? CanvasViewController else {
+            fail("no controller"); return
+        }
+
+        try? AgentController.shared.enable { port in
+            DispatchQueue.global().async {
+                func post(_ body: String) -> [String: Any] {
+                    var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp")!)
+                    request.httpMethod = "POST"
+                    request.httpBody = Data(body.utf8)
+                    var out: [String: Any] = [:]
+                    let sema = DispatchSemaphore(value: 0)
+                    URLSession.shared.dataTask(with: request) { data, _, _ in
+                        if let data { out = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:] }
+                        sema.signal()
+                    }.resume()
+                    sema.wait()
+                    return out
+                }
+                func toolText(_ r: [String: Any]) -> String {
+                    (((r["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+                }
+
+                let initReply = post(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#)
+                guard ((initReply["result"] as? [String: Any])?["protocolVersion"] as? String) == "2025-03-26" else {
+                    fail("initialize didn't echo protocol version"); return
+                }
+                let boardText = toolText(post(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_board","arguments":{}}}"#))
+                guard boardText.contains("api-gateway") else { fail("get_board missing content"); return }
+
+                // Edit the returned board: append one node (no position → auto-layout).
+                guard let key = boardText.range(of: "\"nodes\""),
+                      let open = boardText.range(of: "[", range: key.upperBound..<boardText.endIndex) else {
+                    fail("couldn't find nodes array"); return
+                }
+                var edited = boardText
+                edited.insert(contentsOf: "\n    {\"id\": \"agent-cache\", \"kind\": \"cache\", \"name\": \"agent-cache\"},", at: open.upperBound)
+                let proposal: [String: Any] = [
+                    "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": ["name": "propose_board", "arguments": ["board": edited, "note": "e2e"]],
+                ]
+                let proposalData = try! JSONSerialization.data(withJSONObject: proposal)
+                var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp")!)
+                request.httpMethod = "POST"
+                request.httpBody = proposalData
+                var replyText = ""
+                let sema = DispatchSemaphore(value: 0)
+                URLSession.shared.dataTask(with: request) { data, _, _ in
+                    if let data, let r = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        replyText = toolText(r)
+                    }
+                    sema.signal()
+                }.resume()
+                sema.wait()
+                guard replyText.contains("+1 block") else { fail("propose diff wrong: \(replyText)"); return }
+
+                DispatchQueue.main.async {
+                    guard canvasController.hasPendingProposal else { fail("proposal not pending in window"); return }
+                    canvasController.acceptAgentProposal(nil)
+                    let added = document.board.elements.values.contains { $0.node?.semantic.name == "agent-cache" }
+                    guard added else { fail("accept didn't add the block"); return }
+                    print("AGENT-TEST PASS: initialize→get_board→propose→accept over live localhost MCP")
+                    exit(0)
+                }
+            }
+        }
+    }
+
     /// Opens the example board, stages an agent proposal (add a cache), and
     /// captures the review banner — for reviewing the proposal UI.
     private func runProposalScreenshot(saveTo url: URL) {
@@ -287,6 +373,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         if CommandLine.arguments.contains("--catalog-test") {
             runCatalogTest()
+        }
+        if CommandLine.arguments.contains("--agent-test") {
+            runAgentTest()
         }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot-catalog"),
            CommandLine.arguments.indices.contains(index + 1) {

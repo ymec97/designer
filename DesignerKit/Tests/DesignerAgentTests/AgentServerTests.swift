@@ -40,6 +40,43 @@ final class AgentServerTests: XCTestCase {
         XCTAssertNoThrow(try LLMInterchange.parse(text))
     }
 
+    func testBrowserOriginRejectedAndGETRefused() throws {
+        let board = try LLMInterchange.parse(
+            "# designer-board\n\n" + #"{"nodes":[{"id":"a","name":"a"}],"edges":[]}"# + "\n"
+        ).board
+        let server = AgentServer(bridge: ServerStubBridge(board))
+        let ready = expectation(description: "ready")
+        try server.start(preferredPort: 0) { _ in ready.fulfill() }
+        wait(for: [ready], timeout: 5)
+        defer { server.stop() }
+
+        // A cross-origin browser POST carries an Origin header → 403.
+        var post = URLRequest(url: URL(string: server.endpointURL)!)
+        post.httpMethod = "POST"
+        post.setValue("https://evil.example", forHTTPHeaderField: "Origin")
+        post.httpBody = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.utf8)
+        XCTAssertEqual(try status(of: post), 403)
+
+        // GET has no SSE stream to offer → 405 per Streamable HTTP.
+        var get = URLRequest(url: URL(string: server.endpointURL)!)
+        get.httpMethod = "GET"
+        XCTAssertEqual(try status(of: get), 405)
+    }
+
+    private func status(of request: URLRequest) throws -> Int {
+        var code = -1
+        var thrown: Error?
+        let done = expectation(description: "status \(request.httpMethod ?? "")")
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error { thrown = error }
+            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 5)
+        if let thrown { throw thrown }
+        return code
+    }
+
     /// Synchronous POST to the server's endpoint; returns the parsed JSON-RPC reply.
     private func post(to server: AgentServer, _ body: String) throws -> [String: Any] {
         let url = URL(string: server.endpointURL)!

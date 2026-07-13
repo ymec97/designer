@@ -35,8 +35,11 @@ public final class MCPHandler {
 
         switch method {
         case "initialize":
+            // Echo the client's requested version — our tools-only surface is
+            // identical across MCP revisions, so don't force a disconnect.
+            let requested = params["protocolVersion"] as? String
             return encode(result(id: id, [
-                "protocolVersion": Self.protocolVersion,
+                "protocolVersion": (requested?.isEmpty == false) ? requested! : Self.protocolVersion,
                 "capabilities": ["tools": [:] as [String: Any]],
                 "serverInfo": ["name": Self.serverName, "version": "1"],
             ]))
@@ -84,6 +87,9 @@ public final class MCPHandler {
                 return "\(node.semantic.name.isEmpty ? "untitled" : node.semantic.name)\(kind)"
             }.joined(separator: ", "))
         }
+        if bridge?.hasPendingProposal() == true {
+            lines.append("A previous proposal is still awaiting the user's Accept/Reject in Designer.")
+        }
         lines.append("Call get_board for the full editable representation.")
         return .text(lines.joined(separator: "\n"))
     }
@@ -112,28 +118,45 @@ public final class MCPHandler {
     }
 
     private func proposeBoard(text: String, note: String?) -> ToolOutcome {
-        guard let bridge, bridge.currentBoard() != nil else { return .error(Self.noBoardMessage) }
+        guard let bridge, let current = bridge.currentBoard() else { return .error(Self.noBoardMessage) }
         let parsed: LLMInterchange.ParseResult
         do {
             parsed = try LLMInterchange.parse(text)
         } catch {
             return .error("Couldn't parse the proposed board: \((error as? LocalizedError)?.errorDescription ?? "\(error)")")
         }
-        let diff = bridge.stageProposal(parsed.board, note: note)
+        var proposed = parsed.board
+        // A proposal that omits the title keeps the board's name; only an
+        // explicit title in the JSON counts as a rename (and shows in the diff).
+        if parsed.providedTitle == nil {
+            proposed.title = current.title
+        }
+        let replacesPending = bridge.hasPendingProposal()
+        let diff = bridge.stageProposal(proposed, note: note)
         if diff.isEmpty {
             return .text("The proposed board is identical to the current one — nothing to review.")
         }
-        var lines = [
-            "Proposal staged for review in Designer: \(diff.summaryLine).",
-            "",
-            diff.detail,
-        ]
+        var lines = ["Proposal staged for review in Designer: \(diff.summaryLine)."]
+        if replacesPending {
+            lines.append("(This replaces your earlier proposal, which was still pending.)")
+        }
+        let currentBlocks = current.elements.values.filter { $0.node != nil }.count
+        if currentBlocks >= 3, diff.removedNodes.count * 2 >= currentBlocks {
+            lines.append("")
+            lines.append("""
+            ⚠️ This proposal removes \(diff.removedNodes.count) of the \(currentBlocks) existing blocks. \
+            propose_board replaces the ENTIRE diagram — if you meant to add or edit, start from the \
+            latest get_board output and include every element you want to keep.
+            """)
+        }
+        lines.append("")
+        lines.append(diff.detail)
         if !parsed.warnings.isEmpty {
             lines.append("")
             lines.append("Warnings: " + parsed.warnings.joined(separator: "; "))
         }
         lines.append("")
-        lines.append("The user will Accept or Reject this in the app; it has not been applied yet.")
+        lines.append("The user will Accept or Reject this in the app; it has not been applied yet. Call get_board afterwards to see what they decided before proposing further changes.")
         return .text(lines.joined(separator: "\n"))
     }
 
@@ -195,7 +218,7 @@ public final class MCPHandler {
         ],
         [
             "name": "propose_board",
-            "description": "Propose an edited version of the board (in the get_board JSON format). Designer shows the user a diff to Accept or Reject; nothing is applied automatically.",
+            "description": "Propose an edited version of the board. IMPORTANT: send the COMPLETE board in the get_board JSON format (start from the latest get_board output and modify it) — the proposal replaces the entire diagram, so any element you omit is treated as a deletion. Keep existing nodes' at/size so the layout is preserved; omit at/size only for NEW nodes to have them auto-placed. Designer shows the user a diff to Accept or Reject; nothing is applied automatically.",
             "inputSchema": [
                 "type": "object",
                 "properties": [

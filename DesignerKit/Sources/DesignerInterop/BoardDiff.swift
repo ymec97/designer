@@ -20,10 +20,13 @@ public struct BoardDiff: Equatable, Sendable {
     public var addedEdges: [String] = []       // "from → to (label)"
     public var removedEdges: [String] = []
     public var changedEdges: [FieldChange] = []
+    /// A board rename, shown explicitly so it can't slip through review.
+    public var titleChange: FieldChange?
 
     public var isEmpty: Bool {
         addedNodes.isEmpty && removedNodes.isEmpty && changedNodes.isEmpty
             && addedEdges.isEmpty && removedEdges.isEmpty && changedEdges.isEmpty
+            && titleChange == nil
     }
 
     /// A single-line headline for the proposal banner, e.g.
@@ -40,12 +43,16 @@ public struct BoardDiff: Equatable, Sendable {
         add(addedEdges.count, "connector", "connectors", sign: "+")
         add(removedEdges.count, "connector", "connectors", sign: "−")
         add(changedEdges.count, "connector changed", "connectors changed", sign: "~")
+        if titleChange != nil { parts.append("board renamed") }
         return parts.isEmpty ? "No changes" : parts.joined(separator: " · ")
     }
 
     /// A multi-line, human-readable breakdown for the review panel.
     public var detail: String {
         var lines: [String] = []
+        if let title = titleChange {
+            lines.append("~ title  \(title.before) → \(title.after)")
+        }
         for n in addedNodes { lines.append("+ block  \(n)") }
         for n in removedNodes { lines.append("− block  \(n)") }
         for c in changedNodes { lines.append("~ block  \(c.id): \(c.before) → \(c.after)") }
@@ -63,6 +70,10 @@ extension LLMInterchange {
         let a = WireBoard(from: current)
         let b = WireBoard(from: proposed)
         var diff = BoardDiff()
+
+        if let before = a.title, let after = b.title, before != after {
+            diff.titleChange = .init(id: "title", before: before, after: after)
+        }
 
         // Nodes, keyed by slug id.
         let aNodes = Dictionary(a.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

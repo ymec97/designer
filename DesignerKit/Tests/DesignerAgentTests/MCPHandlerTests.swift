@@ -109,4 +109,51 @@ final class MCPHandlerTests: XCTestCase {
         let r = call(#"{"jsonrpc":"2.0","id":8,"method":"frobnicate","params":{}}"#)
         XCTAssertNotNil(r["error"])
     }
+
+    func testProposalWithoutTitleKeepsBoardName() {
+        var named = bridge.board!
+        named.title = "My System"
+        bridge.board = named
+        let proposed = #"{"nodes":[{"id":"web","name":"web","kind":"client"},{"id":"api","name":"api","kind":"gateway"},{"id":"db","name":"db"}],"edges":[{"from":"web","to":"api","protocol":"HTTPS"}]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        _ = handler.handle(data)
+        XCTAssertEqual(bridge.stagedProposal?.title, "My System",
+                       "omitting the title must not rename the board to 'Imported'")
+    }
+
+    func testMassDeletionWarns() {
+        // Current board has 2 blocks; make it 4 so the guard engages.
+        bridge.board = try! LLMInterchange.parse(
+            "# designer-board\n\n" + #"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"},{"id":"c","name":"c"},{"id":"d","name":"d"}],"edges":[]}"# + "\n"
+        ).board
+        // Proposal keeps only one — the agent probably sent just its changes.
+        let proposed = #"{"nodes":[{"id":"e","name":"e"}],"edges":[]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        let r = try! JSONSerialization.jsonObject(with: handler.handle(data)!) as! [String: Any]
+        let text = toolText(r)
+        XCTAssertTrue(text.contains("removes 4 of the 4 existing blocks"), "must warn on mass deletion: \(text)")
+        XCTAssertTrue(text.contains("ENTIRE diagram"))
+    }
+
+    func testExplicitTitleChangeShowsInDiff() {
+        var named = bridge.board!
+        named.title = "My System"
+        bridge.board = named
+        let proposed = #"{"title":"Renamed System","nodes":[{"id":"web","name":"web","kind":"client"},{"id":"api","name":"api","kind":"gateway"}],"edges":[{"from":"web","to":"api","protocol":"HTTPS"}]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        let r = try! JSONSerialization.jsonObject(with: handler.handle(data)!) as! [String: Any]
+        XCTAssertTrue(toolText(r).contains("board renamed"), "explicit rename must be visible in review")
+    }
 }

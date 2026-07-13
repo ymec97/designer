@@ -15,4 +15,11 @@ public protocol AgentBoardBridge: AnyObject {
     /// Nothing is applied until the user accepts in the app.
     @discardableResult
     func stageProposal(_ proposed: Board, note: String?) -> BoardDiff
+
+    /// Whether a previously staged proposal is still awaiting Accept/Reject.
+    func hasPendingProposal() -> Bool
+}
+
+public extension AgentBoardBridge {
+    func hasPendingProposal() -> Bool { false }
 }
