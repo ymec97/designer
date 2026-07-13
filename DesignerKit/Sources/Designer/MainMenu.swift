@@ -55,6 +55,10 @@ enum MainMenu {
                      action: Selector(("toggleFlowsPanel:")),
                      keyEquivalent: "j")
         menu.addItem(.separator())
+        let assistant = menu.addItem(withTitle: "Assistant",
+                                     action: Selector(("toggleChatPanel:")),
+                                     keyEquivalent: "a")
+        assistant.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(withTitle: "Enable Agent Access",
                      action: Selector(("toggleAgentAccess:")),
                      keyEquivalent: "")

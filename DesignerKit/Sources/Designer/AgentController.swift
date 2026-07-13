@@ -33,6 +33,19 @@ final class AgentController: NSObject, AgentBoardBridge {
 
     var endpointURL: String { server.endpointURL }
 
+    /// Ensures the local server is running (for the in-app chat) without any
+    /// UI; calls back on the main thread with the endpoint URL.
+    func ensureEnabled(onReady: @escaping (String) -> Void) {
+        if isEnabled, server.port != 0 {
+            onReady(endpointURL)
+            return
+        }
+        try? enable { [weak self] _ in
+            guard let self else { return }
+            onReady(self.endpointURL)
+        }
+    }
+
     // MARK: AgentBoardBridge (invoked on the server's background queue)
 
     func currentBoard() -> Board? {

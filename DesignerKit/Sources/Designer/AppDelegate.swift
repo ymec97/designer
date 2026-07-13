@@ -447,6 +447,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if CommandLine.arguments.contains("--agent-test") {
             runAgentTest()
         }
+        // Debug/testing: open the example board with the agent server running
+        // and stay alive (drive it externally, e.g. from the claude CLI).
+        if CommandLine.arguments.contains("--agent-serve") {
+            let controller = NSDocumentController.shared
+            if let typeName = controller.defaultType,
+               let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument {
+                document.board = ExampleBoard.make()
+                controller.addDocument(document)
+                document.makeWindowControllers()
+                document.showWindows()
+                try? AgentController.shared.enable { port in
+                    print("AGENT-SERVE READY: http://127.0.0.1:\(port)/mcp")
+                }
+            }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot-catalog"),
            CommandLine.arguments.indices.contains(index + 1) {
             runCatalogScreenshot(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))

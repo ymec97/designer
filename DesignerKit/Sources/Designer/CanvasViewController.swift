@@ -74,6 +74,93 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installSimulationTransport()
         installAgentProposalPanel()
         installFlowsPanel()
+        installChatPanel()
+    }
+
+    // MARK: In-app assistant (F6)
+
+    private let chatModel = ChatPanelModel()
+    private let chatEngine = ChatEngine()
+    private var chatPanelHost: NSView?
+
+    @objc func toggleChatPanel(_ sender: Any?) {
+        chatModel.visible.toggle()
+        chatPanelHost?.isHidden = !chatModel.visible
+        if chatModel.visible {
+            refreshChatSetupState()
+            // Warm up the local MCP server so the first message is fast.
+            AgentController.shared.ensureEnabled { _ in }
+        }
+    }
+
+    private func refreshChatSetupState() {
+        switch chatEngine.setupState {
+        case .ready:
+            chatModel.setupHint = nil
+        case .notInstalled:
+            chatModel.setupHint = """
+            The assistant uses the Claude Code CLI so it's billed to your Claude \
+            subscription (no API key). Install it, sign in once, then reopen this panel:
+
+            1.  npm install -g @anthropic-ai/claude-code   (or: brew install claude-code)
+            2.  Run `claude` in Terminal and log in
+            """
+        }
+    }
+
+    private func sendChatMessage(_ text: String) {
+        chatModel.messages.append(ChatMessage(role: .user, text: text))
+        chatModel.isThinking = true
+        AgentController.shared.ensureEnabled { [weak self] endpoint in
+            self?.chatEngine.send(text, mcpEndpoint: endpoint)
+        }
+    }
+
+    private func handleChatEvent(_ event: ChatStreamEvent) {
+        switch event {
+        case .assistantText(let text):
+            chatModel.messages.append(ChatMessage(role: .assistant, text: text))
+        case .toolUse(let name):
+            chatModel.messages.append(ChatMessage(
+                role: .activity, text: ChatStreamParser.activityLabel(forTool: name)))
+        case .finished(let success, let summary):
+            chatModel.isThinking = false
+            if !success {
+                chatModel.messages.append(ChatMessage(
+                    role: .error, text: summary ?? "The assistant stopped unexpectedly."))
+            }
+        case .sessionStarted, .ignored:
+            break
+        }
+    }
+
+    private func installChatPanel() {
+        chatEngine.onEvent = { [weak self] event in self?.handleChatEvent(event) }
+        let panel = ChatPanel(
+            model: chatModel,
+            actions: ChatPanelActions(
+                send: { [weak self] text in self?.sendChatMessage(text) },
+                stop: { [weak self] in
+                    self?.chatEngine.stop()
+                    self?.chatModel.isThinking = false
+                },
+                newConversation: { [weak self] in
+                    self?.chatEngine.resetConversation()
+                    self?.chatModel.messages = []
+                    self?.chatModel.isThinking = false
+                },
+                close: { [weak self] in self?.toggleChatPanel(nil) }
+            )
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+        ])
+        chatPanelHost = host
     }
 
     // MARK: Flows (F5)
@@ -600,6 +687,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Show Flows Panel", shortcut: "⌘J", systemImage: "point.topleft.down.curvedto.point.bottomright.up") { [weak self] in
                 self?.toggleFlowsPanel(nil)
+            },
+            PaletteCommand(title: "Assistant (Chat with Claude)", shortcut: "⇧⌘A", systemImage: "sparkles") { [weak self] in
+                self?.toggleChatPanel(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
                 self?.toggleLayersPanel(nil)

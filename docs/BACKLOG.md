@@ -44,6 +44,23 @@ Two refinements deferred from the first cut:
   proposed board's positions/ids differ; render the proposed board's own
   layout as a translucent overlay keyed off the diff.
 
+### F6. In-app chat panel (Claude/ChatGPT via user's subscription)
+*Requested 2026-07-13 by Yarden.* A chat drawer inside Designer where the user
+talks to an assistant that reads/edits the open board — no external app.
+Design (CLI-bridge approach, the only subscription-billed path):
+- There is NO public API for consumer subscriptions directly; but **Claude
+  Code CLI** authenticates with a Claude Pro/Max subscription and runs
+  headless (`claude -p --output-format stream-json`), and **Codex CLI**
+  signs in with a ChatGPT subscription. Designer spawns the CLI as a child
+  process per conversation, pointing it at Designer's own MCP server
+  (`--mcp-config` → http://127.0.0.1:PORT/mcp), so the assistant uses the
+  same describe/get/search/propose tools — proposals still land in the
+  review banner (consent preserved; optional auto-accept toggle later).
+- Chat panel: transcript + input, streaming responses, "working on the
+  board…" states for tool calls; provider picker (Claude first; Codex
+  later); setup detection (`which claude`, logged-in probe) with friendly
+  guidance when missing; session continuity via --resume.
+
 ### F3. Version history (Confluence-style) for boards
 *Requested 2026-07-13 by Yarden while designing the MCP agent surface.*
 A named-version history per board: snapshot points (manual "save version" and/or
