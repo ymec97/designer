@@ -1007,6 +1007,63 @@ public final class CanvasView: NSView {
         createBlock(at: viewport.toWorld(CGPoint(x: bounds.midX, y: bounds.midY)))
     }
 
+    // MARK: Copy / paste / duplicate
+
+    /// Pasteboard type carrying a self-contained clip (a mini-board's JSON), so
+    /// elements round-trip losslessly — including across document windows.
+    public static let clipPasteboardType = NSPasteboard.PasteboardType("com.yarden.designer.clip")
+
+    @objc public func copy(_ sender: Any?) {
+        guard !selection.isEmpty else { return }
+        let clip = board.makeClip(of: selection)
+        guard let data = try? JSONEncoder().encode(clip) else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setData(data, forType: Self.clipPasteboardType)
+    }
+
+    @objc public func cut(_ sender: Any?) {
+        guard !selection.isEmpty else { return }
+        copy(sender)
+        deleteSelection(sender)
+    }
+
+    @objc public func paste(_ sender: Any?) {
+        guard let data = NSPasteboard.general.data(forType: Self.clipPasteboardType),
+              let clip = try? JSONDecoder().decode(Board.self, from: data),
+              !clip.elements.isEmpty else { return }
+        insertClip(clip, centeredOnViewport: true)
+    }
+
+    @objc public func duplicateSelection(_ sender: Any?) {
+        guard !selection.isEmpty else { return }
+        let clip = board.makeClip(of: selection)
+        insertClip(clip, centeredOnViewport: false)
+    }
+
+    /// Instantiates a clip into the board with fresh IDs on the active layer,
+    /// then selects the new elements. Centered on the viewport (paste) or
+    /// nudged from the original (duplicate).
+    private func insertClip(_ clip: Board, centeredOnViewport: Bool) {
+        let layerIDs = activeLayerIDs()
+        guard let layerID = layerIDs.first ?? board.layers.first?.id else { return }
+
+        var dx = 24.0, dy = 24.0
+        if centeredOnViewport, let bounds = clip.contentBounds() {
+            let center = visibleCenterWorld
+            dx = center.x - bounds.midX
+            dy = center.y - bounds.midY
+        }
+        let (operations, newIDs) = board.instantiateOperations(from: clip, offsetBy: dx, dy, onto: layerID)
+        guard !operations.isEmpty else { return }
+        delegate?.canvasView(self, perform: .batch(operations), actionName: "Paste")
+        select(newIDs)
+    }
+
+    public var canPaste: Bool {
+        NSPasteboard.general.data(forType: Self.clipPasteboardType) != nil
+    }
+
     @objc public func activateSelectTool(_ sender: Any?) {
         tool = .select
     }
@@ -1327,6 +1384,20 @@ public final class CanvasView: NSView {
     public override func resetCursorRects() {
         if tool == .draw {
             addCursorRect(bounds, cursor: .crosshair)
+        }
+    }
+}
+
+extension CanvasView: NSMenuItemValidation {
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)), #selector(cut(_:)),
+             #selector(duplicateSelection(_:)), #selector(deleteSelection(_:)):
+            return !selection.isEmpty
+        case #selector(paste(_:)):
+            return canPaste
+        default:
+            return true
         }
     }
 }

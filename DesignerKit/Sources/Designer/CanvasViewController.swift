@@ -93,6 +93,46 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         view.window?.makeFirstResponder(canvasView)
     }
 
+    /// Headless copy → paste → duplicate check for --ui-test.
+    func runClipboardSelfTest() -> String? {
+        let layer = document.board.layers[0].id
+        let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "clip-src"),
+                                            frame: Rect(x: 1200, y: 1200, width: 100, height: 50))))
+        document.perform(.insertElement(a), actionName: "Clip Test Node")
+        let baseCount = document.board.elements.count
+
+        canvasView.select([a.id])
+        canvasView.copy(nil)
+        guard NSPasteboard.general.data(forType: CanvasView.clipPasteboardType) != nil else {
+            return "copy did not write the clip pasteboard type"
+        }
+
+        canvasView.paste(nil)
+        guard document.board.elements.count == baseCount + 1 else {
+            return "paste did not add one element (\(document.board.elements.count) vs \(baseCount + 1))"
+        }
+        // The pasted element is selected and is a distinct copy.
+        guard canvasView.selection.count == 1, let pastedID = canvasView.selection.first,
+              pastedID != a.id else {
+            return "pasted element not selected as a fresh copy"
+        }
+        guard document.board.elements[pastedID]?.node?.semantic.name == "clip-src" else {
+            return "pasted node lost its content"
+        }
+
+        canvasView.duplicateSelection(nil)
+        guard document.board.elements.count == baseCount + 2 else {
+            return "duplicate did not add one element"
+        }
+
+        // Undo the whole test (duplicate, paste, insert).
+        document.undoManager?.undo()
+        document.undoManager?.undo()
+        document.undoManager?.undo()
+        return nil
+    }
+
     /// Headless simulate check for --ui-test: builds a small A→B→C graph,
     /// runs and stops a simulation, verifies activation + model reachability.
     func runSimulationSelfTest() -> String? {
@@ -206,7 +246,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Structurize Sketch into Shapes", shortcut: "⌘R", systemImage: "wand.and.stars") { [weak self] in
                 self?.structurize(nil)
             },
-            PaletteCommand(title: "Simulate Traffic from Selection", shortcut: nil, systemImage: "play.circle") { [weak self] in
+            PaletteCommand(title: "Simulate Traffic from Selection", shortcut: "⌘↩", systemImage: "play.circle") { [weak self] in
                 self?.simulateTraffic(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in

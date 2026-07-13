@@ -25,7 +25,33 @@ struct CommandPalette: View {
     private var filtered: [PaletteCommand] {
         let q = model.query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return model.commands }
-        return model.commands.filter { fuzzyMatch(q, $0.title.lowercased()) }
+        // Score each command; keep matches, best first. Stable ordering for
+        // equal scores preserves the natural command order.
+        return model.commands
+            .map { (command: $0, score: score(query: q, title: $0.title.lowercased())) }
+            .filter { $0.score > 0 }
+            .enumerated()
+            .sorted { ($0.element.score, -$0.offset) > ($1.element.score, -$1.offset) }
+            .map { $0.element.command }
+    }
+
+    /// 0 = no match. Higher is better: whole-title prefix > any-word prefix >
+    /// substring > in-order subsequence.
+    private func score(query: String, title: String) -> Int {
+        if title.hasPrefix(query) { return 100 }
+        let words = title.split(whereSeparator: { $0 == " " || $0 == "-" })
+        if words.contains(where: { $0.hasPrefix(query) }) { return 80 }
+        if title.contains(query) { return 60 }
+        return isSubsequence(query, of: title) ? 30 : 0
+    }
+
+    private func isSubsequence(_ query: String, of text: String) -> Bool {
+        var index = text.startIndex
+        for character in query {
+            guard let found = text[index...].firstIndex(of: character) else { return false }
+            index = text.index(after: found)
+        }
+        return true
     }
 
     var body: some View {
@@ -110,17 +136,6 @@ struct CommandPalette: View {
         let command = filtered[clampedIndex]
         close()
         command.run()
-    }
-
-    /// Subsequence fuzzy match: all query chars appear in order.
-    private func fuzzyMatch(_ query: String, _ text: String) -> Bool {
-        if text.contains(query) { return true }
-        var index = text.startIndex
-        for character in query {
-            guard let found = text[index...].firstIndex(of: character) else { return false }
-            index = text.index(after: found)
-        }
-        return true
     }
 }
 

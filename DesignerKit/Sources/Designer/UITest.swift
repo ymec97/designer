@@ -49,9 +49,10 @@ final class UITestDriver {
         step13LibraryRoundTrip()
         step14LLMInterchangeAndExport()
         step15TrafficSimulation()
+        step16Clipboard()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard verified")
             exit(0)
         } else {
             for failure in failures {
@@ -539,6 +540,16 @@ final class UITestDriver {
         }
         if let failure = controller.runSimulationSelfTest() {
             expect(false, "traffic simulation failed: \(failure)")
+        }
+    }
+
+    private func step16Clipboard() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for clipboard test")
+            return
+        }
+        if let failure = controller.runClipboardSelfTest() {
+            expect(false, "clipboard failed: \(failure)")
         }
     }
 

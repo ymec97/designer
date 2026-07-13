@@ -43,9 +43,10 @@ enum MainMenu {
                      action: Selector(("structurize:")),
                      keyEquivalent: "r")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Simulate Traffic from Selection",
-                     action: Selector(("simulateTraffic:")),
-                     keyEquivalent: "")
+        let simulate = menu.addItem(withTitle: "Simulate Traffic from Selection",
+                                    action: Selector(("simulateTraffic:")),
+                                    keyEquivalent: "\r")
+        simulate.keyEquivalentModifierMask = [.command]
         menu.addItem(withTitle: "Convert Sketches Automatically",
                      action: Selector(("toggleLiveRecognition:")),
                      keyEquivalent: "")
@@ -171,6 +172,15 @@ enum MainMenu {
         menu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         menu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        menu.addItem(withTitle: "Duplicate",
+                     action: Selector(("duplicateSelection:")),
+                     keyEquivalent: "d")
+        // No key equivalent on Delete — the canvas handles the delete key in
+        // keyDown, so a menu key equivalent would hijack backspace while
+        // editing a label.
+        menu.addItem(withTitle: "Delete",
+                     action: Selector(("deleteSelection:")),
+                     keyEquivalent: "")
         menu.addItem(withTitle: "Select All",
                      action: #selector(NSText.selectAll(_:)),
                      keyEquivalent: "a")
