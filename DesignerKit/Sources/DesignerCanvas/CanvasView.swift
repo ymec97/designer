@@ -475,6 +475,7 @@ public final class CanvasView: NSView {
             renderer.drawSnapGuide(guide, in: context, viewport: viewport)
         }
 
+        drawProposalGhostOverlay(in: context)
         drawSimulationOverlay(in: context)
         drawFlowRecordingOverlay(in: context)
         drawInFlightGesture(in: context)
@@ -657,6 +658,127 @@ public final class CanvasView: NSView {
                 renderer.drawSimulationTag(condition, at: view, in: context, viewport: viewport, color: simulationColor)
             }
         }
+    }
+
+    // MARK: Agent proposal ghosts (F4)
+
+    /// A staged proposal rendered as ghosts: additions from the proposed
+    /// board (dashed accent, translucent), removals marked on the current
+    /// board (dashed red outline). Cleared on accept/reject.
+    public struct ProposalGhost {
+        public let proposedBoard: Board
+        public let addedElements: Set<ElementID>
+        public let removedElements: Set<ElementID>
+
+        public init(proposedBoard: Board, addedElements: Set<ElementID>, removedElements: Set<ElementID>) {
+            self.proposedBoard = proposedBoard
+            self.addedElements = addedElements
+            self.removedElements = removedElements
+        }
+    }
+
+    public var proposalGhost: ProposalGhost? {
+        didSet { needsDisplay = true }
+    }
+
+    /// World bounds of the ghosted additions (for the reveal camera).
+    public func proposalGhostBounds() -> Rect? {
+        guard let ghost = proposalGhost else { return nil }
+        let frames = ghost.proposedBoard.frameProvider()
+        var union: Rect?
+        for id in ghost.addedElements {
+            guard let element = ghost.proposedBoard.elements[id] else { continue }
+            let rect: Rect?
+            if let node = element.node {
+                rect = node.frame
+            } else if let edge = element.edge {
+                rect = EdgeGeometry.route(for: edge, frames: frames)?.boundingRect
+            } else if case .note(let note) = element.content {
+                rect = note.frame
+            } else {
+                rect = nil
+            }
+            guard let rect else { continue }
+            union = union.map { Self.union($0, rect) } ?? rect
+        }
+        return union
+    }
+
+    private static func union(_ a: Rect, _ b: Rect) -> Rect {
+        let minX = min(a.x, b.x), minY = min(a.y, b.y)
+        let maxX = max(a.x + a.width, b.x + b.width)
+        let maxY = max(a.y + a.height, b.y + b.height)
+        return Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Pans/zooms so `worldRect` is comfortably visible (zooming out as
+    /// needed, never zooming in past 1×) — used to reveal staged proposals.
+    public func reveal(worldRect: Rect) {
+        let padded = Rect(
+            x: worldRect.x - 120, y: worldRect.y - 120,
+            width: worldRect.width + 240, height: worldRect.height + 240
+        )
+        let visible = viewport.visibleWorldRect(viewSize: bounds.size)
+        let contained = padded.x >= visible.x && padded.y >= visible.y
+            && padded.x + padded.width <= visible.x + visible.width
+            && padded.y + padded.height <= visible.y + visible.height
+        guard !contained else { return }
+        // Frame the target together with existing content so context is kept.
+        var target = padded
+        if let content = board.contentBounds() {
+            target = Self.union(target, content)
+        }
+        viewport.fit(target, in: bounds.size, padding: 60)
+        if viewport.scale > 1 { // don't zoom IN past 100% for a reveal
+            viewport.scale = 1
+            viewport.origin = Point(
+                x: target.x + target.width / 2 - Double(bounds.width) / 2,
+                y: target.y + target.height / 2 - Double(bounds.height) / 2
+            )
+        }
+        needsDisplay = true
+    }
+
+    private func drawProposalGhostOverlay(in context: CGContext) {
+        guard let ghost = proposalGhost else { return }
+        let ghostFrames = ghost.proposedBoard.frameProvider()
+
+        // Removals: dashed red outline on current elements.
+        for id in ghost.removedElements {
+            guard let element = board.elements[id] else { continue }
+            let rect: CGRect?
+            if let node = element.node {
+                rect = viewport.toView(node.frame)
+            } else if let edge = element.edge, let route = routeCache[id] {
+                renderer.drawProposalRemovedRoute(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
+                _ = edge
+                rect = nil
+            } else {
+                rect = nil
+            }
+            if let rect {
+                renderer.drawProposalRemovedOutline(rect, in: context, viewport: viewport)
+            }
+        }
+
+        // Additions: the proposed elements rendered translucent + dashed.
+        context.saveGState()
+        context.setAlpha(0.62)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        for element in ghost.proposedBoard.elementsInZOrder where ghost.addedElements.contains(element.id) {
+            if let edge = element.edge {
+                if let route = EdgeGeometry.route(for: edge, frames: ghostFrames) {
+                    renderer.drawFlowCandidate(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
+                }
+            } else {
+                renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+                if let node = element.node {
+                    renderer.drawProposalAddedOutline(viewport.toView(node.frame), in: context, viewport: viewport)
+                }
+            }
+        }
+        context.endTransparencyLayer()
+        context.restoreGState()
     }
 
     // MARK: Flow recording (F5)

@@ -12,6 +12,15 @@ struct WireBoard: Codable {
     var edges: [WireEdge]
     var notes: [WireNote]?
 
+    /// Source element ids parallel to `nodes`/`edges` (set by `init(from:)`
+    /// only; not serialized). Lets the diff map wire keys back to elements.
+    var nodeSourceIDs: [ElementID] = []
+    var edgeSourceIDs: [ElementID] = []
+
+    enum CodingKeys: String, CodingKey {
+        case format, version, title, nodes, edges, notes
+    }
+
     struct WireNode: Codable {
         var id: String
         var kind: String?
@@ -57,6 +66,7 @@ extension WireBoard {
             let base = Self.slug(node.semantic.name.isEmpty ? node.semantic.kind.rawValue : node.semantic.name)
             let slug = Self.unique(base.isEmpty ? "node" : base, in: &usedSlugs)
             idForElement[element.id] = slug
+            nodeSourceIDs.append(element.id)
             wireNodes.append(WireNode(
                 id: slug,
                 kind: node.semantic.kind == .generic ? nil : node.semantic.kind.rawValue,
@@ -69,22 +79,27 @@ extension WireBoard {
         }
         nodes = wireNodes
 
-        edges = board.elementsInZOrder.compactMap { element in
+        var wireEdges: [WireEdge] = []
+        var wireEdgeSources: [ElementID] = []
+        for element in board.elementsInZOrder {
             guard let edge = element.edge,
                   let fromID = edge.from.elementID, let from = idForElement[fromID],
-                  let toID = edge.to.elementID, let to = idForElement[toID] else { return nil }
+                  let toID = edge.to.elementID, let to = idForElement[toID] else { continue }
+            wireEdgeSources.append(element.id)
             var props = edge.semantic.properties
             let proto = props.removeValue(forKey: WellKnownEdgeProperty.protocolKey)
             let data = props.removeValue(forKey: WellKnownEdgeProperty.data)
             let condition = props.removeValue(forKey: WellKnownEdgeProperty.condition)
-            return WireEdge(
+            wireEdges.append(WireEdge(
                 from: from, to: to,
                 label: edge.semantic.label,
                 direction: edge.semantic.direction == .forward ? nil : edge.semantic.direction.rawValue,
                 protocol: proto, data: data, condition: condition,
                 props: props.isEmpty ? nil : props
-            )
+            ))
         }
+        edges = wireEdges
+        edgeSourceIDs = wireEdgeSources
 
         let noteElements = board.elementsInZOrder.compactMap { element -> WireNote? in
             guard case .note(let note) = element.content else { return nil }

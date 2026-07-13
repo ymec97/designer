@@ -23,6 +23,12 @@ public struct BoardDiff: Equatable, Sendable {
     /// A board rename, shown explicitly so it can't slip through review.
     public var titleChange: FieldChange?
 
+    /// Proposed-side element ids of additions (nodes + edges) — lets the
+    /// canvas ghost-render exactly what would appear.
+    public var addedElementIDs: Set<ElementID> = []
+    /// Current-side element ids of removals — ghost-marked on the canvas.
+    public var removedElementIDs: Set<ElementID> = []
+
     public var isEmpty: Bool {
         addedNodes.isEmpty && removedNodes.isEmpty && changedNodes.isEmpty
             && addedEdges.isEmpty && removedEdges.isEmpty && changedEdges.isEmpty
@@ -75,33 +81,42 @@ extension LLMInterchange {
             diff.titleChange = .init(id: "title", before: before, after: after)
         }
 
-        // Nodes, keyed by slug id.
-        let aNodes = Dictionary(a.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let bNodes = Dictionary(b.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in bNodes.keys where aNodes[id] == nil {
-            diff.addedNodes.append(bNodes[id]!.displayName)
+        // Nodes, keyed by slug id, carrying their source element ids so the
+        // canvas can ghost-render additions/removals.
+        let aNodes = Dictionary(zip(a.nodes, a.nodeSourceIDs).map { ($0.id, (wire: $0, element: $1)) },
+                                uniquingKeysWith: { first, _ in first })
+        let bNodes = Dictionary(zip(b.nodes, b.nodeSourceIDs).map { ($0.id, (wire: $0, element: $1)) },
+                                uniquingKeysWith: { first, _ in first })
+        for (id, entry) in bNodes where aNodes[id] == nil {
+            diff.addedNodes.append(entry.wire.displayName)
+            diff.addedElementIDs.insert(entry.element)
         }
-        for id in aNodes.keys where bNodes[id] == nil {
-            diff.removedNodes.append(aNodes[id]!.displayName)
+        for (id, entry) in aNodes where bNodes[id] == nil {
+            diff.removedNodes.append(entry.wire.displayName)
+            diff.removedElementIDs.insert(entry.element)
         }
         for id in aNodes.keys where bNodes[id] != nil {
-            let before = aNodes[id]!.signature, after = bNodes[id]!.signature
+            let before = aNodes[id]!.wire.signature, after = bNodes[id]!.wire.signature
             if before != after {
                 diff.changedNodes.append(.init(id: id, before: before, after: after))
             }
         }
 
         // Edges, keyed by from → to (+ label to separate parallels).
-        let aEdges = Dictionary(a.edges.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
-        let bEdges = Dictionary(b.edges.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
-        for key in bEdges.keys where aEdges[key] == nil {
-            diff.addedEdges.append(bEdges[key]!.display)
+        let aEdges = Dictionary(zip(a.edges, a.edgeSourceIDs).map { ($0.key, (wire: $0, element: $1)) },
+                                uniquingKeysWith: { first, _ in first })
+        let bEdges = Dictionary(zip(b.edges, b.edgeSourceIDs).map { ($0.key, (wire: $0, element: $1)) },
+                                uniquingKeysWith: { first, _ in first })
+        for (key, entry) in bEdges where aEdges[key] == nil {
+            diff.addedEdges.append(entry.wire.display)
+            diff.addedElementIDs.insert(entry.element)
         }
-        for key in aEdges.keys where bEdges[key] == nil {
-            diff.removedEdges.append(aEdges[key]!.display)
+        for (key, entry) in aEdges where bEdges[key] == nil {
+            diff.removedEdges.append(entry.wire.display)
+            diff.removedElementIDs.insert(entry.element)
         }
         for key in aEdges.keys where bEdges[key] != nil {
-            let before = aEdges[key]!.signature, after = bEdges[key]!.signature
+            let before = aEdges[key]!.wire.signature, after = bEdges[key]!.wire.signature
             if before != after {
                 diff.changedEdges.append(.init(id: key, before: before, after: after))
             }

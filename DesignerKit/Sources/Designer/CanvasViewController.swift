@@ -510,14 +510,23 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     func presentAgentProposal(_ proposed: Board, note: String?) -> BoardDiff {
         let diff = LLMInterchange.diff(current: document.board, proposed: proposed)
         if diff.isEmpty {
-            pendingProposal = nil
-            proposalModel.pending = nil
+            clearAgentProposal()
             return diff
         }
         pendingProposal = proposed
         proposalModel.pending = AgentProposalPending(
             summary: diff.summaryLine, detail: diff.detail, note: note
         )
+        // Show the change on the canvas, not just in the banner: additions as
+        // accent ghosts, removals marked red — and bring them into view.
+        canvasView.proposalGhost = CanvasView.ProposalGhost(
+            proposedBoard: proposed,
+            addedElements: diff.addedElementIDs,
+            removedElements: diff.removedElementIDs
+        )
+        if let ghostBounds = canvasView.proposalGhostBounds() {
+            canvasView.reveal(worldRect: ghostBounds)
+        }
         view.window?.makeKeyAndOrderFront(nil)
         return diff
     }
@@ -539,6 +548,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private func clearAgentProposal() {
         pendingProposal = nil
         proposalModel.pending = nil
+        canvasView.proposalGhost = nil
     }
 
     /// Whether a proposal is awaiting review (for the self-test and menus).
@@ -571,9 +581,17 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         guard document.board.elements.count == baseCount else {
             return "proposal was applied before approval"
         }
+        // The addition must be ghost-visible on the canvas with real bounds.
+        guard let ghost = canvasView.proposalGhost, ghost.addedElements.count == 1 else {
+            return "proposal ghost not staged on canvas"
+        }
+        guard canvasView.proposalGhostBounds() != nil else {
+            return "ghost bounds missing (reveal would not know where to go)"
+        }
 
         acceptAgentProposal(nil)
         guard !hasPendingProposal else { return "proposal not cleared after accept" }
+        guard canvasView.proposalGhost == nil else { return "ghost not cleared after accept" }
         guard document.board.elements.count == baseCount + 1 else {
             return "accept did not add the block (\(document.board.elements.count) vs \(baseCount + 1))"
         }

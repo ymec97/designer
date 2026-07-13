@@ -589,6 +589,48 @@ final class BoardRenderer {
         context.restoreGState()
     }
 
+    /// A proposed-addition marker: dashed accent outline around a ghost node.
+    func drawProposalAddedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+        let r = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
+        let path = CGPath(roundedRect: rect.insetBy(dx: -3, dy: -3), cornerWidth: r, cornerHeight: r, transform: nil)
+        context.saveGState()
+        context.setStrokeColor(Graphite.accent.cgColor)
+        context.setLineWidth(1.6 * viewport.scale)
+        context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// A proposed-removal marker: dashed red outline on a current node.
+    func drawProposalRemovedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+        let red = NSColor.systemRed
+        let r = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
+        let path = CGPath(roundedRect: rect.insetBy(dx: -3, dy: -3), cornerWidth: r, cornerHeight: r, transform: nil)
+        context.saveGState()
+        context.setFillColor(red.withAlphaComponent(0.10).cgColor)
+        context.addPath(path)
+        context.fillPath()
+        context.setStrokeColor(red.withAlphaComponent(0.85).cgColor)
+        context.setLineWidth(1.6 * viewport.scale)
+        context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// A proposed-removal marker along a connector's route.
+    func drawProposalRemovedRoute(_ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport) {
+        guard viewPoints.count >= 2 else { return }
+        context.saveGState()
+        context.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.8).cgColor)
+        context.setLineWidth(2 * viewport.scale)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
+        strokePolyline(viewPoints, in: context)
+        context.restoreGState()
+    }
+
     /// A recordable connector during flow recording: dashed colored highlight.
     func drawFlowCandidate(
         _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport
