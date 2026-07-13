@@ -89,6 +89,16 @@ strokes, chain strokes whose endpoints meet within tolerance into a single
 virtual stroke, then run normal closed-shape recognition on the chain.
 Live mode could also try chaining the last few strokes on stroke-end.
 
+## Bugs / UX
+
+### B3. Name-on-snap: focus a label field when a sketch becomes a shape
+*Requested 2026-07-13 by Yarden.*
+When a freehand stroke structurizes into a block (live conversion or ⌘R),
+immediately open and focus an in-place text field on the new shape so the
+user can name it without a second action — mirrors the double-click-to-create
+flow. Hook: after `SketchConversion` produces a node, call the canvas's
+`beginLabelEdit` on the produced element (skip for connectors).
+
 ## Requested features (approved-pending, post-MVP)
 
 ### F1. Home / catalog start screen
