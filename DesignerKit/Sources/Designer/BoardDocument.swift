@@ -23,7 +23,10 @@ final class BoardDocument: NSDocument, ObservableObject {
     }
 
     override func read(from fileWrapper: FileWrapper, ofType typeName: String) throws {
-        let loaded = try BoardPackage.board(from: fileWrapper)
+        var loaded = try BoardPackage.board(from: fileWrapper)
+        // B2: boards that accumulated long z-order keys over many sessions
+        // get renumbered here, before any undo history references the keys.
+        loaded.normalizeSortKeysIfNeeded()
         if Thread.isMainThread {
             board = loaded
         } else {

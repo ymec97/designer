@@ -9,8 +9,11 @@ revisited. Do not silently drop items; move them to a milestone when picked up.
 *Reported 2026-07-12 by Yarden.* The editing field now scales with the zoomed
 node (height tracks the scaled font) instead of clipping at a fixed 24px.
 
-### B2. Sort keys grow under repeated sequential insertion
-*Found 2026-07-12 during M2 perf work. Address in M6 polish.*
+### B2. Sort keys grow under repeated sequential insertion — FIXED 2026-07-14
+*Found 2026-07-12 during M2 perf work.* Boards are renumbered to compact bulk
+keys at document load (before undo history exists) whenever any key exceeds
+24 chars; z-order preserved exactly. Mid-session growth remains bounded by
+how much a user can insert in one sitting.
 `SortKey.after()` chained N times grows keys ~1 char per ~17 insertions
 (quadratic total cost; a 5.9k-element chain visibly hung board generation).
 Bulk builders now use `SortKey.bulk(_:of:)`, but interactive boards that add
@@ -30,10 +33,9 @@ specific edges among parallels. A flow's eye-toggle gives the layer-like
 ### F4-refine. Agent-proposal review polish
 *Noted 2026-07-13 while building the MCP agent surface (F4).*
 Two refinements deferred from the first cut:
-- **Rename-aware diff.** The diff keys nodes by name-slug, so renaming a block
-  reads as remove-old + add-new (and its edges as removed+added) rather than a
-  single "renamed" change. Detect a removed/added pair with matching
-  kind/shape and incident edges and collapse it into a rename.
+- **Rename-aware diff.** DONE 2026-07-14: removed+added pairs with matching
+  footprint (or a single related-name pair) collapse to one rename; edges
+  re-keyed through the mapping.
 - **On-canvas ghost preview.** Show the proposed additions (green ghost) and
   removals (red ghost) directly on the canvas during review, not just the
   textual diff in the banner. Needs coordinate reconciliation since the
@@ -152,8 +154,9 @@ curved rendering). (b) Routing should avoid crossing over other nodes where
 possible (obstacle-aware orthogonal/curved routing; the spatial index can
 supply obstacles).
 
-### P6. App logo / icon
-*Requested 2026-07-13 by Yarden.*
+### P6. App logo / icon — DONE 2026-07-14
+*Requested 2026-07-13 by Yarden.* Generated sketch-to-structure mark
+(scripts/generate-icon.swift → App/AppIcon.icns), wired into the bundle.
 Find/design a cool logo for the app: app icon (macOS .icns via Asset
 Catalog), Dock icon, About panel. Candidate direction: geometric mark
 blending a sketched stroke morphing into a clean block+connector (the
