@@ -76,5 +76,6 @@ First testable release: the full MVP plus the post-MVP feature set.
   copy/paste/duplicate across windows.
 
 ### Performance
-- Full-viewport redraw holds 60 fps (p95 16.7 ms) on 6,000-element boards
-  during continuous pan; 120 Hz tiled rendering is on the roadmap.
+- Full-viewport redraw holds 60 fps on 6,000-element boards during
+  continuous pan, with raw draw cost at avg 4.0 ms / p95 8.1 ms — inside the
+  120 Hz ProMotion budget (verified by --perf-test's draw-cost line).

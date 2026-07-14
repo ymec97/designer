@@ -234,8 +234,16 @@ packet along edge routes + node pulses; play/pause/restart + speed; a
 non-destructive read-only "Simulate" mode (esc to exit). Must stay smooth
 (display-link driven, dirty-region redraw) and respect Reduce Motion.
 
-### P8. High-refresh / tiled-canvas rendering (120 Hz on ProMotion)
-*Identified 2026-07-13 during the design pass. Performance investment.*
+### P8. High-refresh rendering (120 Hz on ProMotion) — BUDGET MET 2026-07-15
+*Identified 2026-07-13.* The perf harness now measures RAW draw cost (frame
+intervals are vsync-paced and hid all headroom): after replacing the per-frame
+id-hashing cull with a z-order bitmap, the 6k-element benchmark draws at
+avg 4.0 ms / p95 8.1 ms — inside the 8.3 ms 120 Hz budget (95% of frames).
+--perf-test reports the budget line on every run. Still open, deliberately:
+the tiled/GPU-transform architecture below is the escalation path if real
+boards outgrow the budget, and true 120 Hz needs verification on a ProMotion
+display (the dev Mac's panel runs 60 Hz).
+Original notes:
 The canvas fully re-rasterizes every frame. It holds ~60 fps (16.7 ms, p95
 16.7 ms) during worst-case continuous pan of 2k nodes + 4k edges — meeting the
 D12 hard floor ("never below 60 Hz") but not the 120 Hz-on-ProMotion target

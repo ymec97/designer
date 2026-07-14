@@ -20,6 +20,9 @@ final class PerfTestDriver: NSObject {
     private var lastTimestamp: CFTimeInterval = 0
     private var deltas: [Double] = []
     private var phases: [Int] = []
+    /// Raw synchronous draw cost per frame — the number the 120 Hz budget is
+    /// judged on (frame INTERVALS are vsync-paced and hide headroom).
+    private var drawCosts: [Double] = []
     private var initialViewport = CanvasViewport()
     private var fitViewport = CanvasViewport()
 
@@ -149,7 +152,12 @@ final class PerfTestDriver: NSObject {
             canvasView.viewport = viewport
         default:
             finish(refreshInterval: link.duration)
+            return
         }
+        // Force the draw now and time it: actual CPU cost, not vsync pacing.
+        let drawStart = CACurrentMediaTime()
+        canvasView.display()
+        drawCosts.append(CACurrentMediaTime() - drawStart)
     }
 
     private func finish(refreshInterval: CFTimeInterval) {
@@ -185,6 +193,22 @@ final class PerfTestDriver: NSObject {
             dropped, droppedFraction * 100, metRefreshFraction * 100
         )
         print(report)
+
+        // P8: the ProMotion aspiration, measured as raw draw cost against the
+        // 8.3 ms/frame budget (interval pacing can't exceed the display's Hz).
+        if !drawCosts.isEmpty {
+            let sortedCosts = drawCosts.sorted()
+            let costAverage = drawCosts.reduce(0, +) / Double(drawCosts.count)
+            let costP95 = sortedCosts[Int(Double(sortedCosts.count) * 0.95)]
+            let budget = 1.0 / 120.0
+            let met = sortedCosts.filter { $0 <= budget }.count
+            print(String(
+                format: "  draw-cost avg=%.2fms p95=%.2fms | 120Hz budget (8.3ms): %@ (%.0f%% of frames)",
+                costAverage * 1000, costP95 * 1000,
+                costP95 <= budget ? "MET" : "NOT MET",
+                Double(met) / Double(drawCosts.count) * 100
+            ))
+        }
 
         for phase in 0...2 {
             let phaseDeltas = zip(phases, deltas).filter { $0.0 == phase }.map(\.1)

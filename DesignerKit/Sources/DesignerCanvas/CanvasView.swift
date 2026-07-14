@@ -25,6 +25,8 @@ public final class CanvasView: NSView {
             boardRevision += 1
             // zOrderedElements FIRST — the derived caches below read it.
             zOrderedElements = board.elementsInZOrder
+            zOrderIndex = Dictionary(
+                uniqueKeysWithValues: zOrderedElements.enumerated().map { ($1.id, $0) })
             inkElementIDs = zOrderedElements.compactMap {
                 if case .ink = $0.content { return $0.id }
                 return nil
@@ -40,6 +42,9 @@ public final class CanvasView: NSView {
 
     /// Cached draw order — rebuilt on board changes, never per frame.
     private var zOrderedElements: [Element] = []
+    /// id → position in `zOrderedElements` (P8: per-frame culling runs over
+    /// a bitmap instead of hashing every element id).
+    private var zOrderIndex: [ElementID: Int] = [:]
     /// Resolved edge routes — rebuilt on board changes; only edges touched by
     /// an in-flight drag are re-resolved per frame.
     private var routeCache: [ElementID: EdgeGeometry.Route] = [:]
@@ -451,9 +456,19 @@ public final class CanvasView: NSView {
             visibleIDs.formUnion(dragAffectedEdges)
             probe("query")
 
-            // Cached z-order; per-frame work is a filter, not a sort.
-            let drawables = zOrderedElements.filter { element in
-                visibleIDs.contains(element.id) && isOnVisibleLayer(element)
+            // Cached z-order; per-frame work is a filter, not a sort. The
+            // membership test runs over a Bool bitmap indexed by cached
+            // z-position — hashing the visible ids once (P8: hashing every
+            // element id per frame was ~3ms of an 8.3ms budget).
+            var visibleBitmap = [Bool](repeating: false, count: zOrderedElements.count)
+            for id in visibleIDs {
+                if let index = zOrderIndex[id] { visibleBitmap[index] = true }
+            }
+            var drawables: [Element] = []
+            drawables.reserveCapacity(min(visibleIDs.count, zOrderedElements.count))
+            for (index, element) in zOrderedElements.enumerated()
+            where visibleBitmap[index] && isOnVisibleLayer(element) {
+                drawables.append(element)
             }
             probe("filter")
 
