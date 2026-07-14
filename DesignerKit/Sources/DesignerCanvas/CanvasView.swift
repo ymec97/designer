@@ -1067,12 +1067,13 @@ public final class CanvasView: NSView {
         if let hit {
             if event.modifierFlags.contains(.shift) {
                 if selection.contains(hit.id) {
-                    selection.remove(hit.id)
+                    selection.subtract(board.expandSelectionToGroups([hit.id]))
                 } else {
-                    selection.insert(hit.id)
+                    selection.formUnion(board.expandSelectionToGroups([hit.id]))
                 }
             } else if !selection.contains(hit.id) {
-                selection = [hit.id]
+                // Clicking a group member selects the whole group.
+                selection = board.expandSelectionToGroups([hit.id])
             }
         } else if !event.modifierFlags.contains(.shift) {
             selection = []
@@ -1090,7 +1091,8 @@ public final class CanvasView: NSView {
             if hitID != nil, !selection.isEmpty {
                 var originals: [ElementID: Rect] = [:]
                 for id in selection {
-                    if let element = board.elements[id], element.node != nil || isNote(element) {
+                    if let element = board.elements[id],
+                       element.node != nil || isNote(element) || element.boundary != nil {
                         originals[id] = SpatialIndex.boundingRect(of: element)
                     }
                 }
@@ -1183,7 +1185,8 @@ public final class CanvasView: NSView {
                 width: Double(band.width) / viewport.scale,
                 height: Double(band.height) / viewport.scale
             )
-            let hitIDs = spatialIndex.query(worldBand).filter { isEditable(id: $0) }
+            let hitIDs = board.expandSelectionToGroups(
+                spatialIndex.query(worldBand).filter { isEditable(id: $0) })
             if event.modifierFlags.contains(.shift) {
                 selection.formUnion(hitIDs)
             } else {
@@ -1364,6 +1367,63 @@ public final class CanvasView: NSView {
         createBlock(at: viewport.toWorld(CGPoint(x: bounds.midX, y: bounds.midY)))
     }
 
+    // MARK: Grouping & boundaries (feature 4)
+
+    public var canGroupSelection: Bool {
+        selection.count >= 2 && board.groupOperation(for: selection) != nil
+    }
+
+    public var canUngroupSelection: Bool {
+        selection.contains { board.elements[$0]?.groupID != nil }
+    }
+
+    @objc public func groupSelection(_ sender: Any?) {
+        guard let (operation, _) = board.groupOperation(for: selection) else { return }
+        delegate?.canvasView(self, perform: operation, actionName: "Group")
+    }
+
+    @objc public func ungroupSelection(_ sender: Any?) {
+        let groupIDs = Set(selection.compactMap { board.elements[$0]?.groupID })
+        let operations = groupIDs.compactMap { board.ungroupOperation($0) }
+        guard !operations.isEmpty else { return }
+        delegate?.canvasView(
+            self,
+            perform: operations.count == 1 ? operations[0] : .batch(operations),
+            actionName: "Ungroup"
+        )
+    }
+
+    /// Inserts a labeled boundary container around the selection (or a
+    /// default-sized one at the viewport center when nothing is selected),
+    /// z-ordered behind everything, and opens its label editor.
+    @objc public func addBoundaryAroundSelection(_ sender: Any?) {
+        let frame: Rect
+        let selectionFrames = selection
+            .compactMap { board.elements[$0] }
+            .compactMap { SpatialIndex.boundingRect(of: $0) }
+        if let first = selectionFrames.first {
+            var union = first
+            for rect in selectionFrames.dropFirst() { union = Self.union(union, rect) }
+            frame = Rect(x: union.x - 36, y: union.y - 44, width: union.width + 72, height: union.height + 80)
+        } else {
+            let center = visibleCenterWorld
+            frame = Rect(x: center.x - 220, y: center.y - 140, width: 440, height: 280)
+        }
+        // Bottom of the z-order: containers render behind their contents.
+        let bottomKey = SortKey.between(nil, board.elements.values.map(\.sortKey).min())
+        let layerIDs = activeLayerIDs()
+        let element = Element(
+            layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+            sortKey: bottomKey,
+            content: .boundary(Note(text: "Boundary", frame: frame))
+        )
+        delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Boundary")
+        select([element.id])
+        if let inserted = board.elements[element.id] {
+            beginLabelEdit(for: inserted)
+        }
+    }
+
     // MARK: Copy / paste / duplicate
 
     /// Pasteboard type carrying a self-contained clip (a mini-board's JSON), so
@@ -1484,7 +1544,7 @@ public final class CanvasView: NSView {
     func beginLabelEdit(for element: Element) {
         commitLabelEditor()
         guard let frame = SpatialIndex.boundingRect(of: element) else { return }
-        guard element.node != nil || isNote(element) else { return }
+        guard element.node != nil || isNote(element) || element.boundary != nil else { return }
 
         let field = NSTextField(string: currentLabel(of: element))
         field.isBordered = false
@@ -1533,6 +1593,9 @@ public final class CanvasView: NSView {
         case .note(var note):
             note.text = text
             element.content = .note(note)
+        case .boundary(var boundary):
+            boundary.text = text
+            element.content = .boundary(boundary)
         default:
             return
         }
@@ -1586,6 +1649,7 @@ public final class CanvasView: NSView {
         switch element.content {
         case .node(let node): return node.semantic.name
         case .note(let note): return note.text
+        case .boundary(let boundary): return boundary.text
         default: return ""
         }
     }
@@ -1621,6 +1685,10 @@ public final class CanvasView: NSView {
             note.frame = frame
             element.content = .note(note)
             return true
+        case .boundary(var boundary):
+            boundary.frame = frame
+            element.content = .boundary(boundary)
+            return true
         case .ink, .edge:
             return false // M3 handles ink transforms
         }
@@ -1652,6 +1720,20 @@ public final class CanvasView: NSView {
             return ink.points.contains {
                 hypot($0.x - world.x, $0.y - world.y) <= tolerance * 2
             }
+        case .boundary(let boundary):
+            // Hit only on the border band or the label strip — clicks inside
+            // the container must reach the nodes it holds.
+            let frame = boundary.frame
+            func inset(_ rect: Rect, by amount: Double) -> Rect {
+                Rect(x: rect.x + amount, y: rect.y + amount,
+                     width: max(rect.width - amount * 2, 0), height: max(rect.height - amount * 2, 0))
+            }
+            guard inset(frame, by: -tolerance).contains(world) else { return false }
+            let band = max(8 / viewport.scale, tolerance)
+            if !inset(frame, by: band).contains(world) { return true } // border band
+            // Label strip: top area where the title renders.
+            let labelStrip = Rect(x: frame.x, y: frame.y, width: frame.width, height: min(30, frame.height))
+            return labelStrip.contains(world)
         case .edge:
             guard let route = routeCache[element.id] else { return false }
             return route.distance(to: world) <= tolerance
@@ -1678,7 +1760,7 @@ public final class CanvasView: NSView {
         guard selection.count == 1,
               let id = selection.first,
               let element = board.elements[id],
-              element.node != nil || isNote(element) else { return nil }
+              element.node != nil || isNote(element) || element.boundary != nil else { return nil }
         let frame = transientFrames[id]
             ?? SpatialIndex.boundingRect(of: element)
         return frame.map { viewport.toView($0) }
@@ -1753,6 +1835,10 @@ extension CanvasView: NSMenuItemValidation {
             return !selection.isEmpty
         case #selector(paste(_:)):
             return canPaste
+        case #selector(groupSelection(_:)):
+            return canGroupSelection
+        case #selector(ungroupSelection(_:)):
+            return canUngroupSelection
         default:
             return true
         }

@@ -105,6 +105,9 @@ extension Board {
         case .note(var note):
             note.frame = offset(note.frame)
             return .note(note)
+        case .boundary(var boundary):
+            boundary.frame = offset(boundary.frame)
+            return .boundary(boundary)
         case .ink(var ink):
             ink.points = ink.points.map {
                 StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)

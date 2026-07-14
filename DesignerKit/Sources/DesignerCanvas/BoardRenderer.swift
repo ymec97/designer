@@ -63,8 +63,48 @@ final class BoardRenderer {
             )
         case .ink(let ink):
             drawInk(ink, in: context, viewport: viewport, isSelected: isSelected)
+        case .boundary(let boundary):
+            drawBoundary(
+                boundary, frame: frameOverride ?? boundary.frame,
+                in: context, viewport: viewport,
+                isSelected: isSelected, suppressText: suppressText
+            )
         case .edge:
             break // M2
+        }
+    }
+
+    /// A subsystem/trust-zone container: dashed hairline rounded rect with a
+    /// faint tint and a bold label top-left. Drawn behind nodes (z-order is
+    /// the caller's job — boundaries get bottom sort keys).
+    private func drawBoundary(
+        _ boundary: Note, frame: Rect,
+        in context: CGContext, viewport: CanvasViewport,
+        isSelected: Bool, suppressText: Bool
+    ) {
+        let rect = viewport.toView(frame)
+        let radius = min(14 * viewport.scale, rect.width / 4, rect.height / 4)
+        let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+
+        context.saveGState()
+        context.setFillColor(Graphite.accentSoft.withAlphaComponent(0.16).cgColor)
+        context.addPath(path)
+        context.fillPath()
+        context.setStrokeColor((isSelected ? Graphite.accent : Graphite.hairlineStrong).cgColor)
+        context.setLineWidth((isSelected ? 1.8 : 1.2) * viewport.scale)
+        context.setLineDash(phase: 0, lengths: [7 * viewport.scale, 5 * viewport.scale])
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+
+        if !suppressText, !boundary.text.isEmpty, viewport.scale >= Self.textVisibilityScale {
+            let fontSize = max(9, 12 * viewport.scale)
+            draw(
+                attributedString(boundary.text, fontSize: fontSize, color: Graphite.inkDim),
+                at: CGPoint(x: rect.minX + 12 * viewport.scale, y: rect.minY + 8 * viewport.scale),
+                maxWidth: rect.width - 24 * viewport.scale,
+                context: context
+            )
         }
     }
 

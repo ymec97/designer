@@ -255,6 +255,9 @@ public struct Element: Identifiable, Equatable, Sendable {
         case edge(Edge)
         case ink(Ink)
         case note(Note)
+        /// A labeled container (subsystem / trust zone) drawn behind nodes.
+        /// Same payload shape as a note: `text` is the boundary's label.
+        case boundary(Note)
     }
 
     public init(
@@ -280,6 +283,11 @@ public struct Element: Identifiable, Equatable, Sendable {
 
     public var edge: Edge? {
         if case .edge(let value) = content { return value }
+        return nil
+    }
+
+    public var boundary: Note? {
+        if case .boundary(let value) = content { return value }
         return nil
     }
 }
@@ -324,6 +332,12 @@ extension Element: Codable {
             ))
         case "note":
             content = .note(Note(
+                text: try container.decode(String.self, forKey: .text),
+                frame: try container.decode(Rect.self, forKey: .frame),
+                style: try container.decodeIfPresent(Style.self, forKey: .style) ?? Style()
+            ))
+        case "boundary":
+            content = .boundary(Note(
                 text: try container.decode(String.self, forKey: .text),
                 frame: try container.decode(Rect.self, forKey: .frame),
                 style: try container.decodeIfPresent(Style.self, forKey: .style) ?? Style()
@@ -375,6 +389,11 @@ extension Element: Codable {
             try container.encode(note.text, forKey: .text)
             try container.encode(note.frame, forKey: .frame)
             try container.encode(note.style, forKey: .style)
+        case .boundary(let boundary):
+            try container.encode("boundary", forKey: .role)
+            try container.encode(boundary.text, forKey: .text)
+            try container.encode(boundary.frame, forKey: .frame)
+            try container.encode(boundary.style, forKey: .style)
         }
 
         try encoder.encodeUnknownFields(extra)

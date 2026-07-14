@@ -39,6 +39,18 @@ enum MainMenu {
         menu.addItem(withTitle: "Add Block",
                      action: #selector(CanvasView.addBlock(_:)),
                      keyEquivalent: "b")
+        menu.addItem(withTitle: "Group",
+                     action: Selector(("groupSelection:")),
+                     keyEquivalent: "g")
+        let ungroup = menu.addItem(withTitle: "Ungroup",
+                                   action: Selector(("ungroupSelection:")),
+                                   keyEquivalent: "g")
+        ungroup.keyEquivalentModifierMask = [.command, .shift]
+        let boundary = menu.addItem(withTitle: "Add Boundary around Selection",
+                                    action: Selector(("addBoundaryAroundSelection:")),
+                                    keyEquivalent: "b")
+        boundary.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Structurize Sketch into Shapes",
                      action: Selector(("structurize:")),
                      keyEquivalent: "r")

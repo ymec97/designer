@@ -111,6 +111,8 @@ public struct SpatialIndex {
             return node.frame
         case .note(let note):
             return note.frame
+        case .boundary(let boundary):
+            return boundary.frame
         case .ink(let ink):
             guard let first = ink.points.first else { return nil }
             var minX = first.x, minY = first.y, maxX = first.x, maxY = first.y

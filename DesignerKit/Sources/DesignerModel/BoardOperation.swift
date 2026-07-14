@@ -18,6 +18,9 @@ public enum BoardOperation: Equatable, Sendable {
     case insertFlow(Flow, at: Int)
     case removeFlow(FlowID)
     case replaceFlow(Flow)
+    case insertGroup(Group)
+    case removeGroup(GroupID)
+    case replaceGroup(Group)
     /// Applied in order, inverted in reverse order. Atomic: if any child
     /// fails, the already-applied prefix is rolled back.
     case batch([BoardOperation])
@@ -34,6 +37,8 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
     case flowAlreadyExists(FlowID)
     case flowNotFound(FlowID)
     case flowIndexOutOfRange(Int)
+    case groupAlreadyExists(GroupID)
+    case groupNotFound(GroupID)
 
     public var errorDescription: String? {
         switch self {
@@ -48,6 +53,8 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
         case .flowAlreadyExists(let id): return "A flow with id \(id) already exists."
         case .flowNotFound(let id): return "No flow with id \(id)."
         case .flowIndexOutOfRange(let index): return "Flow index \(index) is out of range."
+        case .groupAlreadyExists(let id): return "A group with id \(id) already exists."
+        case .groupNotFound(let id): return "No group with id \(id)."
         }
     }
 }
@@ -150,6 +157,28 @@ extension Board {
             let old = flows[index]
             flows[index] = flow
             return .replaceFlow(old)
+
+        case .insertGroup(let group):
+            guard !groups.contains(where: { $0.id == group.id }) else {
+                throw BoardOperationError.groupAlreadyExists(group.id)
+            }
+            groups.append(group)
+            return .removeGroup(group.id)
+
+        case .removeGroup(let id):
+            guard let index = groups.firstIndex(where: { $0.id == id }) else {
+                throw BoardOperationError.groupNotFound(id)
+            }
+            let removed = groups.remove(at: index)
+            return .insertGroup(removed)
+
+        case .replaceGroup(let group):
+            guard let index = groups.firstIndex(where: { $0.id == group.id }) else {
+                throw BoardOperationError.groupNotFound(group.id)
+            }
+            let old = groups[index]
+            groups[index] = group
+            return .replaceGroup(old)
 
         case .batch(let operations):
             var inverses: [BoardOperation] = []

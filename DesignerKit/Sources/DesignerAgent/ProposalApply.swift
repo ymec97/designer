@@ -34,7 +34,7 @@ private extension Element {
     var isWireRepresentable: Bool {
         switch content {
         case .node, .edge, .note: return true
-        case .ink: return false
+        case .ink, .boundary: return false // preserved across agent proposals
         }
     }
 }

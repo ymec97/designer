@@ -39,6 +39,11 @@ public enum SVGExporter {
         let frames = source.frameProvider()
 
         var body = ""
+        // Boundaries first — containers render behind everything.
+        for element in source.elementsInZOrder {
+            guard case .boundary(let boundary) = element.content else { continue }
+            body += svgBoundary(boundary, palette: palette)
+        }
         // Edges under nodes, parallels fanned apart like the canvas.
         let offsets = EdgeGeometry.parallelOffsets(in: source)
         for element in source.elementsInZOrder {
@@ -51,7 +56,7 @@ public enum SVGExporter {
             case .node(let node): body += svgNode(node, palette: palette)
             case .note(let note): body += svgNote(note, palette: palette)
             case .ink(let ink): body += svgInk(ink, palette: palette)
-            case .edge: break
+            case .edge, .boundary: break // edges drawn above; boundaries drawn first
             }
         }
 
@@ -135,6 +140,15 @@ public enum SVGExporter {
     private static func svgNote(_ note: Note, palette: Palette) -> String {
         guard !note.text.isEmpty else { return "" }
         return "<text x=\"\(fmt(note.frame.x))\" y=\"\(fmt(note.frame.y + 14))\" font-family=\"-apple-system, sans-serif\" font-size=\"12\" fill=\"\(palette.text)\">\(escape(note.text))</text>\n"
+    }
+
+    private static func svgBoundary(_ boundary: Note, palette: Palette) -> String {
+        let f = boundary.frame
+        var svg = "<rect x=\"\(fmt(f.x))\" y=\"\(fmt(f.y))\" width=\"\(fmt(f.width))\" height=\"\(fmt(f.height))\" rx=\"14\" fill=\"\(palette.nodeFill)\" fill-opacity=\"0.35\" stroke=\"\(palette.nodeStroke)\" stroke-dasharray=\"7 5\"/>\n"
+        if !boundary.text.isEmpty {
+            svg += "<text x=\"\(fmt(f.x + 12))\" y=\"\(fmt(f.y + 20))\" font-family=\"-apple-system, sans-serif\" font-size=\"12\" font-weight=\"600\" fill=\"\(palette.text)\">\(escape(boundary.text))</text>\n"
+        }
+        return svg
     }
 
     private static func svgInk(_ ink: Ink, palette: Palette) -> String {

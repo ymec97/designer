@@ -242,6 +242,62 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         }
     }
 
+    /// Headless groups+boundaries check for --ui-test (feature 4): group two
+    /// blocks, verify whole-group selection and single-batch undo; drop a
+    /// boundary around them, verify z-order (behind), frame, and undo.
+    func runGroupsAndBoundariesSelfTest() -> String? {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 1800, width: 100, height: 50))))
+        }
+        let a = node("grp-a", 0), b = node("grp-b", 200)
+        document.perform(.batch([.insertElement(a), .insertElement(b)]), actionName: "Group Test Graph")
+
+        // Group and verify expansion.
+        canvasView.select([a.id, b.id])
+        guard canvasView.canGroupSelection else { return "canGroupSelection false" }
+        canvasView.groupSelection(nil)
+        guard let groupID = document.board.elements[a.id]?.groupID,
+              document.board.elements[b.id]?.groupID == groupID else {
+            return "grouping didn't assign groupIDs"
+        }
+        guard document.board.expandSelectionToGroups([a.id]) == [a.id, b.id] else {
+            return "selection expansion broken"
+        }
+
+        // Boundary around the group.
+        canvasView.select([a.id, b.id])
+        canvasView.addBoundaryAroundSelection(nil)
+        canvasView.commitLabelEditor() // close the auto-opened label editor
+        guard let boundaryElement = document.board.elements.values.first(where: { $0.boundary != nil }) else {
+            return "boundary not inserted"
+        }
+        guard let frame = boundaryElement.boundary?.frame,
+              frame.x < 0, frame.width > 300 else {
+            return "boundary frame doesn't wrap the selection"
+        }
+        let minKey = document.board.elements.values.map(\.sortKey).min()
+        guard boundaryElement.sortKey == minKey else {
+            return "boundary is not at the bottom of the z-order"
+        }
+
+        // Ungroup works and undo unwinds each step.
+        canvasView.select([a.id])
+        guard canvasView.canUngroupSelection else { return "canUngroup false" }
+        canvasView.ungroupSelection(nil)
+        guard document.board.elements[a.id]?.groupID == nil else { return "ungroup failed" }
+
+        document.undoManager?.undo() // regroup (undo ungroup)
+        guard document.board.elements[a.id]?.groupID != nil else { return "undo(ungroup) failed" }
+        document.undoManager?.undo() // remove boundary
+        document.undoManager?.undo() // remove group
+        document.undoManager?.undo() // remove test graph
+        guard document.board.elements[a.id] == nil else { return "cleanup undo failed" }
+        return nil
+    }
+
     /// Headless flows check for --ui-test: builds the correlated-traffic
     /// scenario (parallel gRPC+HTTP connectors A→B and B→C), records the gRPC
     /// journey, saves it, plays it, and verifies only the recorded connectors
@@ -708,6 +764,15 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Assistant (Chat with Claude)", shortcut: "⇧⌘A", systemImage: "sparkles") { [weak self] in
                 self?.toggleChatPanel(nil)
+            },
+            PaletteCommand(title: "Group Selection", shortcut: "⌘G", systemImage: "square.on.square.squareshape.controlhandles") { [weak self] in
+                self?.canvasView.groupSelection(nil)
+            },
+            PaletteCommand(title: "Ungroup Selection", shortcut: "⇧⌘G", systemImage: "square.slash") { [weak self] in
+                self?.canvasView.ungroupSelection(nil)
+            },
+            PaletteCommand(title: "Add Boundary around Selection", shortcut: "⌥⌘B", systemImage: "rectangle.dashed") { [weak self] in
+                self?.canvasView.addBoundaryAroundSelection(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
                 self?.toggleLayersPanel(nil)
