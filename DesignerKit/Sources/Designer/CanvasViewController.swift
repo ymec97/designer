@@ -158,6 +158,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private func sendChatMessage(_ text: String) {
         chatModel.messages.append(ChatMessage(role: .user, text: text))
         chatModel.isThinking = true
+        chatEngine.modelChoice = chatModel.modelChoice
+        chatEngine.effortChoice = chatModel.effortChoice
         AgentController.shared.ensureEnabled { [weak self] endpoint in
             self?.chatEngine.send(text, mcpEndpoint: endpoint)
         }
@@ -526,6 +528,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             self?.recordBarModel.connectors = connectors
             self?.flowsModel.recording = active
             self?.flowsModel.recordingConnectors = connectors
+            self?.toolbarState.recordingFlow = active
         }
         // Track play state for the panel's play/stop buttons.
         let existingHandler = canvasView.simulationStateChanged
@@ -1015,6 +1018,15 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 self.simulateTraffic(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
             },
+            onRecordFlow: { [weak self] in
+                guard let self else { return }
+                if self.canvasView.isRecordingFlow {
+                    self.canvasView.cancelFlowRecording()
+                } else {
+                    self.recordFlow(nil)
+                }
+                self.view.window?.makeFirstResponder(self.canvasView)
+            },
             onAddTypedBlock: { [weak self] entry in
                 // No focus hand-back: addBlock opens the label editor.
                 self?.canvasView.addBlock(kind: entry.kind, shape: entry.shape, orientation: entry.orientation)
@@ -1051,8 +1063,27 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     /// ⌘R: convert selected ink into blocks/connectors (one undo step).
     @objc func structurize(_ sender: Any?) {
-        guard let conversion = SketchConversion.structurize(canvasView.selection, in: document.board) else {
-            NSSound.beep()
+        // With a selection: convert those sketches. Without one: convert every
+        // freehand stroke on the board — the common "clean it all up" intent.
+        var targets = canvasView.selection
+        if SketchConversion.structurize(targets, in: document.board) == nil {
+            targets = Set(document.board.elements.values.filter {
+                if case .ink = $0.content { return true }
+                return false
+            }.map(\.id))
+        }
+        guard let conversion = SketchConversion.structurize(targets, in: document.board) else {
+            // Nothing recognizable — explain instead of beeping.
+            let alert = NSAlert()
+            alert.messageText = "Nothing to structurize"
+            alert.informativeText = """
+            Structurize (⌘R) turns freehand sketches into clean blocks and connectors.
+
+            Draw with the Draw tool (D) — a rough box, circle, diamond, or an arrow \
+            between blocks — then press ⌘R. With nothing selected it converts every \
+            sketch on the board; select strokes to convert just those.
+            """
+            alert.runModal()
             return
         }
         document.perform(

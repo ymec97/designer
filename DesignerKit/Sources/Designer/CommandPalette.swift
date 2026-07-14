@@ -35,14 +35,29 @@ struct CommandPalette: View {
             .map { $0.element.command }
     }
 
-    /// 0 = no match. Higher is better: whole-title prefix > any-word prefix >
-    /// substring > in-order subsequence.
+    /// 0 = no match. Every whitespace-separated token of the query must match
+    /// somewhere in the title (order-independent — "flow record" still finds
+    /// "Record Flow…"); the score sums per-token quality plus a bonus when
+    /// the whole query is a literal prefix of the title.
     private func score(query: String, title: String) -> Int {
-        if title.hasPrefix(query) { return 100 }
-        let words = title.split(whereSeparator: { $0 == " " || $0 == "-" })
-        if words.contains(where: { $0.hasPrefix(query) }) { return 80 }
-        if title.contains(query) { return 60 }
-        return isSubsequence(query, of: title) ? 30 : 0
+        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return 0 }
+        var total = 0
+        for token in tokens {
+            let value = tokenScore(token, in: title)
+            guard value > 0 else { return 0 } // every token must match
+            total += value
+        }
+        if title.hasPrefix(query) { total += 100 }
+        return total
+    }
+
+    /// One token against the title: word-prefix > substring > subsequence.
+    private func tokenScore(_ token: String, in title: String) -> Int {
+        let words = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        if words.contains(where: { $0.hasPrefix(token) }) { return 80 }
+        if title.contains(token) { return 60 }
+        return isSubsequence(token, of: title) ? 20 : 0
     }
 
     private func isSubsequence(_ query: String, of text: String) -> Bool {

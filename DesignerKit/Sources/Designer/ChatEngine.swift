@@ -12,6 +12,41 @@ final class ChatEngine {
         case notInstalled
     }
 
+    /// What the active provider's CLI can be asked for. UI renders from this,
+    /// so adding Codex/others later is a matter of another descriptor.
+    struct ProviderInfo {
+        struct Choice: Identifiable, Equatable {
+            let id: String   // CLI value; empty = omit the flag (provider default)
+            let label: String
+        }
+        let name: String
+        let models: [Choice]
+        let efforts: [Choice]
+    }
+
+    static let claudeProvider = ProviderInfo(
+        name: "Claude",
+        models: [
+            .init(id: "", label: "Default"),
+            .init(id: "opus", label: "Opus"),
+            .init(id: "sonnet", label: "Sonnet"),
+            .init(id: "haiku", label: "Haiku"),
+        ],
+        efforts: [
+            .init(id: "", label: "Default"),
+            .init(id: "low", label: "Low"),
+            .init(id: "medium", label: "Medium"),
+            .init(id: "high", label: "High"),
+            .init(id: "xhigh", label: "X-High"),
+        ]
+    )
+
+    var provider: ProviderInfo { Self.claudeProvider }
+    /// CLI value for --model; empty = provider default (flag omitted).
+    var modelChoice = ""
+    /// CLI value for --effort; empty = provider default (flag omitted).
+    var effortChoice = ""
+
     /// Events delivered on the main queue.
     var onEvent: ((ChatStreamEvent) -> Void)?
 
@@ -86,6 +121,12 @@ final class ChatEngine {
             "--allowedTools", Self.designerTools.joined(separator: ","),
             "--append-system-prompt", Self.steeringPrompt,
         ]
+        if !modelChoice.isEmpty {
+            arguments += ["--model", modelChoice]
+        }
+        if !effortChoice.isEmpty {
+            arguments += ["--effort", effortChoice]
+        }
         if let sessionID {
             arguments += ["--resume", sessionID]
         }

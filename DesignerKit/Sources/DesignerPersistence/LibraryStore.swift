@@ -87,7 +87,11 @@ public final class LibraryStore {
                   let entry = try? decoder.decode(LibraryEntry.self, from: data) else { continue }
             entries.append(entry)
         }
-        return entries.sorted { $0.modifiedAt > $1.modifiedAt }
+        // Tie-break on createdAt so same-millisecond saves order stably.
+        return entries.sorted {
+            if $0.modifiedAt != $1.modifiedAt { return $0.modifiedAt > $1.modifiedAt }
+            return $0.createdAt > $1.createdAt
+        }
     }
 
     /// Entries whose name or tags match `query` (case-insensitive substring).

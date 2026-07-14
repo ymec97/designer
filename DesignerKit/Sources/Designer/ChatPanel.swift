@@ -14,6 +14,10 @@ final class ChatPanelModel: ObservableObject {
     @Published var isThinking = false
     @Published var visible = false
     @Published var setupHint: String? // non-nil = CLI missing; shows guidance
+    /// Provider capabilities + current choices ("" = provider default).
+    @Published var provider = ChatEngine.claudeProvider
+    @Published var modelChoice = ""
+    @Published var effortChoice = ""
 }
 
 struct ChatPanelActions {
@@ -34,6 +38,7 @@ struct ChatPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            optionsRow
             Divider()
             transcript
             Divider()
@@ -42,6 +47,39 @@ struct ChatPanel: View {
         .frame(width: 320, height: 460)
         .floatingPanel(radius: 12)
         .graphiteAccent()
+    }
+
+    /// Model + thinking-effort selectors, driven by the provider's declared
+    /// capabilities (Claude today; Codex etc. slot in via ProviderInfo).
+    private var optionsRow: some View {
+        HStack(spacing: 10) {
+            Picker(selection: $model.modelChoice) {
+                ForEach(model.provider.models) { choice in
+                    Text(choice.label).tag(choice.id)
+                }
+            } label: {
+                Text("Model").font(.system(size: 10)).foregroundStyle(GraphiteStyle.inkFaint)
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .help("Model for the next message (Default = your Claude Code setting)")
+
+            Picker(selection: $model.effortChoice) {
+                ForEach(model.provider.efforts) { choice in
+                    Text(choice.label).tag(choice.id)
+                }
+            } label: {
+                Text("Thinking").font(.system(size: 10)).foregroundStyle(GraphiteStyle.inkFaint)
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .help("Reasoning effort for the next message")
+
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 7)
+        .disabled(model.setupHint != nil)
     }
 
     private var header: some View {

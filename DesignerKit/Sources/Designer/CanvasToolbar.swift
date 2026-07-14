@@ -33,6 +33,7 @@ final class ToolbarState: ObservableObject {
     @Published var layersPanelVisible = false
     @Published var libraryPanelVisible = false
     @Published var simulating = false
+    @Published var recordingFlow = false
 }
 
 struct CanvasToolbar: View {
@@ -44,6 +45,7 @@ struct CanvasToolbar: View {
     let onLayers: () -> Void
     let onLibrary: () -> Void
     let onSimulate: () -> Void
+    let onRecordFlow: () -> Void
     let onAddTypedBlock: (BlockPaletteEntry) -> Void
 
     var body: some View {
@@ -91,6 +93,13 @@ struct CanvasToolbar: View {
                 label: state.simulating ? "Stop" : "Simulate",
                 help: "Simulate traffic (⌘↩) — select a node, then watch data flow from it",
                 isActive: state.simulating, action: onSimulate
+            )
+            toolButton(
+                icon: state.recordingFlow ? "stop.circle" : "record.circle",
+                hint: "⇧⌘↩",
+                label: state.recordingFlow ? "Stop" : "Record",
+                help: "Record a flow (⇧⌘↩) — select the source block, then click the connectors the traffic takes",
+                isActive: state.recordingFlow, action: onRecordFlow
             )
             Divider().frame(height: 22).padding(.horizontal, 3)
             toolButton(
