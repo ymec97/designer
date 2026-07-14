@@ -27,6 +27,7 @@ sed -e 's/$(EXECUTABLE_NAME)/Designer/g' \
 plutil -lint -s "$APP/Contents/Info.plist"
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+cp "$ROOT/App/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$BIN_PATH/Designer" "$APP/Contents/MacOS/Designer"
 
 echo "▸ codesign (ad hoc)"
