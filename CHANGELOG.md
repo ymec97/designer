@@ -29,11 +29,13 @@ First testable release: the full MVP plus the post-MVP feature set.
 ### Understanding traffic
 - Simulate (⌘↩): flood playback — watch data propagate wave-by-wave from any
   block, honoring connector direction, with pause/speed/restart transport.
-- Flows (⌘J / ⇧⌘↩): record the exact journey a request takes — including
-  choosing between parallel connectors (gRPC vs HTTP) — then replay it as an
-  animated packet in the flow's color; conditions surface during playback;
-  isolate a flow to dim everything it doesn't touch. Parallel connectors fan
-  apart visually.
+- Flows (⌘J / ⇧⌘↩): record the exact journey a request takes by clicking the
+  blocks it visits — candidate next blocks are highlighted with their
+  connectors shown normally while unreachable ones dim; parallel connectors
+  (gRPC vs HTTP) prompt a one-click choice — then replay it as an animated
+  packet in the flow's color; conditions surface during playback; isolate a
+  flow to dim everything it doesn't touch. Parallel connectors fan apart
+  visually.
 
 ### AI collaboration
 - Local MCP server (Board ▸ Enable Agent Access, persists): any MCP client —

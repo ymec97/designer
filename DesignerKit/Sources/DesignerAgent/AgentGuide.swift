@@ -45,9 +45,9 @@ public enum AgentGuide {
     - Layers (⌘L): the same board viewed through concerns (infra, security…); \
     elements can live on several layers; focus mode dims the rest.
     - Flows (⌘J): recorded traffic journeys. The user selects a source block, \
-    records the exact connectors a request takes (choosing among parallels), \
-    then plays it back as an animated packet — this expresses correlation like \
-    "gRPC in means gRPC out". Flows can be isolated (dim everything else).
+    clicks the blocks a request visits in order (picking the connector when \
+    parallel ones exist), then plays it back as an animated packet — this \
+    expresses correlation like "gRPC in means gRPC out". Flows can be isolated.
     - Simulate (⌘↩): flood playback of everything reachable from the selected \
     block, wave by wave.
     - Library (⌘Y): save/reuse diagram patterns. Export: PNG/SVG. Everything \

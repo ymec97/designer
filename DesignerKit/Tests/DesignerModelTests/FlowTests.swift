@@ -136,6 +136,23 @@ final class FlowTests: XCTestCase {
         XCTAssertFalse(second.contains { $0.edge == grpc }, "an edge fires once per flow")
     }
 
+    func testCandidateTargetsAreTheClickableNextBlocks() {
+        // Node-first recording: the gesture is "click the next block".
+        let grpc = connect("a", "b", label: "gRPC")
+        let http = connect("a", "b", label: "HTTP")
+        _ = connect("a", "c")
+
+        let recorder = FlowRecorder(source: node("a"))
+        XCTAssertEqual(recorder.candidateTargets(in: board), [node("b"), node("c")],
+                       "targets deduplicate parallel connectors")
+
+        let toB = recorder.candidates(to: node("b"), in: board)
+        XCTAssertEqual(Set(toB.map(\.edge)), [grpc, http],
+                       "clicking b offers the parallel-connector choice")
+        XCTAssertEqual(recorder.candidates(to: node("c"), in: board).count, 1,
+                       "a single connector records directly")
+    }
+
     func testFanOutMergesIntoOneStep() {
         let ea = connect("gw", "a"), eb = connect("gw", "b")
         var recorder = FlowRecorder(source: node("gw"))

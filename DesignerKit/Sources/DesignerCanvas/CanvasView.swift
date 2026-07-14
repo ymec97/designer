@@ -830,11 +830,23 @@ public final class CanvasView: NSView {
         needsDisplay = true
     }
 
-    /// A click while recording: find candidate connectors near the point.
-    /// One hit records immediately; several (parallel edges) open a chooser.
+    /// A click while recording. The primary gesture is clicking the NEXT
+    /// BLOCK the traffic visits: one connector to it records immediately;
+    /// several (parallels) open a chooser listing them. Clicking a connector
+    /// directly still works as a fallback.
     private func handleFlowRecordingClick(at point: CGPoint, event: NSEvent) {
         guard let recorder = flowRecorder else { return }
         let world = viewport.toWorld(point)
+
+        // 1. Did the click land on a candidate next block?
+        if let target = recorder.candidateTargets(in: board).first(where: { id in
+            board.elements[id]?.node?.frame.contains(world) == true
+        }) {
+            resolveFlowChoices(recorder.candidates(to: target, in: board), event: event)
+            return
+        }
+
+        // 2. Fallback: a click near a candidate connector.
         let tolerance = 14 / viewport.scale
         var hits: [(candidate: FlowRecorder.Candidate, distance: Double)] = []
         for candidate in recorder.candidates(in: board) {
@@ -842,14 +854,19 @@ public final class CanvasView: NSView {
             let distance = route.distance(to: world)
             if distance < Double(tolerance) { hits.append((candidate, distance)) }
         }
-        guard !hits.isEmpty else { return }
         hits.sort { $0.distance < $1.distance }
+        resolveFlowChoices(hits.map(\.candidate), event: event)
+    }
 
-        if hits.count == 1 {
-            recordFlowCandidateNow(hits[0].candidate)
-        } else {
-            // Parallel/overlapping connectors: let the user pick by label.
-            pendingFlowChoices = hits.map(\.candidate)
+    /// Records the single choice, or pops the connector chooser for several.
+    private func resolveFlowChoices(_ choices: [FlowRecorder.Candidate], event: NSEvent) {
+        switch choices.count {
+        case 0:
+            return
+        case 1:
+            recordFlowCandidateNow(choices[0])
+        default:
+            pendingFlowChoices = choices
             let menu = NSMenu()
             for (index, choice) in pendingFlowChoices.enumerated() {
                 let item = NSMenuItem(title: flowCandidateTitle(choice),
@@ -892,29 +909,44 @@ public final class CanvasView: NSView {
         return "\(name(candidate.from)) → \(name(candidate.to))  (\(detail))"
     }
 
-    /// Recording overlay: scrim, the recorded path so far in accent, dashed
-    /// highlights on the connectors that can be recorded next.
+    /// Recording overlay: scrim dims everything unreachable; the recorded
+    /// path glows in accent; the blocks you can click NEXT re-render normally
+    /// with a dashed accent ring, their connectors drawn as usual — so the
+    /// choice reads as "which block does the traffic visit next".
     private func drawFlowRecordingOverlay(in context: CGContext) {
         guard let recorder = flowRecorder else { return }
         let frames = board.frameProvider(overrides: transientFrames)
 
         renderer.drawSimulationScrim(bounds, in: context)
 
+        // The journey so far.
         for step in recorder.steps {
             for edgeID in step.edges {
                 guard let route = routeCache[edgeID] else { continue }
                 renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false)
             }
         }
+
+        // Connectors that could carry the next hop: their regular rendering,
+        // lifted above the scrim (arrowheads and labels intact).
         for candidate in recorder.candidates(in: board) {
-            guard let route = routeCache[candidate.edge] else { continue }
-            renderer.drawFlowCandidate(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
+            guard let element = board.elements[candidate.edge], let edge = element.edge,
+                  let route = routeCache[candidate.edge] else { continue }
+            renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false)
         }
+
+        // Reached blocks: solid glow. Candidate next blocks: normal render +
+        // dashed accent ring = "click me".
         for nodeID in recorder.reachedNodes {
             guard let element = board.elements[nodeID], let node = element.node else { continue }
             let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
             renderer.draw(element, in: context, viewport: viewport, isSelected: false)
             renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 0.8)
+        }
+        for nodeID in recorder.candidateTargets(in: board) where !recorder.reachedNodes.contains(nodeID) {
+            guard let element = board.elements[nodeID], let node = element.node else { continue }
+            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+            renderer.drawProposalAddedOutline(viewport.toView(node.frame), in: context, viewport: viewport)
         }
     }
 

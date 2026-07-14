@@ -242,7 +242,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
               document.board.elements[source]?.node != nil else {
             let alert = NSAlert()
             alert.messageText = "Select a source block first"
-            alert.informativeText = "Click the block the traffic starts from, then Record Flow: you'll walk the journey by clicking each connector it takes."
+            alert.informativeText = "Click the block the traffic starts from, then Record Flow: you'll walk the journey by clicking each block it visits next."
             alert.runModal()
             return
         }

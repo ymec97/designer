@@ -90,6 +90,19 @@ public struct FlowRecorder {
         return result
     }
 
+    /// The blocks that can be clicked next: targets of the current
+    /// candidates. (The primary recording gesture is choosing the next NODE;
+    /// connectors only need choosing when several lead to the same node.)
+    public func candidateTargets(in board: Board) -> Set<ElementID> {
+        Set(candidates(in: board).map(\.to))
+    }
+
+    /// Candidates that deliver to a specific block — one means record it
+    /// directly, several (parallel connectors) means the user picks.
+    public func candidates(to target: ElementID, in board: Board) -> [Candidate] {
+        candidates(in: board).filter { $0.to == target }
+    }
+
     /// Records a candidate. Returns false if it isn't currently recordable.
     @discardableResult
     public mutating func record(_ candidate: Candidate, in board: Board) -> Bool {

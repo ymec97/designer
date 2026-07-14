@@ -98,7 +98,7 @@ struct CanvasToolbar: View {
                 icon: state.recordingFlow ? "stop.circle" : "record.circle",
                 hint: "⇧⌘↩",
                 label: state.recordingFlow ? "Stop" : "Record",
-                help: "Record a flow (⇧⌘↩) — select the source block, then click the connectors the traffic takes",
+                help: "Record a flow (⇧⌘↩) — select the source block, then click each block the traffic visits",
                 isActive: state.recordingFlow, action: onRecordFlow
             )
             Divider().frame(height: 22).padding(.horizontal, 3)

@@ -49,7 +49,7 @@ struct FlowsPanel: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(GraphiteStyle.accent)
-                .help("Record a flow: select a source block first, then click the connectors traffic takes")
+                .help("Record a flow: select a source block first, then click each block the traffic visits")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -59,7 +59,7 @@ struct FlowsPanel: View {
                 HStack(spacing: 8) {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text(model.recordingConnectors == 0
-                         ? "Recording — click a highlighted connector"
+                         ? "Recording — click the next highlighted block"
                          : "Recording · \(model.recordingConnectors) connector\(model.recordingConnectors == 1 ? "" : "s")")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(GraphiteStyle.ink)
@@ -72,7 +72,7 @@ struct FlowsPanel: View {
 
             if model.flows.isEmpty {
                 if !model.recording {
-                    Text("Record how a request travels:\nselect its source block, press Record,\nthen click each connector it takes.")
+                    Text("Record how a request travels:\nselect its source block, press Record,\nthen click each block it visits next.")
                         .font(.system(size: 11))
                         .foregroundStyle(GraphiteStyle.inkDim)
                         .padding(.horizontal, 12)
@@ -186,7 +186,7 @@ struct FlowRecordBar: View {
             HStack(spacing: 12) {
                 Circle().fill(.red).frame(width: 7, height: 7)
                 Text(model.connectors == 0
-                     ? "Recording flow — click the first connector the traffic takes"
+                     ? "Recording flow — click the first block the traffic reaches"
                      : "Recording flow · \(model.connectors) connector\(model.connectors == 1 ? "" : "s")")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(GraphiteStyle.ink)
