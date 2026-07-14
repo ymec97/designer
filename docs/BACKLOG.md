@@ -36,11 +36,9 @@ Two refinements deferred from the first cut:
 - **Rename-aware diff.** DONE 2026-07-14: removed+added pairs with matching
   footprint (or a single related-name pair) collapse to one rename; edges
   re-keyed through the mapping.
-- **On-canvas ghost preview.** Show the proposed additions (green ghost) and
-  removals (red ghost) directly on the canvas during review, not just the
-  textual diff in the banner. Needs coordinate reconciliation since the
-  proposed board's positions/ids differ; render the proposed board's own
-  layout as a translucent overlay keyed off the diff.
+- **On-canvas ghost preview.** DONE 2026-07-13: proposals render as dashed
+  accent ghosts (additions) and red outlines (removals) on the canvas, with a
+  reveal-camera jump to the affected region.
 
 ### F6. In-app chat panel (Claude/ChatGPT via user's subscription)
 *Requested 2026-07-13 by Yarden.* A chat drawer inside Designer where the user
@@ -114,8 +112,10 @@ evaluate (not decided):
   content whose scale differs a lot from the implied creation scale;
 - optional reference grid whose density communicates zoom level ambiently.
 
-### P2. Proportional group resize for multi-selection
-*Requested 2026-07-12 by Yarden. Post-MVP.*
+### P2. Proportional group resize for multi-selection — DONE 2026-07-13
+*Requested 2026-07-12 by Yarden.* Shipped: multi-selection bounding box with
+handles scales all members (nodes, notes, ink, waypoints) about the anchor in
+one undo step.
 When multiple items are selected, show a bounding box with handles that
 resizes ALL selected elements proportionally — enlarge/shrink while
 preserving each item's internal proportions and their relative positions
@@ -133,12 +133,13 @@ Implementation sketch: deterministic per-element seed, rough path generation
 (2 passes with offset control points), rough fills (hachure or solid),
 hand-style font option. Applies to SVG/PNG export too.
 
-### P4. Edge-density visual QA: hubs and parallel connections
-*Requested 2026-07-12 by Yarden. Run during M6 polish; fixes post-MVP if needed.*
-*Partially addressed 2026-07-13 (F5): parallel edges between the same node pair
-now fan apart (perpendicular bow, ±14pt steps) on canvas, snapshots, and SVG.
-Remaining: label decluttering at density (labels of parallel edges can still
-crowd), fan-out anchor spreading at hub nodes.*
+### P4. Edge-density visual QA: hubs and parallel connections — DONE 2026-07-14
+*Requested 2026-07-12 by Yarden.* All three fixes shipped: parallel edges
+separate (anchor spreading supersedes the perpendicular bow for spread edges),
+hub nodes distribute anchors along their sides (EdgeGeometry.anchorSpread),
+and parallel-edge captions stagger along the route so labels stay readable.
+Remaining niche: very short parallel connectors can still clip caption
+corners — revisit only if it shows up in real boards.
 Build/test a complex board where (a) one node has many parallel connections
 to the same other node, and (b) a hub node fans out to many nodes. Judge
 whether it reads clearly or becomes an unclear mess. Likely fixes to evaluate
