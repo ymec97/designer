@@ -1232,16 +1232,30 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     // MARK: Sketch → structure
 
     private func strokeFinished(_ id: ElementID) {
-        guard liveRecognitionEnabled,
-              let element = document.board.elements[id],
-              let conversion = SketchConversion.conversion(for: element, in: document.board)
-        else { return }
+        guard liveRecognitionEnabled, let element = document.board.elements[id] else { return }
+        // Single-stroke recognition first; if the stroke alone isn't a shape,
+        // maybe it COMPLETES one — chain it with earlier strokes whose
+        // endpoints it meets (P7: a box drawn as four separate lines).
+        let conversion = SketchConversion.conversion(for: element, in: document.board)
+            ?? chainedConversionEnding(with: id)
+        guard let conversion else { return }
         document.perform(
             document.board.expandingWithReattachments(conversion.operation),
             actionName: conversion.actionName
         )
         canvasView.select([conversion.producedID])
         nameProducedNodeIfPossible(conversion.producedID)
+    }
+
+    private func chainedConversionEnding(with id: ElementID) -> SketchConversion.Conversion? {
+        let allInk = document.board.elements.values.filter {
+            if case .ink = $0.content { return true }
+            return false
+        }
+        guard let component = SketchConversion.endpointComponents(allInk)
+            .first(where: { component in component.contains { $0.id == id } }),
+              component.count >= 2 else { return nil }
+        return SketchConversion.chainedConversion(for: component, in: document.board)
     }
 
     /// B3 (name-on-snap): when a sketch becomes a block, open its label

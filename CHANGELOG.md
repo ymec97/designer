@@ -20,7 +20,9 @@ First testable release: the full MVP plus the post-MVP feature set.
   single operation layer.
 - Sketch-to-structure: draw rough shapes/arrows with the Draw tool (D); they
   snap live into clean blocks and connectors, or convert on demand (⌘R);
-  name-on-snap opens the label editor immediately.
+  name-on-snap opens the label editor immediately. Shapes drawn as several
+  strokes (a box from four lines) are chained and recognized as one block —
+  live, the stroke that closes the shape completes it.
 - Typed block palette (toolbar menu / ⌘K): service, database, queue, cache,
   gateway, client, external, decision, alert.
 - Connectors bend: drag a selected connector to curve it smoothly through

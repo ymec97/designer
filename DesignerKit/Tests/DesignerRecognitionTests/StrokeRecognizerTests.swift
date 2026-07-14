@@ -276,6 +276,76 @@ final class StrokeRecognizerTests: XCTestCase {
         XCTAssertNil(SketchConversion.conversion(for: ink, in: board))
     }
 
+    // MARK: Multi-stroke chaining (P7)
+
+    /// Four separate jittered strokes forming a box.
+    private func fourStrokeBox(x: Double, y: Double, width: Double, height: Double, layer: LayerID) -> [Element] {
+        let corners = [
+            Point(x: x, y: y), Point(x: x + width, y: y),
+            Point(x: x + width, y: y + height), Point(x: x, y: y + height),
+        ]
+        return (0..<4).map { side in
+            inkElement(
+                sketchLine(from: corners[side], to: corners[(side + 1) % 4], jitterAmount: 2),
+                layer: layer
+            )
+        }
+    }
+
+    func testFourStrokesChainIntoOneBlock() throws {
+        var (board, layer) = makeBoard()
+        let strokes = fourStrokeBox(x: 0, y: 0, width: 160, height: 100, layer: layer)
+        for element in strokes { try board.apply(.insertElement(element)) }
+
+        let conversion = try XCTUnwrap(
+            SketchConversion.chainedConversion(for: strokes, in: board)
+        )
+        try board.apply(conversion.operation)
+        let nodes = board.elements.values.compactMap(\.node)
+        XCTAssertEqual(nodes.count, 1, "four strokes become ONE block")
+        XCTAssertEqual(nodes[0].shape, .rectangle)
+        XCTAssertTrue(board.elements.values.allSatisfy { element in
+            if case .ink = element.content { return false }
+            return true
+        }, "all four strokes consumed")
+    }
+
+    func testStructurizeChainsMultiStrokeBoxAndKeepsRest() throws {
+        var (board, layer) = makeBoard()
+        let boxStrokes = fourStrokeBox(x: 0, y: 0, width: 160, height: 100, layer: layer)
+        let loneBox = inkElement(
+            sketchRectangle(x: 500, y: 0, width: 120, height: 80, jitterAmount: 2),
+            layer: layer
+        )
+        for element in boxStrokes + [loneBox] { try board.apply(.insertElement(element)) }
+
+        let conversion = try XCTUnwrap(SketchConversion.structurize(
+            (boxStrokes + [loneBox]).map(\.id), in: board
+        ))
+        try board.apply(conversion.operation)
+        XCTAssertEqual(board.elements.values.compactMap(\.node).count, 2,
+                       "chained box + single-stroke box")
+    }
+
+    func testFarApartStrokesDoNotChain() throws {
+        var (board, layer) = makeBoard()
+        let a = inkElement(sketchLine(from: Point(x: 0, y: 0), to: Point(x: 100, y: 0), jitterAmount: 1), layer: layer)
+        let b = inkElement(sketchLine(from: Point(x: 400, y: 400), to: Point(x: 500, y: 400), jitterAmount: 1), layer: layer)
+        for element in [a, b] { try board.apply(.insertElement(element)) }
+        XCTAssertEqual(SketchConversion.endpointComponents([a, b]).count, 2)
+        XCTAssertNil(SketchConversion.chainedConversion(for: [a, b], in: board))
+    }
+
+    func testChainedLineStaysInk() throws {
+        var (board, layer) = makeBoard()
+        // Two collinear strokes forming one long open line: NOT auto-merged.
+        let a = inkElement(sketchLine(from: Point(x: 0, y: 0), to: Point(x: 150, y: 0), jitterAmount: 1), layer: layer)
+        let b = inkElement(sketchLine(from: Point(x: 155, y: 0), to: Point(x: 300, y: 0), jitterAmount: 1), layer: layer)
+        for element in [a, b] { try board.apply(.insertElement(element)) }
+        XCTAssertNil(SketchConversion.chainedConversion(for: [a, b], in: board),
+                     "open chains are ambiguous; leave them as ink")
+    }
+
     func testStructurizeSketchedBoxesThenLine() throws {
         var (board, layer) = makeBoard()
         // Two sketched boxes and a line between them, structurized together:
