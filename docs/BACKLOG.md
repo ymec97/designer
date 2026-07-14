@@ -8,11 +8,6 @@ revisited. Do not silently drop items; move them to a milestone when picked up.
 ### B1. Label editor font overflows its box at high zoom — FIXED 2026-07-14
 *Reported 2026-07-12 by Yarden.* The editing field now scales with the zoomed
 node (height tracks the scaled font) instead of clipping at a fixed 24px.
-The in-place label editor scales its font with `viewport.scale`, but the
-NSTextField keeps a fixed ~24px height — at high zoom the text is clipped and
-effectively invisible while typing. Likely fix: size the field to the zoomed
-node frame (height and width), or clamp the editing font and zoom the canvas
-so editing always happens at a readable effective scale.
 
 ### B2. Sort keys grow under repeated sequential insertion
 *Found 2026-07-12 during M2 perf work. Address in M6 polish.*
