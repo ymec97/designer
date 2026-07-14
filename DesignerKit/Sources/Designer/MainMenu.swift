@@ -71,6 +71,15 @@ enum MainMenu {
                                      keyEquivalent: "i")
         inspector.keyEquivalentModifierMask = [.command, .option]
         menu.addItem(.separator())
+        let saveVersion = menu.addItem(withTitle: "Save Version",
+                                       action: Selector(("saveVersionNow:")),
+                                       keyEquivalent: "s")
+        saveVersion.keyEquivalentModifierMask = [.command, .control]
+        let versions = menu.addItem(withTitle: "Version History",
+                                    action: Selector(("toggleVersionsPanel:")),
+                                    keyEquivalent: "h")
+        versions.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
         let assistant = menu.addItem(withTitle: "Assistant",
                                      action: Selector(("toggleChatPanel:")),
                                      keyEquivalent: "a")

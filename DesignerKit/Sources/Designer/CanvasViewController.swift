@@ -77,6 +77,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installFlowsPanel()
         installChatPanel()
         installInspectorPanel()
+        installVersionsPanel()
+        refreshVersionsPanel()
     }
 
     // MARK: Inspector (feature 2)
@@ -477,6 +479,133 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         return nil
     }
 
+    // MARK: Version history (F3)
+
+    private let versionsModel = VersionsPanelModel()
+    private var versionsPanelHost: NSView?
+    private var versionsSubscription: AnyCancellable?
+
+    @objc func toggleVersionsPanel(_ sender: Any?) {
+        versionsModel.visible.toggle()
+        versionsPanelHost?.isHidden = !versionsModel.visible
+        if !versionsModel.visible { clearVersionPreview() }
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    @objc func saveVersionNow(_ sender: Any?) {
+        let count = document.versions.metas.filter { $0.kind == .manual }.count
+        document.saveVersion(named: "Version \(count + 1)", kind: .manual)
+        if !versionsModel.visible { toggleVersionsPanel(nil) }
+    }
+
+    private func refreshVersionsPanel() {
+        versionsModel.rows = document.versions.metas.map { meta in
+            VersionRowInfo(
+                id: meta.id, name: meta.name, createdAt: meta.createdAt,
+                kind: meta.kind, elementCount: meta.elementCount,
+                thumbnail: document.versions.thumbnail(for: meta.id).flatMap(NSImage.init(data:))
+            )
+        }
+        if let previewed = versionsModel.previewedID,
+           !document.versions.metas.contains(where: { $0.id == previewed }) {
+            clearVersionPreview()
+        }
+    }
+
+    /// Ghost the version's diff against the current board — the same visual
+    /// language as agent proposals ("this is what restore would change").
+    private func toggleVersionPreview(_ id: UUID) {
+        if versionsModel.previewedID == id {
+            clearVersionPreview()
+            return
+        }
+        // The ghost slot is shared with agent-proposal review; that flow wins.
+        guard !hasPendingProposal else { NSSound.beep(); return }
+        guard let stored = (try? document.versions.board(for: id)) ?? nil else { return }
+        let diff = LLMInterchange.diff(current: document.board, proposed: stored)
+        versionsModel.previewedID = id
+        canvasView.proposalGhost = CanvasView.ProposalGhost(
+            proposedBoard: stored,
+            addedElements: diff.addedElementIDs,
+            removedElements: diff.removedElementIDs
+        )
+    }
+
+    private func clearVersionPreview() {
+        guard versionsModel.previewedID != nil else { return }
+        versionsModel.previewedID = nil
+        if !hasPendingProposal { canvasView.proposalGhost = nil }
+    }
+
+    private func installVersionsPanel() {
+        let panel = VersionsPanel(
+            model: versionsModel,
+            actions: VersionsPanelActions(
+                saveNow: { [weak self] in self?.saveVersionNow(nil) },
+                togglePreview: { [weak self] id in self?.toggleVersionPreview(id) },
+                restore: { [weak self] id in
+                    guard let self else { return }
+                    self.clearVersionPreview()
+                    self.document.restoreVersion(id)
+                },
+                rename: { [weak self] id, name in
+                    let trimmed = name.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty else { return }
+                    self?.document.renameVersion(id, to: trimmed)
+                },
+                delete: { [weak self] id in self?.document.deleteVersion(id) }
+            )
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+        ])
+        versionsPanelHost = host
+        versionsSubscription = document.$versions.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshVersionsPanel() }
+        }
+    }
+
+    /// Headless check for --ui-test: save a version, mutate, preview (ghost
+    /// appears), restore (one undo step returns the mutation), delete.
+    func runVersionHistorySelfTest() -> String? {
+        let baseline = document.board.elements.count
+        guard let meta = document.saveVersion(named: "self-test", kind: .manual) else {
+            return "saveVersion returned nil"
+        }
+        let layer = document.board.layers[0].id
+        let node = Element(
+            layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "version-test"),
+                                frame: Rect(x: 1200, y: 1200, width: 100, height: 50))))
+        document.perform(.insertElement(node), actionName: "Version Test Node")
+        guard document.board.elements.count == baseline + 1 else { return "insert failed" }
+
+        toggleVersionPreview(meta.id)
+        guard canvasView.proposalGhost != nil else { return "preview ghost missing" }
+        guard versionsModel.previewedID == meta.id else { return "preview id not set" }
+        toggleVersionPreview(meta.id)
+        guard canvasView.proposalGhost == nil else { return "preview ghost not cleared" }
+
+        document.restoreVersion(meta.id)
+        guard document.board.elements.count == baseline else {
+            return "restore did not return to baseline (\(document.board.elements.count) vs \(baseline))"
+        }
+        document.undoManager?.undo()
+        guard document.board.elements.count == baseline + 1 else { return "undo restore failed" }
+        document.undoManager?.undo() // remove the test node
+        guard document.board.elements.count == baseline else { return "undo insert failed" }
+
+        // Restore snapshotted "Before restore" automatically; clean all up.
+        for meta in document.versions.metas { document.deleteVersion(meta.id) }
+        guard document.versions.isEmpty else { return "versions not cleaned" }
+        return nil
+    }
+
     private func installFlowsPanel() {
         let panel = FlowsPanel(
             model: flowsModel,
@@ -675,6 +804,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     @objc func acceptAgentProposal(_ sender: Any?) {
         guard let proposed = pendingProposal else { return }
+        // F3: the pre-proposal board becomes an automatic version, so agent
+        // edits stay recoverable long after the undo stack is gone.
+        document.saveVersion(named: "Before assistant proposal", kind: .auto)
         let layer = document.board.layers.first?.id ?? proposed.layers[0].id
         let operation = ProposalApply.replaceOperation(
             current: document.board, proposed: proposed, targetLayer: layer)
@@ -855,6 +987,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Assistant (Chat with Claude)", shortcut: "⇧⌘A", systemImage: "sparkles") { [weak self] in
                 self?.toggleChatPanel(nil)
+            },
+            PaletteCommand(title: "Save Version", shortcut: "⌃⌘S", systemImage: "clock.badge.checkmark") { [weak self] in
+                self?.saveVersionNow(nil)
+            },
+            PaletteCommand(title: "Show Version History", shortcut: "⇧⌘H", systemImage: "clock.arrow.circlepath") { [weak self] in
+                self?.toggleVersionsPanel(nil)
             },
             PaletteCommand(title: "Group Selection", shortcut: "⌘G", systemImage: "square.on.square.squareshape.controlhandles") { [weak self] in
                 self?.canvasView.groupSelection(nil)

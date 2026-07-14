@@ -49,6 +49,12 @@ First testable release: the full MVP plus the post-MVP feature set.
 - In-app assistant (⇧⌘A): chat with Claude inside Designer, billed to your
   Claude subscription via the Claude Code CLI — model and thinking-effort
   selectors included. Edits arrive through the same propose→review flow.
+- Version history (⇧⌘H): named snapshots stored inside the board package —
+  save one manually (⌃⌘S), one is captured automatically before accepting an
+  assistant proposal. Preview any version as a ghost diff against the current
+  board, restore it (one undo step; the pre-restore state is snapshotted
+  first), rename or delete. Automatic snapshots are pruned; manual ones never
+  expire.
 
 ### Interchange & files
 - Boards are folder packages (board.json + assets), autosaved, with a

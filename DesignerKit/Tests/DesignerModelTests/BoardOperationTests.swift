@@ -49,6 +49,29 @@ final class BoardOperationTests: XCTestCase {
         }
     }
 
+    func testReplaceBoardSwapsContentKeepsIdentity() throws {
+        try board.apply(.insertElement(makeNode(name: "mine")))
+        let originalID = board.id
+        let before = board
+
+        var replacement = Board(title: "Restored")
+        let otherLayer = replacement.layers[0].id
+        try replacement.apply(.insertElement(Element(
+            layerIDs: [otherLayer], sortKey: replacement.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "theirs"),
+                                frame: Rect(x: 0, y: 0, width: 50, height: 30)))
+        )))
+
+        let inverse = try board.apply(.replaceBoard(replacement))
+        XCTAssertEqual(board.title, "Restored")
+        XCTAssertEqual(board.elements.values.first?.node?.semantic.name, "theirs")
+        XCTAssertEqual(board.layers.map(\.id), [otherLayer])
+        XCTAssertEqual(board.id, originalID, "identity never changes on restore")
+
+        try board.apply(inverse)
+        XCTAssertEqual(board, before, "replaceBoard round-trips exactly")
+    }
+
     func testUndoRedoChain() throws {
         let original = board
         var undoStack: [BoardOperation] = []

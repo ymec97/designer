@@ -54,9 +54,10 @@ final class UITestDriver {
         step18Flows()
         step19GroupsAndBoundaries()
         step20Inspector()
+        step21VersionHistory()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions verified")
             exit(0)
         } else {
             for failure in failures {
@@ -594,6 +595,16 @@ final class UITestDriver {
         }
         if let failure = controller.runInspectorSelfTest() {
             expect(false, "inspector failed: \(failure)")
+        }
+    }
+
+    private func step21VersionHistory() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for versions test")
+            return
+        }
+        if let failure = controller.runVersionHistorySelfTest() {
+            expect(false, "version history failed: \(failure)")
         }
     }
 

@@ -85,8 +85,13 @@ pressure through the ink pipeline, so an iPad + Sidecar gives touch/pencil
 drawing today with zero work. Revisit a native iPad app only after the Mac
 app stabilizes.
 
-### F3. Version history (Confluence-style) for boards
-*Requested 2026-07-13 by Yarden while designing the MCP agent surface.*
+### F3. Version history (Confluence-style) for boards — DONE 2026-07-15
+*Requested 2026-07-13 by Yarden.* Shipped: versions/ directory inside the
+board package (index + full board snapshot + thumbnail per version), manual
+Save Version (⌃⌘S) + auto-snapshot before accepting agent proposals (pruned
+to 10; manual versions never expire), Versions panel (⇧⌘H) with ghost-diff
+preview vs current, rename, delete, and restore as one undo step (the
+pre-restore board is auto-snapshotted first).
 A named-version history per board: snapshot points (manual "save version" and/or
 automatic on significant edits or on accepting an agent proposal), a version list,
 a visual diff between any two versions, and revert-to-version. Think Confluence

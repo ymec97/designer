@@ -51,6 +51,9 @@ public enum AgentGuide {
     expresses correlation like "gRPC in means gRPC out". Flows can be isolated.
     - Simulate (⌘↩): flood playback of everything reachable from the selected \
     block, wave by wave.
+    - Versions (⇧⌘H): named board snapshots. One is captured automatically \
+    right before each of your proposals is accepted, so users can always \
+    return to the pre-proposal board.
     - Library (⌘Y): save/reuse diagram patterns. Export: PNG/SVG. Everything \
     is undoable (⌘Z) — including accepting your proposals.
 

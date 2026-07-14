@@ -21,6 +21,11 @@ public enum BoardOperation: Equatable, Sendable {
     case insertGroup(Group)
     case removeGroup(GroupID)
     case replaceGroup(Group)
+    /// Replace the board's entire CONTENT (title, layers, elements, groups,
+    /// flows, extra) with another board's — one undo step. Identity (id,
+    /// createdAt, schemaVersion) stays; this is what "restore a version"
+    /// means (F3).
+    case replaceBoard(Board)
     /// Applied in order, inverted in reverse order. Atomic: if any child
     /// fails, the already-applied prefix is rolled back.
     case batch([BoardOperation])
@@ -179,6 +184,18 @@ extension Board {
             let old = groups[index]
             groups[index] = group
             return .replaceGroup(old)
+
+        case .replaceBoard(let replacement):
+            // Only CONTENT moves; identity (id, createdAt, schemaVersion)
+            // stays ours, so restoring a version never re-identifies the doc.
+            let previous = self
+            title = replacement.title
+            layers = replacement.layers
+            elements = replacement.elements
+            groups = replacement.groups
+            flows = replacement.flows
+            extra = replacement.extra
+            return .replaceBoard(previous)
 
         case .batch(let operations):
             var inverses: [BoardOperation] = []

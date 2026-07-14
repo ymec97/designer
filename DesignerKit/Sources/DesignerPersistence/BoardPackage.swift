@@ -47,6 +47,16 @@ public enum BoardPackage {
             withIntermediateDirectories: true
         )
 
+        // Version history (F3) rides along in the package; a URL-based
+        // rewrite must not silently drop it.
+        let existingVersions = url.appendingPathComponent(VersionArchive.directoryName)
+        if fileManager.fileExists(atPath: existingVersions.path) {
+            try fileManager.copyItem(
+                at: existingVersions,
+                to: staged.appendingPathComponent(VersionArchive.directoryName)
+            )
+        }
+
         if fileManager.fileExists(atPath: url.path) {
             _ = try fileManager.replaceItemAt(url, withItemAt: staged)
         } else {
@@ -64,16 +74,22 @@ public enum BoardPackage {
 
     // MARK: FileWrapper-based (NSDocument)
 
-    public static func fileWrapper(for board: Board) throws -> FileWrapper {
+    public static func fileWrapper(
+        for board: Board, versions: VersionArchive = VersionArchive()
+    ) throws -> FileWrapper {
         let data = try BoardSerialization.data(from: board)
         let boardFile = FileWrapper(regularFileWithContents: data)
         boardFile.preferredFilename = boardFileName
         let assets = FileWrapper(directoryWithFileWrappers: [:])
         assets.preferredFilename = assetsDirectoryName
-        return FileWrapper(directoryWithFileWrappers: [
+        var children: [String: FileWrapper] = [
             boardFileName: boardFile,
             assetsDirectoryName: assets,
-        ])
+        ]
+        if !versions.isEmpty {
+            children[VersionArchive.directoryName] = try versions.fileWrapper()
+        }
+        return FileWrapper(directoryWithFileWrappers: children)
     }
 
     public static func board(from wrapper: FileWrapper) throws -> Board {
@@ -84,5 +100,10 @@ public enum BoardPackage {
             throw PackageError.missingBoardFile
         }
         return try BoardSerialization.board(from: data)
+    }
+
+    /// The version history stored in the package (empty archive when absent).
+    public static func versions(from wrapper: FileWrapper) -> VersionArchive {
+        VersionArchive(wrapper: wrapper.fileWrappers?[VersionArchive.directoryName])
     }
 }
