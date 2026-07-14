@@ -87,13 +87,57 @@ extension LLMInterchange {
                                 uniquingKeysWith: { first, _ in first })
         let bNodes = Dictionary(zip(b.nodes, b.nodeSourceIDs).map { ($0.id, (wire: $0, element: $1)) },
                                 uniquingKeysWith: { first, _ in first })
-        for (id, entry) in bNodes where aNodes[id] == nil {
-            diff.addedNodes.append(entry.wire.displayName)
-            diff.addedElementIDs.insert(entry.element)
+
+        var addedSlugs = Set(bNodes.keys.filter { aNodes[$0] == nil })
+        var removedSlugs = Set(aNodes.keys.filter { bNodes[$0] == nil })
+
+        // Rename detection: a removed+added pair that kept its position, size,
+        // kind, and shape is the same block with a new name — collapse it to a
+        // single "renamed" change instead of remove+add churn. Fallback: when
+        // exactly one block vanished and one appeared with the same kind and
+        // shape, treat that as the rename even if it also moved.
+        var renames: [String: String] = [:] // old slug → new slug
+        var claimed: Set<String> = []
+        for old in removedSlugs.sorted() {
+            let oldWire = aNodes[old]!.wire
+            guard oldWire.at != nil else { continue }
+            if let match = addedSlugs.sorted().first(where: { candidate in
+                guard !claimed.contains(candidate) else { return false }
+                let newWire = bNodes[candidate]!.wire
+                // Same footprint AND a related name — footprint alone
+                // misfires when auto-layout reuses a vacated slot.
+                return newWire.at == oldWire.at && newWire.size == oldWire.size
+                    && newWire.kind == oldWire.kind && newWire.shape == oldWire.shape
+                    && similarNames(old, candidate)
+            }) {
+                renames[old] = match
+                claimed.insert(match)
+            }
         }
-        for (id, entry) in aNodes where bNodes[id] == nil {
-            diff.removedNodes.append(entry.wire.displayName)
-            diff.removedElementIDs.insert(entry.element)
+        if renames.isEmpty, removedSlugs.count == 1, addedSlugs.count == 1,
+           let old = removedSlugs.first, let new = addedSlugs.first,
+           aNodes[old]!.wire.kind == bNodes[new]!.wire.kind,
+           aNodes[old]!.wire.shape == bNodes[new]!.wire.shape,
+           similarNames(old, new) {
+            renames[old] = new
+        }
+        for (old, new) in renames {
+            removedSlugs.remove(old)
+            addedSlugs.remove(new)
+            diff.changedNodes.append(.init(
+                id: new,
+                before: aNodes[old]!.wire.displayName,
+                after: bNodes[new]!.wire.displayName
+            ))
+        }
+
+        for id in addedSlugs {
+            diff.addedNodes.append(bNodes[id]!.wire.displayName)
+            diff.addedElementIDs.insert(bNodes[id]!.element)
+        }
+        for id in removedSlugs {
+            diff.removedNodes.append(aNodes[id]!.wire.displayName)
+            diff.removedElementIDs.insert(aNodes[id]!.element)
         }
         for id in aNodes.keys where bNodes[id] != nil {
             let before = aNodes[id]!.wire.signature, after = bNodes[id]!.wire.signature
@@ -102,9 +146,19 @@ extension LLMInterchange {
             }
         }
 
-        // Edges, keyed by from → to (+ label to separate parallels).
-        let aEdges = Dictionary(zip(a.edges, a.edgeSourceIDs).map { ($0.key, (wire: $0, element: $1)) },
-                                uniquingKeysWith: { first, _ in first })
+        // Edges, keyed by from → to (+ label to separate parallels). Old-side
+        // keys are re-written through the rename mapping so a connector whose
+        // endpoint was merely renamed doesn't read as removed+added.
+        func renamed(_ slug: String) -> String { renames[slug] ?? slug }
+        let aEdges = Dictionary(
+            zip(a.edges, a.edgeSourceIDs).map { pair -> (String, (wire: WireBoard.WireEdge, element: ElementID)) in
+                var wire = pair.0
+                wire.from = renamed(wire.from)
+                wire.to = renamed(wire.to)
+                return (wire.key, (wire: wire, element: pair.1))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         let bEdges = Dictionary(zip(b.edges, b.edgeSourceIDs).map { ($0.key, (wire: $0, element: $1)) },
                                 uniquingKeysWith: { first, _ in first })
         for (key, entry) in bEdges where aEdges[key] == nil {
@@ -127,6 +181,15 @@ extension LLMInterchange {
         diff.changedNodes.sort { $0.id < $1.id }; diff.changedEdges.sort { $0.id < $1.id }
         return diff
     }
+}
+
+/// Loose rename plausibility for the single-pair fallback: the slugs share a
+/// meaningful prefix or one contains the other ("orders-svc" ↔
+/// "orders-service"), so an unrelated remove+add isn't misread as a rename.
+private func similarNames(_ a: String, _ b: String) -> Bool {
+    if a.contains(b) || b.contains(a) { return true }
+    let commonPrefix = zip(a, b).prefix { $0 == $1 }.count
+    return commonPrefix >= 4
 }
 
 private extension WireBoard.WireNode {

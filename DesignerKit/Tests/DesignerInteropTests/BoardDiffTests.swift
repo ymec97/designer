@@ -63,6 +63,42 @@ final class BoardDiffTests: XCTestCase {
         XCTAssertEqual(diff.summaryLine, "No changes")
     }
 
+    func testRenameCollapsesToOneChange() {
+        // Same position/size/kind — only the name differs: a rename, not
+        // remove+add, and the connector referencing it must not churn.
+        let current = board(wrap(#"{"nodes":[{"id":"orders-svc","name":"orders-svc","kind":"service","at":[100,100],"size":[160,80]},{"id":"db","name":"db","kind":"database","at":[400,100],"size":[130,90]}],"edges":[{"from":"orders-svc","to":"db","protocol":"SQL"}]}"#))
+        let proposed = board(wrap(#"{"nodes":[{"id":"orders-service","name":"orders-service","kind":"service","at":[100,100],"size":[160,80]},{"id":"db","name":"db","kind":"database","at":[400,100],"size":[130,90]}],"edges":[{"from":"orders-service","to":"db","protocol":"SQL"}]}"#))
+        let diff = LLMInterchange.diff(current: current, proposed: proposed)
+        XCTAssertTrue(diff.addedNodes.isEmpty, "rename must not read as an addition: \(diff.addedNodes)")
+        XCTAssertTrue(diff.removedNodes.isEmpty, "rename must not read as a removal: \(diff.removedNodes)")
+        XCTAssertEqual(diff.changedNodes.count, 1)
+        XCTAssertEqual(diff.changedNodes.first?.before, "orders-svc")
+        XCTAssertEqual(diff.changedNodes.first?.after, "orders-service")
+        XCTAssertTrue(diff.addedEdges.isEmpty, "edge to a renamed node must not churn: \(diff.addedEdges)")
+        XCTAssertTrue(diff.removedEdges.isEmpty)
+    }
+
+    func testSinglePairRenameFallbackAllowsMove() {
+        // Only one block swapped, kind/shape match, and the names are
+        // clearly related → rename even though it also moved.
+        let current = board(wrap(#"{"nodes":[{"id":"orders-cache","name":"orders-cache","kind":"cache","at":[0,0],"size":[100,50]}],"edges":[]}"#))
+        let proposed = board(wrap(#"{"nodes":[{"id":"orders-cache-v2","name":"orders-cache-v2","kind":"cache","at":[300,300],"size":[100,50]}],"edges":[]}"#))
+        let diff = LLMInterchange.diff(current: current, proposed: proposed)
+        XCTAssertTrue(diff.addedNodes.isEmpty)
+        XCTAssertTrue(diff.removedNodes.isEmpty)
+        XCTAssertEqual(diff.changedNodes.count, 1)
+    }
+
+    func testDifferentKindIsNotARename() {
+        // A service vanished and a database appeared elsewhere — genuinely
+        // different blocks, not a rename.
+        let current = board(wrap(#"{"nodes":[{"id":"a","name":"a","kind":"service","at":[0,0],"size":[100,50]},{"id":"keep","name":"keep","at":[600,0],"size":[100,50]},{"id":"keep2","name":"keep2","at":[600,200],"size":[100,50]}],"edges":[]}"#))
+        let proposed = board(wrap(#"{"nodes":[{"id":"b","name":"b","kind":"database","at":[300,300],"size":[120,60]},{"id":"keep","name":"keep","at":[600,0],"size":[100,50]},{"id":"keep2","name":"keep2","at":[600,200],"size":[100,50]}],"edges":[]}"#))
+        let diff = LLMInterchange.diff(current: current, proposed: proposed)
+        XCTAssertEqual(diff.addedNodes, ["b"])
+        XCTAssertEqual(diff.removedNodes, ["a"])
+    }
+
     func testSummaryLine() {
         let current = board(wrap(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[{"from":"a","to":"b"}]}"#))
         let proposed = board(wrap(#"{"nodes":[{"id":"a","name":"a"},{"id":"c","name":"c"},{"id":"d","name":"d"}],"edges":[]}"#))
