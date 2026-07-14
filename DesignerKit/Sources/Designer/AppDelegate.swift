@@ -1,4 +1,5 @@
 import AppKit
+import DesignerAgent
 import DesignerModel
 import DesignerPersistence
 
@@ -350,26 +351,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    static let agentAccessKey = "AgentAccessEnabled"
+
     /// Toggle the local agent (MCP) server. On enable, show the endpoint the
     /// user pastes into Claude Desktop (or any MCP client); it stays local.
+    /// The choice persists — the server auto-starts on future launches.
     @objc func toggleAgentAccess(_ sender: Any?) {
         if AgentController.shared.isEnabled {
             AgentController.shared.disable()
+            UserDefaults.standard.set(false, forKey: Self.agentAccessKey)
             return
         }
         do {
             try AgentController.shared.enable { port in
+                UserDefaults.standard.set(true, forKey: Self.agentAccessKey)
                 let alert = NSAlert()
                 alert.messageText = "Agent access is on"
-                alert.informativeText = """
+                var body = """
                 An agent on this Mac can now read your board and propose edits \
                 (you approve each change). Add this as a custom connector in \
                 Claude Desktop or another MCP client:
 
                 http://127.0.0.1:\(port)/mcp
 
-                It listens on this Mac only. Turn it off from the Board menu.
+                It listens on this Mac only, and stays enabled across launches \
+                until you turn it off from the Board menu.
                 """
+                if port != AgentServer.defaultPort {
+                    body += "\n\n⚠️ The usual port (\(AgentServer.defaultPort)) was taken, so this launch uses \(port) — update your connector if you saved the old address."
+                }
+                alert.informativeText = body
                 alert.addButton(withTitle: "Copy Endpoint")
                 alert.addButton(withTitle: "Done")
                 if alert.runModal() == .alertFirstButtonReturn {
@@ -382,9 +393,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    /// Auto-start the server on launch when the user previously enabled it.
+    func restoreAgentAccessIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: Self.agentAccessKey),
+              !AgentController.shared.isEnabled else { return }
+        try? AgentController.shared.enable { _ in }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleAgentAccess(_:)) {
-            menuItem.state = AgentController.shared.isEnabled ? .on : .off
+            let enabled = AgentController.shared.isEnabled
+            menuItem.state = enabled ? .on : .off
+            menuItem.title = enabled
+                ? "Agent Access: On (port \(AgentController.shared.server.port))"
+                : "Enable Agent Access"
         }
         return true
     }
@@ -431,6 +453,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var perfTestDriver: PerfTestDriver?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if !isTestRun {
+            restoreAgentAccessIfEnabled()
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"),
            CommandLine.arguments.indices.contains(index + 1) {
             runSmokeTest(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))

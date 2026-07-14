@@ -21,8 +21,12 @@ public final class AgentServer {
     }
 
     /// Starts the listener. Uses `preferredPort` when free, otherwise an
+    /// The port MCP clients are told to configure; stays stable across
+    /// launches unless something else has claimed it.
+    public static let defaultPort: UInt16 = 51737
+
     /// OS-assigned ephemeral port (read `port` after `onReady`).
-    public func start(preferredPort: UInt16 = 51737, onReady: ((UInt16) -> Void)? = nil) throws {
+    public func start(preferredPort: UInt16 = AgentServer.defaultPort, onReady: ((UInt16) -> Void)? = nil) throws {
         stop()
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -32,9 +36,20 @@ public final class AgentServer {
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
-            if case .ready = state, let p = listener.port {
-                self.port = p.rawValue
-                onReady?(p.rawValue)
+            switch state {
+            case .ready:
+                if let p = listener.port {
+                    self.port = p.rawValue
+                    onReady?(p.rawValue)
+                }
+            case .failed:
+                // Preferred port taken (or bind failed): fall back to an
+                // OS-assigned ephemeral port instead of dying silently.
+                if preferredPort != 0 {
+                    try? self.start(preferredPort: 0, onReady: onReady)
+                }
+            default:
+                break
             }
         }
         self.listener = listener
