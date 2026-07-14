@@ -453,6 +453,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var perfTestDriver: PerfTestDriver?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--version") {
+            let info = Bundle.main.infoDictionary ?? [:]
+            let version = info["CFBundleShortVersionString"] as? String ?? "dev"
+            let build = info["CFBundleVersion"] as? String ?? "0"
+            let buildInfo = info["DesignerBuildInfo"] as? String ?? ""
+            print("Designer v\(version) (build \(build)\(buildInfo.isEmpty ? "" : ", \(buildInfo)"))")
+            exit(0)
+        }
         if !isTestRun {
             restoreAgentAccessIfEnabled()
         }

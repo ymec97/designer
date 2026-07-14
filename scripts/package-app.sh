@@ -18,8 +18,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/build-app.sh" release
 
+APP_VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+ARTIFACT="$ROOT/build/Designer-v${APP_VERSION}-$(date +%Y-%m-%d).zip"
 echo "▸ zipping"
-ditto -c -k --keepParent "$ROOT/build/Designer.app" "$ROOT/build/Designer.zip"
-echo "✓ $ROOT/build/Designer.zip"
+ditto -c -k --keepParent "$ROOT/build/Designer.app" "$ARTIFACT"
+echo "✓ $ARTIFACT"
 echo "  Copy to the other Mac, unzip into /Applications, then right-click → Open"
 echo "  (or: xattr -dr com.apple.quarantine /Applications/Designer.app)"

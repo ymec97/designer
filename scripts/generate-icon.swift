@@ -40,18 +40,33 @@ func drawIcon(size: CGFloat) -> NSImage {
     let service = NSRect(x: 196 * s, y: 254 * s, width: 240 * s, height: 160 * s)
     let store   = NSRect(x: 592 * s, y: 250 * s, width: 244 * s, height: 168 * s)
 
-    // Connectors first (under the blocks): gateway → each child.
-    func connector(from: NSPoint, to: NSPoint) {
+    // Connectors first (under the blocks): gateway → each child. The left
+    // one is a recorded flow — teal, carrying a small packet (F5's identity).
+    let teal = hex("#38D9A9")
+    func connector(from: NSPoint, to: NSPoint, color: NSColor) {
         let path = NSBezierPath()
         path.lineWidth = lineWidth
         path.lineCapStyle = .round
         path.move(to: from)
         path.line(to: to)
-        indigo.withAlphaComponent(0.9).setStroke()
+        color.setStroke()
         path.stroke()
     }
-    connector(from: NSPoint(x: 468 * s, y: 640 * s), to: NSPoint(x: 344 * s, y: 396 * s))
-    connector(from: NSPoint(x: 556 * s, y: 640 * s), to: NSPoint(x: 690 * s, y: 400 * s))
+    connector(from: NSPoint(x: 468 * s, y: 640 * s), to: NSPoint(x: 344 * s, y: 396 * s),
+              color: teal.withAlphaComponent(0.95))
+    connector(from: NSPoint(x: 556 * s, y: 640 * s), to: NSPoint(x: 690 * s, y: 400 * s),
+              color: indigo.withAlphaComponent(0.9))
+
+    // The travelling packet, small and clearly riding the flow connector.
+    let packetCenter = NSPoint(x: 406 * s, y: 518 * s)
+    let packetR = 30 * s
+    teal.setFill()
+    NSBezierPath(ovalIn: NSRect(x: packetCenter.x - packetR, y: packetCenter.y - packetR,
+                                width: packetR * 2, height: packetR * 2)).fill()
+    NSColor.white.withAlphaComponent(0.92).setFill()
+    let coreR = 12 * s
+    NSBezierPath(ovalIn: NSRect(x: packetCenter.x - coreR, y: packetCenter.y - coreR,
+                                width: coreR * 2, height: coreR * 2)).fill()
 
     // Blocks: filled panels with indigo outlines.
     func block(_ rect: NSRect, radius: CGFloat, fill: NSColor, ellipse: Bool = false) {
