@@ -549,6 +549,29 @@ final class BoardRenderer {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    /// A small floating caption pill in view space (transient gesture hints).
+    func drawHintCaption(_ text: String, at point: CGPoint, in context: CGContext) {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        let caption = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 11.5, weight: .medium),
+            .foregroundColor: Graphite.ink,
+        ])
+        let size = caption.size()
+        let pill = CGRect(
+            x: point.x - size.width / 2 - 9, y: point.y - size.height - 22,
+            width: size.width + 18, height: size.height + 10
+        )
+        let path = CGPath(roundedRect: pill, cornerWidth: pill.height / 2, cornerHeight: pill.height / 2, transform: nil)
+        context.setFillColor(Graphite.panel.withAlphaComponent(0.95).cgColor)
+        context.addPath(path); context.fillPath()
+        context.setStrokeColor(Graphite.hairlineStrong.cgColor)
+        context.setLineWidth(1)
+        context.addPath(path); context.strokePath()
+        caption.draw(at: CGPoint(x: pill.midX - size.width / 2, y: pill.midY - size.height / 2))
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     // MARK: Adornments
 
     private func strokeSelection(path: CGPath, in context: CGContext, viewport: CanvasViewport) {

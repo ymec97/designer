@@ -34,8 +34,9 @@ First testable release: the full MVP plus the post-MVP feature set.
   connectors shown normally while unreachable ones dim; parallel connectors
   (gRPC vs HTTP) prompt a one-click choice — then replay it as an animated
   packet in the flow's color; conditions surface during playback; isolate a
-  flow to dim everything it doesn't touch. Parallel connectors fan apart
-  visually.
+  flow to dim everything it doesn't touch. ⌥-drag a connection to add a
+  parallel connector by hand; connectors sharing a node side spread along it
+  automatically so arrows never stack.
 
 ### AI collaboration
 - Local MCP server (Board ▸ Enable Agent Access, persists): any MCP client —

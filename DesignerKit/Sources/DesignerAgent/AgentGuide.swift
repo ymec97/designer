@@ -37,7 +37,8 @@ public enum AgentGuide {
     during traffic playback). `direction`: forward (default, from→to), \
     backward, both, none.
     - Two nodes may have several parallel connectors (e.g. gRPC AND HTTP); \
-    Designer fans them apart visually. Give each a distinct label/protocol.
+    Designer spreads them along the node sides visually. Give each a distinct \
+    label/protocol. (By hand the user draws one with ⌥-drag.)
 
     ## App features you can explain to the user (you cannot drive these; they're in-app)
     - Draw tool (D): freehand sketches snap into blocks/connectors; ⌘R \

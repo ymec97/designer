@@ -17,6 +17,7 @@ public final class CanvasView: NSView {
     public var board = Board(title: "") {
         didSet {
             parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
+            anchorSpreadCache = EdgeGeometry.anchorSpread(in: board)
             routeCache = SpatialIndex.resolveRoutes(for: board)
             spatialIndex = SpatialIndex(board: board, edgeRoutes: routeCache)
             edgeBatchCache = nil
@@ -44,6 +45,8 @@ public final class CanvasView: NSView {
     /// Perpendicular fan-out for parallel connectors (same node pair), so
     /// drag-time re-resolution matches the cached routes.
     private var parallelOffsetCache: [ElementID: Double] = [:]
+    /// Anchor distribution along shared node sides, same drag-time contract.
+    private var anchorSpreadCache: [ElementID: EdgeGeometry.EndpointOffsets] = [:]
     /// World-space paths holding every edge except `excluded` — stroked in
     /// single CG calls through the CTM, split into full-opacity and dimmed
     /// groups when focus mode is on. Rebuilt when the exclusion set changes
@@ -330,11 +333,12 @@ public final class CanvasView: NSView {
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
-        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache] element in
+        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache] element in
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames,
-                    parallelOffset: parallelOffsetCache[element.id] ?? 0)
+                    parallelOffset: parallelOffsetCache[element.id] ?? 0,
+                    anchorOffsets: anchorSpreadCache[element.id])
             }
             return routeCache[element.id]
         }
@@ -479,6 +483,30 @@ public final class CanvasView: NSView {
         drawSimulationOverlay(in: context)
         drawFlowRecordingOverlay(in: context)
         drawInFlightGesture(in: context)
+        drawTransientHint(in: context)
+    }
+
+    // MARK: Transient hint
+
+    /// A short-lived caption near a gesture that was absorbed (e.g. a repeat
+    /// connection drag), teaching the modifier that would have done more.
+    private var transientHint: (text: String, at: CGPoint, expires: Date)?
+
+    func showTransientHint(_ text: String, at point: CGPoint, seconds: TimeInterval = 2.5) {
+        transientHint = (text, point, Date().addingTimeInterval(seconds))
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
+            self?.needsDisplay = true
+        }
+    }
+
+    private func drawTransientHint(in context: CGContext) {
+        guard let hint = transientHint else { return }
+        guard hint.expires > Date() else {
+            transientHint = nil
+            return
+        }
+        renderer.drawHintCaption(hint.text, at: hint.at, in: context)
     }
 
     // MARK: Traffic simulation (F2)
@@ -1228,10 +1256,18 @@ public final class CanvasView: NSView {
 
         case .connect(let fromID, let dropPoint, let targetID):
             if let targetID {
-                switch board.connectionMergeOutcome(from: fromID, to: targetID) {
+                // ⌥-drop forces a NEW parallel connector (e.g. gRPC + HTTP
+                // between the same pair) instead of merging into the
+                // existing one; anchor spreading keeps them apart visually.
+                let mergeOutcome = event.modifierFlags.contains(.option)
+                    ? .none
+                    : board.connectionMergeOutcome(from: fromID, to: targetID)
+                switch mergeOutcome {
                 case .alreadyConnected(let existing):
-                    // Idempotent: repeating a connection selects it, no duplicate.
+                    // Idempotent: repeating a connection selects it, no
+                    // duplicate — and teaches the way to get a real second one.
                     selection = [existing]
+                    showTransientHint("⌥-drag adds a parallel connector", at: dropPoint)
                 case .oppositeDirection(let existing):
                     if let operation = board.makeBidirectionalOperation(existing) {
                         delegate?.canvasView(self, perform: operation, actionName: "Make Bidirectional")

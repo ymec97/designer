@@ -40,6 +40,58 @@ final class EdgeGeometryTests: XCTestCase {
         return EdgeGeometry.route(for: edge, frames: board.frameProvider(overrides: overrides))
     }
 
+    // MARK: Anchor spreading (arrows sharing a node side)
+
+    func testAnchorSpreadSeparatesArrowsIntoTheSameSide() {
+        // Two sources left of one target: both edges land on the target's
+        // left side and must not share an anchor point.
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 0, y: 200, width: 80, height: 40))
+        let target = addNode("t", frame: Rect(x: 300, y: 100, width: 80, height: 40))
+        let ea = connect(a, target), eb = connect(b, target)
+
+        let spread = EdgeGeometry.anchorSpread(in: board)
+        let ta = try! XCTUnwrap(spread[ea.id]?.to)
+        let tb = try! XCTUnwrap(spread[eb.id]?.to)
+        XCTAssertNotEqual(ta, tb, "shared side distributes, never stacks")
+        XCTAssertLessThan(ta, tb, "upper source keeps the upper slot (no crossing)")
+        XCTAssertNil(spread[ea.id]?.from, "a's own side has one edge — no spread needed")
+
+        // Removing one connector re-flows the survivor back to the midpoint.
+        try! board.apply(.removeElement(eb.id))
+        XCTAssertNil(EdgeGeometry.anchorSpread(in: board)[ea.id])
+    }
+
+    func testAnchorSpreadSkipsPinnedAnchors() {
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 0, y: 200, width: 80, height: 40))
+        let target = addNode("t", frame: Rect(x: 300, y: 100, width: 80, height: 40))
+        let pinned = connect(a, target, toSide: .left)
+        let auto = connect(b, target)
+
+        let spread = EdgeGeometry.anchorSpread(in: board)
+        XCTAssertNil(spread[pinned.id]?.to, "user-pinned anchors are never moved")
+        XCTAssertNil(spread[auto.id]?.to, "a single auto edge on the side stays at the midpoint")
+    }
+
+    func testParallelEdgesSpreadAlongBothSides() {
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 300, y: 0, width: 80, height: 40))
+        let grpc = connect(a, b), http = connect(a, b)
+
+        let spread = EdgeGeometry.anchorSpread(in: board)
+        let g = try! XCTUnwrap(spread[grpc.id]), h = try! XCTUnwrap(spread[http.id])
+        XCTAssertNotEqual(g.from, h.from)
+        XCTAssertNotEqual(g.to, h.to)
+
+        // And the resolved routes must start/end at distinct points.
+        let frames = board.frameProvider()
+        let rg = EdgeGeometry.route(for: board.elements[grpc.id]!.edge!, frames: frames, anchorOffsets: g)!
+        let rh = EdgeGeometry.route(for: board.elements[http.id]!.edge!, frames: frames, anchorOffsets: h)!
+        XCTAssertNotEqual(rg.start, rh.start)
+        XCTAssertNotEqual(rg.points.last, rh.points.last)
+    }
+
     // MARK: Auto-side + anchoring
 
     func testAutoSideFacesTheOtherNode() throws {

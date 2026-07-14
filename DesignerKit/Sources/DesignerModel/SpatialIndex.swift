@@ -46,10 +46,14 @@ public struct SpatialIndex {
     public static func resolveRoutes(for board: Board) -> [ElementID: EdgeGeometry.Route] {
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)
+        let spread = EdgeGeometry.anchorSpread(in: board)
         var routes: [ElementID: EdgeGeometry.Route] = [:]
         for element in board.elements.values {
             if let edge = element.edge,
-               let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0) {
+               let route = EdgeGeometry.route(
+                   for: edge, frames: frames,
+                   parallelOffset: offsets[element.id] ?? 0,
+                   anchorOffsets: spread[element.id]) {
                 routes[element.id] = route
             }
         }

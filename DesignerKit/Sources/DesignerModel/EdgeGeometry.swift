@@ -81,15 +81,35 @@ public enum EdgeGeometry {
     /// mutating the board.
     public typealias FrameProvider = (ElementID) -> Rect?
 
+    /// Per-edge anchor-offset overrides so several connectors meeting the
+    /// same node side spread along it instead of stacking on the midpoint.
+    public struct EndpointOffsets: Equatable {
+        public var from: Double?
+        public var to: Double?
+        public init(from: Double? = nil, to: Double? = nil) {
+            self.from = from
+            self.to = to
+        }
+    }
+
     /// Resolves an edge into a drawable route. Returns nil when an anchored
     /// element doesn't exist (e.g. mid-batch during cascade deletes).
     /// `parallelOffset` bows a direct route perpendicular to its line so
     /// parallel connectors between the same nodes separate visually (P4/F5 —
     /// you must be able to see *which* of two connectors carries a flow).
-    public static func route(for edge: Edge, frames: FrameProvider, parallelOffset: Double = 0) -> Route? {
+    /// `anchorOffsets` (from `anchorSpread(in:)`) slides auto anchors along
+    /// their side; explicit model offsets always win.
+    public static func route(
+        for edge: Edge,
+        frames: FrameProvider,
+        parallelOffset: Double = 0,
+        anchorOffsets: EndpointOffsets? = nil
+    ) -> Route? {
         guard
-            let fromResolution = resolve(edge.from, toward: edge.to, frames: frames),
-            let toResolution = resolve(edge.to, toward: edge.from, frames: frames)
+            let fromResolution = resolve(
+                edge.from, toward: edge.to, frames: frames, offsetOverride: anchorOffsets?.from),
+            let toResolution = resolve(
+                edge.to, toward: edge.from, frames: frames, offsetOverride: anchorOffsets?.to)
         else { return nil }
 
         var points: [Point]
@@ -106,7 +126,10 @@ public enum EdgeGeometry {
 
         // Bow parallels: only direct, waypoint-less lines participate (manual
         // waypoints are the user's routing; orthogonal parallels are rare).
-        if parallelOffset != 0, points.count == 2, edge.waypoints.isEmpty {
+        // Anchor spreading already separates endpoints along the node side —
+        // bowing on top of it makes the lines weave, so spreading wins.
+        let anchorsSpread = anchorOffsets?.from != nil || anchorOffsets?.to != nil
+        if parallelOffset != 0, !anchorsSpread, points.count == 2, edge.waypoints.isEmpty {
             let a = points[0], b = points[1]
             let dx = b.x - a.x, dy = b.y - a.y
             let length = (dx * dx + dy * dy).squareRoot()
@@ -149,6 +172,70 @@ public enum EdgeGeometry {
         return offsets
     }
 
+    /// Distributes auto anchors sharing a node side so arrows never stack on
+    /// the side's midpoint: each (node, side) group is sorted by where the
+    /// connector comes from and spaced around the center. Adding or removing
+    /// a connector re-flows the whole side. Explicitly pinned anchors
+    /// (side/offset set in the model) and edges with manual waypoints are
+    /// left untouched.
+    public static func anchorSpread(in board: Board) -> [ElementID: EndpointOffsets] {
+        let frames = board.frameProvider()
+
+        struct SideKey: Hashable {
+            var nodeID: ElementID
+            var side: Anchor.Side
+        }
+        struct Slot {
+            var edgeID: ElementID
+            var isFrom: Bool
+            /// Sort key: the other endpoint's position along the side's axis,
+            /// so connectors keep their left-to-right/top-to-bottom order and
+            /// don't cross. Ties (parallel edges) keep z-order.
+            var order: Double
+        }
+        var groups: [SideKey: [Slot]] = [:]
+
+        for element in board.elementsInZOrder {
+            guard let edge = element.edge, edge.waypoints.isEmpty else { continue }
+            for isFrom in [true, false] {
+                let anchor = isFrom ? edge.from : edge.to
+                let other = isFrom ? edge.to : edge.from
+                guard case .element(let nodeID, nil, nil) = anchor,
+                      let frame = frames(nodeID) else { continue }
+                let toward = targetPoint(of: other, frames: frames)
+                let side = autoSide(from: frame, toward: toward)
+                let horizontal = side == .top || side == .bottom
+                groups[SideKey(nodeID: nodeID, side: side), default: []].append(
+                    Slot(edgeID: element.id, isFrom: isFrom,
+                         order: horizontal ? toward.x : toward.y))
+            }
+        }
+
+        var spread: [ElementID: EndpointOffsets] = [:]
+        for (key, slots) in groups where slots.count > 1 {
+            guard let frame = frames(key.nodeID) else { continue }
+            let length = (key.side == .top || key.side == .bottom)
+                ? frame.width : frame.height
+            guard length > 0 else { continue }
+
+            let sorted = slots.enumerated().sorted {
+                $0.element.order != $1.element.order
+                    ? $0.element.order < $1.element.order
+                    : $0.offset < $1.offset
+            }.map(\.element)
+            // Centered, evenly spaced, never within 10% of a corner.
+            let spacing = min(26.0, length * 0.8 / Double(sorted.count - 1))
+            let base = -spacing * Double(sorted.count - 1) / 2
+            for (index, slot) in sorted.enumerated() {
+                let t = min(0.9, max(0.1, 0.5 + (base + spacing * Double(index)) / length))
+                var offsets = spread[slot.edgeID] ?? EndpointOffsets()
+                if slot.isFrom { offsets.from = t } else { offsets.to = t }
+                spread[slot.edgeID] = offsets
+            }
+        }
+        return spread
+    }
+
     // MARK: Anchor resolution
 
     struct Resolution {
@@ -156,7 +243,12 @@ public enum EdgeGeometry {
         var side: Anchor.Side?
     }
 
-    static func resolve(_ anchor: Anchor, toward other: Anchor, frames: FrameProvider) -> Resolution? {
+    static func resolve(
+        _ anchor: Anchor,
+        toward other: Anchor,
+        frames: FrameProvider,
+        offsetOverride: Double? = nil
+    ) -> Resolution? {
         switch anchor {
         case .free(let point):
             return Resolution(point: point, side: nil)
@@ -164,7 +256,7 @@ public enum EdgeGeometry {
             guard let frame = frames(id) else { return nil }
             let resolvedSide = side ?? autoSide(from: frame, toward: targetPoint(of: other, frames: frames))
             return Resolution(
-                point: point(on: frame, side: resolvedSide, offset: offset ?? 0.5),
+                point: point(on: frame, side: resolvedSide, offset: offset ?? offsetOverride ?? 0.5),
                 side: resolvedSide
             )
         }
