@@ -1564,7 +1564,7 @@ public final class CanvasView: NSView {
         context.restoreGState()
     }
 
-    func beginLabelEdit(for element: Element) {
+    public func beginLabelEdit(for element: Element) {
         commitLabelEditor()
         guard let frame = SpatialIndex.boundingRect(of: element) else { return }
         guard element.node != nil || isNote(element) || element.boundary != nil else { return }
@@ -1574,13 +1574,17 @@ public final class CanvasView: NSView {
         field.drawsBackground = true
         field.backgroundColor = .textBackgroundColor
         field.alignment = .center
-        field.font = .systemFont(ofSize: max(13 * viewport.scale, 9), weight: .medium)
+        // B1: the field must scale WITH the zoomed node — a fixed 24px height
+        // clipped the scaled font invisible at high zoom.
+        let fontSize = max(13 * viewport.scale, 9)
+        field.font = .systemFont(ofSize: fontSize, weight: .medium)
+        let fieldHeight = max(24, fontSize + 12)
         let viewRect = viewport.toView(frame)
         field.frame = CGRect(
             x: viewRect.minX + 4,
-            y: viewRect.midY - 12,
+            y: viewRect.midY - fieldHeight / 2,
             width: max(viewRect.width - 8, 40),
-            height: 24
+            height: fieldHeight
         )
         field.target = self
         field.action = #selector(labelEditorDidCommit(_:))

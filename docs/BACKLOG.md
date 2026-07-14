@@ -5,8 +5,9 @@ revisited. Do not silently drop items; move them to a milestone when picked up.
 
 ## Bugs
 
-### B1. Label editor font overflows its box at high zoom
-*Reported 2026-07-12 by Yarden. Fix during a polish pass (M6 at the latest).*
+### B1. Label editor font overflows its box at high zoom — FIXED 2026-07-14
+*Reported 2026-07-12 by Yarden.* The editing field now scales with the zoomed
+node (height tracks the scaled font) instead of clipping at a fixed 24px.
 The in-place label editor scales its font with `viewport.scale`, but the
 NSTextField keeps a fixed ~24px height — at high zoom the text is clipped and
 effectively invisible while typing. Likely fix: size the field to the zoomed
@@ -173,8 +174,9 @@ Live mode could also try chaining the last few strokes on stroke-end.
 
 ## Bugs / UX
 
-### B3. Name-on-snap: focus a label field when a sketch becomes a shape
-*Requested 2026-07-13 by Yarden.*
+### B3. Name-on-snap: focus a label field when a sketch becomes a shape — FIXED 2026-07-14
+*Requested 2026-07-13 by Yarden.* Both live conversion and ⌘R now open the
+label editor on the produced block (connectors keep the edge editor).
 When a freehand stroke structurizes into a block (live conversion or ⌘R),
 immediately open and focus an in-place text field on the new shape so the
 user can name it without a second action — mirrors the double-click-to-create

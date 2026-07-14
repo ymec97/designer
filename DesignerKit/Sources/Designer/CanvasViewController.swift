@@ -1059,6 +1059,15 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             actionName: conversion.actionName
         )
         canvasView.select([conversion.producedID])
+        nameProducedNodeIfPossible(conversion.producedID)
+    }
+
+    /// B3 (name-on-snap): when a sketch becomes a block, open its label
+    /// editor immediately so it can be named without a second action.
+    /// Connectors are skipped — they get the edge editor elsewhere.
+    private func nameProducedNodeIfPossible(_ id: ElementID) {
+        guard let produced = document.board.elements[id], produced.node != nil else { return }
+        canvasView.beginLabelEdit(for: produced)
     }
 
     /// ⌘R: convert selected ink into blocks/connectors (one undo step).
@@ -1091,6 +1100,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             actionName: conversion.actionName
         )
         canvasView.select([conversion.producedID])
+        nameProducedNodeIfPossible(conversion.producedID)
     }
 
     @objc func toggleLiveRecognition(_ sender: Any?) {
