@@ -79,6 +79,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installInspectorPanel()
         installVersionsPanel()
         refreshVersionsPanel()
+        installZoomHUD()
     }
 
     // MARK: Inspector (feature 2)
@@ -477,6 +478,31 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             return "undo did not remove the flow"
         }
         return nil
+    }
+
+    // MARK: Zoom HUD (P1)
+
+    private let zoomHUDModel = ZoomHUDModel()
+
+    private func installZoomHUD() {
+        let hud = ZoomHUD(
+            model: zoomHUDModel,
+            actions: ZoomHUDActions(
+                actualSize: { [weak self] in self?.canvasView.zoomActualSize(nil) },
+                zoomToFit: { [weak self] in self?.canvasView.zoomToFit(nil) }
+            )
+        )
+        let host = NSHostingView(rootView: hud)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            host.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
+        ])
+        zoomHUDModel.scale = canvasView.viewport.scale
+        canvasView.viewportScaleChanged = { [weak self] scale in
+            self?.zoomHUDModel.scale = scale
+        }
     }
 
     // MARK: Version history (F3)

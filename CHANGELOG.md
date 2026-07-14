@@ -10,6 +10,10 @@ are named `Designer-v<version>-<date>.zip` (`scripts/package-app.sh`).
 First testable release: the full MVP plus the post-MVP feature set.
 
 ### Canvas & authoring
+- Zoom HUD (bottom-left): always-visible zoom percentage — click for 100%
+  (⌘0), fit button beside it (⌘9). New blocks are sized for what you see:
+  matching visible neighbors, or readable at the current zoom on empty space
+  — no more zoomed-in specks next to giant old content.
 - Infinite pan/zoom canvas: blocks (rectangle / ellipse / diamond / triangle
   with orientation), connectors with labels + semantics (protocol, data,
   condition, direction), notes, freehand ink — everything undoable through a

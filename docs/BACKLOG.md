@@ -103,8 +103,14 @@ view. Revisit after the MCP surface (F4) lands.
 
 ## Post-MVP problems to design for
 
-### P1. Zoom-level drift makes content sizes inconsistent (Excalidraw pain)
-*Reported 2026-07-12 by Yarden. Address post-MVP; design thinking welcome earlier.*
+### P1. Zoom-level drift makes content sizes inconsistent — DONE 2026-07-15
+*Reported 2026-07-12 by Yarden.* Shipped: (a) persistent zoom HUD
+(bottom-left) — live percentage, tinted when away from 1x, click for 100%,
+fit button beside it (menu had ⌘0/⌘9 already); (b) size-normalized creation —
+new blocks match the median size of visible neighbors, or on empty space are
+sized readable at the current zoom (factor clamped 1/4…4x). Not done (waiting
+for real-world need): ambient grid density, zoom-to-match prompt.
+Original notes:
 On an infinite canvas you lose track of your zoom level; content created while
 zoomed differs wildly in world-space size from content created at 1×, which
 you only discover when panning to older content. Candidate mitigations to

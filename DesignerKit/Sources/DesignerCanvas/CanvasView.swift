@@ -135,8 +135,16 @@ public final class CanvasView: NSView {
     /// Settable so controllers can restore saved view state and test drivers
     /// can script navigation.
     public var viewport = CanvasViewport() {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            if viewport.scale != oldValue.scale {
+                viewportScaleChanged?(viewport.scale)
+            }
+        }
     }
+
+    /// Fires when the zoom level changes (P1: the zoom HUD tracks it).
+    public var viewportScaleChanged: ((Double) -> Void)?
 
     public private(set) var selection: Set<ElementID> = [] {
         didSet {
@@ -1592,6 +1600,23 @@ public final class CanvasView: NSView {
         )
     }
 
+    /// P1 (zoom drift): the factor applied to a new block's default size so
+    /// creation is consistent with what the user is LOOKING at. Next to
+    /// visible blocks, match them (median width vs the 160pt standard);
+    /// on empty space, size for readability at the current zoom (1/scale) —
+    /// zoomed-out sketching gets proportionally bigger blocks instead of
+    /// specks that dwarf everything when you zoom back in.
+    private func creationScaleFactor() -> Double {
+        let visibleWorld = viewport.visibleWorldRect(viewSize: bounds.size)
+        let visibleWidths = spatialIndex.query(visibleWorld)
+            .compactMap { board.elements[$0]?.node?.frame.width }
+            .sorted()
+        if !visibleWidths.isEmpty {
+            return (visibleWidths[visibleWidths.count / 2] / 160).clamped(to: 0.25...4)
+        }
+        return (1 / viewport.scale).clamped(to: 0.25...4)
+    }
+
     private func insertBlock(
         at world: Point, kind: NodeKind, shape: NodeShape, orientation: ShapeOrientation = .up
     ) {
@@ -1599,7 +1624,9 @@ public final class CanvasView: NSView {
         Self.debugTrace?("createBlock world=\(world) layers=\(layerIDs.count) delegate=\(delegate != nil)")
         guard !layerIDs.isEmpty else { return }
         // Squarer default for the symbolic shapes so they read correctly.
-        let size = shape == .rectangle ? CGSize(width: 160, height: 80) : CGSize(width: 130, height: 90)
+        let base = shape == .rectangle ? CGSize(width: 160, height: 80) : CGSize(width: 130, height: 90)
+        let factor = creationScaleFactor()
+        let size = CGSize(width: base.width * factor, height: base.height * factor)
         let frame = Rect(
             x: world.x - Double(size.width) / 2, y: world.y - Double(size.height) / 2,
             width: Double(size.width), height: Double(size.height)
