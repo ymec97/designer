@@ -61,27 +61,10 @@ public enum SketchConversion {
                 fromNode != toNode
             else { return nil }
 
-            // A stroke opposing an existing connection upgrades it to
-            // bidirectional; a same-direction repeat is absorbed (the stroke
-            // vanishes, nothing duplicates or changes direction).
-            switch board.connectionMergeOutcome(from: fromNode, to: toNode) {
-            case .alreadyConnected(let existing):
-                return Conversion(
-                    operation: .removeElement(element.id),
-                    producedID: existing,
-                    actionName: "Convert to Connector"
-                )
-            case .oppositeDirection(let existing):
-                guard let upgrade = board.makeBidirectionalOperation(existing) else { return nil }
-                return Conversion(
-                    operation: .batch([.removeElement(element.id), upgrade]),
-                    producedID: existing,
-                    actionName: "Make Bidirectional"
-                )
-            case .none:
-                break
-            }
-
+            // A stroke between an already-connected pair creates a PARALLEL
+            // connector — drawn twice means two connections (gRPC + HTTP,
+            // request + response), never a silent merge. Bidirectional is a
+            // property set in the edge editor.
             let edge = Element(
                 layerIDs: element.layerIDs,
                 sortKey: element.sortKey,

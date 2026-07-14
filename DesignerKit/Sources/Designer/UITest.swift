@@ -56,9 +56,10 @@ final class UITestDriver {
         step20Inspector()
         step21VersionHistory()
         step22BendConnector()
+        step23RepeatConnectionCreatesParallel()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect verified")
             exit(0)
         } else {
             for failure in failures {
@@ -673,6 +674,58 @@ final class UITestDriver {
         document.undoManager?.undo() // straighten
         document.undoManager?.undo() // bend
         document.undoManager?.undo() // test graph
+    }
+
+    /// Connecting an already-connected pair again creates a PARALLEL
+    /// connector — never a silent absorb or bidirectional merge.
+    private func step23RepeatConnectionCreatesParallel() {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 4000, width: 120, height: 60))))
+        }
+        let a = node("par-a", 0), b = node("par-b", 420)
+        document.perform(.batch([.insertElement(a), .insertElement(b)]), actionName: "Parallel Test")
+        canvasView.reveal(worldRect: Rect(x: -50, y: 3900, width: 700, height: 260))
+        pumpRunLoop()
+
+        func edgesBetween() -> [DesignerModel.Edge] {
+            document.board.elements.values.compactMap(\.edge).filter {
+                ($0.from.elementID == a.id && $0.to.elementID == b.id)
+                    || ($0.from.elementID == b.id && $0.to.elementID == a.id)
+            }
+        }
+        func dragConnection(from: Element, to: Element) {
+            guard let fromFrame = document.board.elements[from.id]?.node?.frame,
+                  let toFrame = document.board.elements[to.id]?.node?.frame else { return }
+            let fromEdgeX = from.id == a.id ? fromFrame.maxX - 2 : fromFrame.x + 2
+            let start = canvasView.viewport.toView(Point(x: fromEdgeX, y: fromFrame.midY))
+            let end = canvasView.viewport.toView(Point(x: toFrame.midX, y: toFrame.midY))
+            send(.leftMouseDown, at: start, clickCount: 1)
+            for step in 1...6 {
+                let t = CGFloat(step) / 6
+                send(.leftMouseDragged, at: CGPoint(
+                    x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t
+                ), clickCount: 1)
+            }
+            send(.leftMouseUp, at: end, clickCount: 1)
+            pumpRunLoop()
+            key(53) // escape dismisses the edge editor popover
+            pumpRunLoop()
+        }
+
+        dragConnection(from: a, to: b)
+        expect(edgesBetween().count == 1, "first connection created")
+        dragConnection(from: a, to: b)
+        expect(edgesBetween().count == 2, "repeat connection creates a parallel connector")
+        dragConnection(from: b, to: a)
+        let all = edgesBetween()
+        expect(all.count == 3, "reverse connection creates its own connector")
+        expect(all.allSatisfy { $0.semantic.direction == .forward },
+               "no silent bidirectional upgrade")
+
+        for _ in 0..<4 { document.undoManager?.undo() } // 3 connects + test nodes
     }
 
     // MARK: Event synthesis

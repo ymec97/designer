@@ -552,7 +552,10 @@ final class StrokeRecognizerTests: XCTestCase {
         XCTAssertNotNil(board.elements[conversion.producedID]?.edge)
     }
 
-    func testReverseStrokeMakesConnectionBidirectional() throws {
+    /// Drawn twice means TWO connections: repeat strokes between an
+    /// already-connected pair create parallel connectors, in either
+    /// direction — never a silent merge or bidirectional upgrade.
+    func testRepeatStrokesCreateParallelConnectors() throws {
         var (board, layer) = makeBoard()
         let a = Element(
             layerIDs: [layer], sortKey: "i",
@@ -571,101 +574,38 @@ final class StrokeRecognizerTests: XCTestCase {
             layer: layer
         )
         try board.apply(.insertElement(first))
-        let firstConversion = try XCTUnwrap(SketchConversion.conversion(for: first, in: board))
-        try board.apply(firstConversion.operation)
-
-        // Second stroke B→A upgrades it instead of duplicating.
-        let second = inkElement(
-            sketchLine(from: Point(x: 395, y: 40), to: Point(x: 105, y: 40), jitterAmount: 1),
-            layer: layer
-        )
-        try board.apply(.insertElement(second))
-        let secondConversion = try XCTUnwrap(SketchConversion.conversion(for: second, in: board))
-        XCTAssertEqual(secondConversion.actionName, "Make Bidirectional")
-        try board.apply(secondConversion.operation)
-
-        let edges = board.elements.values.filter { $0.edge != nil }
-        XCTAssertEqual(edges.count, 1, "no duplicate edge")
-        XCTAssertEqual(edges.first?.edge?.semantic.direction, .both)
-    }
-
-    func testSameDirectionRestrokeIsAbsorbedNotBidirectional() throws {
-        var (board, layer) = makeBoard()
-        let a = Element(
-            layerIDs: [layer], sortKey: "i",
-            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
-        )
-        let b = Element(
-            layerIDs: [layer], sortKey: "j",
-            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
-        )
-        try board.apply(.insertElement(a))
-        try board.apply(.insertElement(b))
-
-        let first = inkElement(
-            sketchLine(from: Point(x: 105, y: 30), to: Point(x: 395, y: 30), jitterAmount: 1),
-            layer: layer
-        )
-        try board.apply(.insertElement(first))
         try board.apply(try XCTUnwrap(SketchConversion.conversion(for: first, in: board)).operation)
 
-        // Second stroke in the SAME direction: absorbed, direction unchanged.
+        // Second stroke, same direction → a parallel connector.
         let repeated = inkElement(
             sketchLine(from: Point(x: 105, y: 35), to: Point(x: 395, y: 35), jitterAmount: 1),
             layer: layer
         )
         try board.apply(.insertElement(repeated))
-        let conversion = try XCTUnwrap(SketchConversion.conversion(for: repeated, in: board))
-        XCTAssertEqual(conversion.actionName, "Convert to Connector")
-        try board.apply(conversion.operation)
+        let repeatConversion = try XCTUnwrap(SketchConversion.conversion(for: repeated, in: board))
+        XCTAssertEqual(repeatConversion.actionName, "Convert to Connector")
+        try board.apply(repeatConversion.operation)
 
-        let edges = board.elements.values.filter { $0.edge != nil }
-        XCTAssertEqual(edges.count, 1, "no duplicate edge")
-        XCTAssertEqual(
-            edges.first?.edge?.semantic.direction, .forward,
-            "same-direction restroke must NOT become bidirectional"
+        // Third stroke, reverse direction → its own B→A connector, no
+        // bidirectional upgrade (that's an edge-editor property).
+        let reverse = inkElement(
+            sketchLine(from: Point(x: 395, y: 40), to: Point(x: 105, y: 40), jitterAmount: 1),
+            layer: layer
         )
-        XCTAssertNil(board.elements[repeated.id], "the repeated stroke is absorbed")
-    }
+        try board.apply(.insertElement(reverse))
+        let reverseConversion = try XCTUnwrap(SketchConversion.conversion(for: reverse, in: board))
+        try board.apply(reverseConversion.operation)
 
-    func testConnectionMergeOutcomes() throws {
-        var (board, layer) = makeBoard()
-        let a = Element(
-            layerIDs: [layer], sortKey: "i",
-            content: .node(Node(frame: Rect(x: 0, y: 0, width: 100, height: 60)))
-        )
-        let b = Element(
-            layerIDs: [layer], sortKey: "j",
-            content: .node(Node(frame: Rect(x: 400, y: 0, width: 100, height: 60)))
-        )
-        try board.apply(.insertElement(a))
-        try board.apply(.insertElement(b))
-        XCTAssertEqual(board.connectionMergeOutcome(from: a.id, to: b.id), .none)
-
-        let edge = Element(
-            layerIDs: [layer], sortKey: "k",
-            content: .edge(DesignerModel.Edge(
-                from: .element(a.id, side: nil, offset: nil),
-                to: .element(b.id, side: nil, offset: nil)
-            ))
-        )
-        try board.apply(.insertElement(edge))
-
-        XCTAssertEqual(
-            board.connectionMergeOutcome(from: a.id, to: b.id),
-            .alreadyConnected(edge.id)
-        )
-        XCTAssertEqual(
-            board.connectionMergeOutcome(from: b.id, to: a.id),
-            .oppositeDirection(edge.id)
-        )
-
-        try board.apply(try XCTUnwrap(board.makeBidirectionalOperation(edge.id)))
-        XCTAssertEqual(
-            board.connectionMergeOutcome(from: b.id, to: a.id),
-            .alreadyConnected(edge.id),
-            "a bidirectional edge absorbs strokes in both directions"
-        )
+        let edges = board.elements.values.compactMap(\.edge)
+        XCTAssertEqual(edges.count, 3, "three strokes, three connectors")
+        XCTAssertTrue(edges.allSatisfy { $0.semantic.direction == .forward },
+                      "no silent bidirectional upgrades")
+        let backward = edges.filter { $0.from.elementID == b.id && $0.to.elementID == a.id }
+        XCTAssertEqual(backward.count, 1, "the reverse stroke keeps its own direction")
+        XCTAssertTrue(board.elements.values.allSatisfy { element in
+            if case .ink = element.content { return false }
+            return true
+        }, "all strokes converted")
     }
 
     func testConversionUndoRestoresInk() throws {

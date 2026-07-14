@@ -38,7 +38,8 @@ public enum AgentGuide {
     backward, both, none.
     - Two nodes may have several parallel connectors (e.g. gRPC AND HTTP); \
     Designer spreads them along the node sides visually. Give each a distinct \
-    label/protocol. (By hand the user draws one with ⌥-drag.)
+    label/protocol. (By hand, connecting an already-connected pair again \
+    simply adds a parallel connector.)
 
     ## App features you can explain to the user (you cannot drive these; they're in-app)
     - Draw tool (D): freehand sketches snap into blocks/connectors; ⌘R \

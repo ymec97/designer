@@ -1169,9 +1169,13 @@ public final class CanvasView: NSView {
         let hit = editableElement(at: point)
 
         // Starting a drag from a node's border band creates a connection.
-        if let hit, hit.node != nil, !event.modifierFlags.contains(.shift),
-           isInConnectBand(point, of: hit) {
-            gesture = .connect(from: hit.id, current: point, target: nil)
+        // The band wins even when a connector lies on top of the border
+        // (its anchor sits exactly there — the just-created connector would
+        // otherwise swallow the next connection drag as a bend/selection).
+        let bandNode = (hit?.node != nil ? hit : editableNode(at: point))
+        if let bandNode, !event.modifierFlags.contains(.shift),
+           isInConnectBand(point, of: bandNode) {
+            gesture = .connect(from: bandNode.id, current: point, target: nil)
             return
         }
 
@@ -1322,41 +1326,29 @@ public final class CanvasView: NSView {
 
         case .connect(let fromID, let dropPoint, let targetID):
             if let targetID {
-                // ⌥-drop forces a NEW parallel connector (e.g. gRPC + HTTP
-                // between the same pair) instead of merging into the
-                // existing one; anchor spreading keeps them apart visually.
-                let mergeOutcome = event.modifierFlags.contains(.option)
-                    ? .none
-                    : board.connectionMergeOutcome(from: fromID, to: targetID)
-                switch mergeOutcome {
-                case .alreadyConnected(let existing):
-                    // Idempotent: repeating a connection selects it, no
-                    // duplicate — and teaches the way to get a real second one.
-                    selection = [existing]
-                    showTransientHint("⌥-drag adds a parallel connector", at: dropPoint)
-                case .oppositeDirection(let existing):
-                    if let operation = board.makeBidirectionalOperation(existing) {
-                        delegate?.canvasView(self, perform: operation, actionName: "Make Bidirectional")
-                    }
-                    selection = [existing]
-                case .none:
-                    let layerIDs = activeLayerIDs()
-                    let element = Element(
-                        layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
-                        sortKey: board.topSortKey,
-                        content: .edge(Edge(
-                            from: .element(fromID, side: nil, offset: nil),
-                            to: .element(targetID, side: nil, offset: nil)
-                        ))
-                    )
-                    delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
-                    selection = [element.id]
-                    // Seamless labeling: open the editor on the fresh edge so
-                    // protocol/data/label can be set without a second click.
-                    if let inserted = board.elements[element.id] {
-                        gesture = .idle
-                        presentEdgeEditor(for: inserted, at: dropPoint)
-                    }
+                // Every connection drag creates a connector — including a
+                // repeat between an already-connected pair, which becomes a
+                // PARALLEL connector (gRPC + HTTP, request + response…).
+                // Anchor spreading keeps parallels visibly separate, and the
+                // editor opens immediately so the new one gets its own label.
+                // (Bidirectional is a property in the edge editor, never a
+                // silent merge of two drags.)
+                let layerIDs = activeLayerIDs()
+                let element = Element(
+                    layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+                    sortKey: board.topSortKey,
+                    content: .edge(Edge(
+                        from: .element(fromID, side: nil, offset: nil),
+                        to: .element(targetID, side: nil, offset: nil)
+                    ))
+                )
+                delegate?.canvasView(self, perform: .insertElement(element), actionName: "Connect")
+                selection = [element.id]
+                // Seamless labeling: open the editor on the fresh edge so
+                // protocol/data/label can be set without a second click.
+                if let inserted = board.elements[element.id] {
+                    gesture = .idle
+                    presentEdgeEditor(for: inserted, at: dropPoint)
                 }
             }
             needsDisplay = true
@@ -1923,6 +1915,18 @@ public final class CanvasView: NSView {
             .compactMap { board.elements[$0] }
             .filter { isEditable(id: $0.id) }
             .filter { preciseHit($0, world: world, tolerance: tolerance) }
+        return candidates.max { ($0.sortKey, $0.id) < ($1.sortKey, $1.id) }
+    }
+
+    /// Topmost NODE under the point, ignoring connectors and ink — the
+    /// connect-band check must see the node even when an edge covers it.
+    private func editableNode(at viewPoint: CGPoint) -> Element? {
+        let world = viewport.toWorld(viewPoint)
+        let candidates = spatialIndex
+            .query(Rect(x: world.x - 1, y: world.y - 1, width: 2, height: 2))
+            .compactMap { board.elements[$0] }
+            .filter { $0.node != nil && isEditable(id: $0.id) }
+            .filter { $0.node?.frame.contains(world) == true }
         return candidates.max { ($0.sortKey, $0.id) < ($1.sortKey, $1.id) }
     }
 
