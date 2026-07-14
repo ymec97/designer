@@ -44,7 +44,8 @@ public enum BoardSnapshot {
         for element in board.elementsInZOrder {
             if let edge = element.edge {
                 if let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id]) {
-                    renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false)
+                    renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false,
+                                      captionFraction: spread[element.id]?.captionT ?? 0.5)
                 }
             } else {
                 renderer.draw(element, in: context, viewport: viewport, isSelected: false)

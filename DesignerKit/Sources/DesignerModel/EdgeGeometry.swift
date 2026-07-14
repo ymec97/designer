@@ -12,19 +12,7 @@ public enum EdgeGeometry {
         public var start: Point { points.first ?? .zero }
         public var end: Point { points.last ?? .zero }
 
-        public var midpoint: Point {
-            guard points.count >= 2 else { return start }
-            let lengths = zip(points, points.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }
-            let total = lengths.reduce(0, +)
-            guard total > 0 else { return start }
-            var remaining = total / 2
-            for (index, length) in lengths.enumerated() where remaining <= length {
-                let t = length > 0 ? remaining / length : 0
-                let a = points[index], b = points[index + 1]
-                return Point(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
-            }
-            return end
-        }
+        public var midpoint: Point { point(atFraction: 0.5) }
 
         public var boundingRect: Rect {
             guard let first = points.first else { return Rect(x: 0, y: 0, width: 0, height: 0) }
@@ -83,12 +71,16 @@ public enum EdgeGeometry {
 
     /// Per-edge anchor-offset overrides so several connectors meeting the
     /// same node side spread along it instead of stacking on the midpoint.
+    /// `captionT` staggers parallel edges' label pills along the route
+    /// (everyone at 0.5 overlaps).
     public struct EndpointOffsets: Equatable {
         public var from: Double?
         public var to: Double?
-        public init(from: Double? = nil, to: Double? = nil) {
+        public var captionT: Double?
+        public init(from: Double? = nil, to: Double? = nil, captionT: Double? = nil) {
             self.from = from
             self.to = to
+            self.captionT = captionT
         }
     }
 
@@ -212,6 +204,25 @@ public enum EdgeGeometry {
         }
 
         var spread: [ElementID: EndpointOffsets] = [:]
+
+        // Parallel edges (same node pair): stagger their caption pills along
+        // the route so labels never sit on top of each other.
+        var pairs: [String: [ElementID]] = [:]
+        for element in board.elementsInZOrder {
+            guard let edge = element.edge, edge.waypoints.isEmpty,
+                  let a = edge.from.elementID, let b = edge.to.elementID, a != b else { continue }
+            let key = a.rawValue.uuidString < b.rawValue.uuidString
+                ? "\(a.rawValue)|\(b.rawValue)" : "\(b.rawValue)|\(a.rawValue)"
+            pairs[key, default: []].append(element.id)
+        }
+        for ids in pairs.values where ids.count > 1 {
+            for (index, id) in ids.enumerated() {
+                var offsets = spread[id] ?? EndpointOffsets()
+                offsets.captionT = 0.32 + 0.36 * Double(index) / Double(ids.count - 1)
+                spread[id] = offsets
+            }
+        }
+
         for (key, slots) in groups where slots.count > 1 {
             guard let frame = frames(key.nodeID) else { continue }
             let length = (key.side == .top || key.side == .bottom)

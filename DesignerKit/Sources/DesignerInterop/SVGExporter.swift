@@ -50,7 +50,8 @@ public enum SVGExporter {
         for element in source.elementsInZOrder {
             guard let edge = element.edge,
                   let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id]) else { continue }
-            body += svgEdge(edge, route: route, palette: palette)
+            body += svgEdge(edge, route: route, palette: palette,
+                            captionFraction: spread[element.id]?.captionT ?? 0.5)
         }
         for element in source.elementsInZOrder {
             switch element.content {
@@ -102,7 +103,7 @@ public enum SVGExporter {
         """
     }
 
-    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette) -> String {
+    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette, captionFraction: Double = 0.5) -> String {
         let points = route.points.map { "\(fmt($0.x)),\(fmt($0.y))" }.joined(separator: " ")
         let markerStart = (edge.semantic.direction == .backward || edge.semantic.direction == .both)
             ? " marker-start=\"url(#arrow)\"" : ""
@@ -119,13 +120,13 @@ public enum SVGExporter {
 
         var svg = "<polyline points=\"\(points)\" fill=\"none\" stroke=\"\(palette.edge)\" stroke-width=\"1.5\"\(markerStart)\(markerEnd)\(attributes)/>"
 
-        // Caption at the midpoint.
+        // Caption along the route (staggered for parallel edges).
         let caption = [
             edge.semantic.label,
             edge.semantic.properties[WellKnownEdgeProperty.protocolKey].map { "protocol: \($0)" },
         ].compactMap { $0 }.filter { !$0.isEmpty }
         if !caption.isEmpty {
-            let mid = route.midpoint
+            let mid = route.point(atFraction: captionFraction)
             for (index, line) in caption.enumerated() {
                 svg += centeredText(
                     line, x: mid.x, y: mid.y + Double(index) * 14 - Double(caption.count - 1) * 7,

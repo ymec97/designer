@@ -92,6 +92,30 @@ final class EdgeGeometryTests: XCTestCase {
         XCTAssertNotEqual(rg.points.last, rh.points.last)
     }
 
+    func testParallelEdgesGetStaggeredCaptions() {
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 300, y: 0, width: 80, height: 40))
+        let grpc = connect(a, b), http = connect(a, b)
+        let single = connect(a, addNode("c", frame: Rect(x: 0, y: 200, width: 80, height: 40)))
+
+        let spread = EdgeGeometry.anchorSpread(in: board)
+        let g = spread[grpc.id]?.captionT, h = spread[http.id]?.captionT
+        XCTAssertNotNil(g); XCTAssertNotNil(h)
+        XCTAssertNotEqual(g, h, "parallel captions never share a spot")
+        XCTAssertNil(spread[single.id]?.captionT, "lone edges keep the midpoint")
+    }
+
+    func testPointAtFractionWalksArcLength() {
+        let route = EdgeGeometry.Route(points: [
+            Point(x: 0, y: 0), Point(x: 10, y: 0), Point(x: 10, y: 10), Point(x: 20, y: 10),
+        ])
+        // Total length 30; fraction 0.5 = 15 along = middle of second segment.
+        XCTAssertEqual(route.midpoint, Point(x: 10, y: 5))
+        XCTAssertEqual(route.point(atFraction: 0), Point(x: 0, y: 0))
+        XCTAssertEqual(route.point(atFraction: 1), Point(x: 20, y: 10))
+        XCTAssertEqual(route.point(atFraction: 2.0 / 3.0), Point(x: 10, y: 10))
+    }
+
     // MARK: Auto-side + anchoring
 
     func testAutoSideFacesTheOtherNode() throws {

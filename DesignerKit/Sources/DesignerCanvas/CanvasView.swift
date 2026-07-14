@@ -450,7 +450,8 @@ public final class CanvasView: NSView {
                                 edge, route: route,
                                 in: context, viewport: viewport,
                                 isSelected: selection.contains(element.id),
-                                isDangling: danglingEdgeIDs.contains(element.id)
+                                isDangling: danglingEdgeIDs.contains(element.id),
+                                captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5
                             )
                         }
                     } else {
@@ -913,6 +914,12 @@ public final class CanvasView: NSView {
         pendingFlowChoices = []
     }
 
+    /// Records one hop programmatically — what clicking its target block
+    /// does. Used by self-tests and the scripted demo driver.
+    public func recordFlowCandidate(_ candidate: FlowRecorder.Candidate) {
+        recordFlowCandidateNow(candidate)
+    }
+
     private func recordFlowCandidateNow(_ candidate: FlowRecorder.Candidate) {
         guard var recorder = flowRecorder else { return }
         guard recorder.record(candidate, in: board) else { return }
@@ -960,7 +967,8 @@ public final class CanvasView: NSView {
         for candidate in recorder.candidates(in: board) {
             guard let element = board.elements[candidate.edge], let edge = element.edge,
                   let route = routeCache[candidate.edge] else { continue }
-            renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false)
+            renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false,
+                              captionFraction: anchorSpreadCache[candidate.edge]?.captionT ?? 0.5)
         }
 
         // Reached blocks: solid glow. Candidate next blocks: normal render +

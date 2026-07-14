@@ -480,6 +480,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if CommandLine.arguments.contains("--agent-test") {
             runAgentTest()
         }
+        // Scripted feature demo, self-recorded to a movie (see DemoFlow.swift).
+        if let index = CommandLine.arguments.firstIndex(of: "--demo-flow"),
+           CommandLine.arguments.indices.contains(index + 1) {
+            runFlowDemo(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
         // Debug/testing: open the example board with the agent server running
         // and stay alive (drive it externally, e.g. from the claude CLI).
         if CommandLine.arguments.contains("--agent-serve") {
@@ -515,6 +520,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
            CommandLine.arguments.indices.contains(index + 1) {
             ScreenshotDriver.run(saveTo: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         }
+    }
+
+    private var demoFlowDriver: DemoFlowDriver?
+
+    private func runFlowDemo(saveTo url: URL) {
+        let controller = NSDocumentController.shared
+        guard let typeName = controller.defaultType,
+              let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument
+        else {
+            FileHandle.standardError.write(Data("DEMO FAIL: cannot create document\n".utf8))
+            exit(1)
+        }
+        controller.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        guard let driver = DemoFlowDriver(document: document, outputURL: url) else {
+            FileHandle.standardError.write(Data("DEMO FAIL: no canvas window or writer\n".utf8))
+            exit(1)
+        }
+        demoFlowDriver = driver
+        DispatchQueue.main.async { driver.run() }
     }
 
     private func runUITest() {

@@ -279,7 +279,8 @@ final class BoardRenderer {
         viewport: CanvasViewport,
         isSelected: Bool,
         isDangling: Bool = false,
-        simplified: Bool = false
+        simplified: Bool = false,
+        captionFraction: Double = 0.5
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
@@ -334,9 +335,10 @@ final class BoardRenderer {
             )
         }
 
-        // Label pill + well-known-key badges at the route midpoint.
+        // Label pill + well-known-key badges along the route (parallel edges
+        // get staggered fractions so pills don't overlap).
         if viewport.scale >= Self.textVisibilityScale {
-            drawEdgeCaption(edge, at: viewport.toView(route.midpoint), viewport: viewport, in: context)
+            drawEdgeCaption(edge, at: viewport.toView(route.point(atFraction: captionFraction)), viewport: viewport, in: context)
         }
     }
 
