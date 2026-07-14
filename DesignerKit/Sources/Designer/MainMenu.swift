@@ -90,6 +90,9 @@ enum MainMenu {
         menu.addItem(withTitle: "Convert Sketches Automatically",
                      action: Selector(("toggleLiveRecognition:")),
                      keyEquivalent: "")
+        menu.addItem(withTitle: "Hand-drawn Style",
+                     action: Selector(("toggleSketchyStyle:")),
+                     keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Delete",
                      action: #selector(CanvasView.deleteSelection(_:)),

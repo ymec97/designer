@@ -49,6 +49,28 @@ final class BoardOperationTests: XCTestCase {
         }
     }
 
+    func testSetExtraTogglesAndInverts() throws {
+        XCTAssertFalse(board.isSketchy)
+        let inverse = try board.apply(.setExtra(key: Board.sketchyExtraKey, value: .bool(true)))
+        XCTAssertTrue(board.isSketchy)
+        XCTAssertEqual(inverse, .setExtra(key: Board.sketchyExtraKey, value: nil))
+        try board.apply(inverse)
+        XCTAssertFalse(board.isSketchy)
+        XCTAssertNil(board.extra[Board.sketchyExtraKey], "clearing removes the key entirely")
+    }
+
+    func testSketchJitterIsDeterministicAndAnchored() {
+        let line = [Point(x: 0, y: 0), Point(x: 300, y: 0)]
+        let a = Sketch.roughPolyline(line, seed: 7, pass: 0)
+        let b = Sketch.roughPolyline(line, seed: 7, pass: 0)
+        XCTAssertEqual(a, b, "same seed, same wobble")
+        XCTAssertNotEqual(a, Sketch.roughPolyline(line, seed: 8, pass: 0), "different seed differs")
+        XCTAssertNotEqual(a, Sketch.roughPolyline(line, seed: 7, pass: 1), "passes differ")
+        XCTAssertEqual(a.first, line.first)
+        XCTAssertEqual(a.last, line.last, "endpoints never move")
+        XCTAssertGreaterThan(a.count, 2, "segments subdivide")
+    }
+
     func testReplaceBoardSwapsContentKeepsIdentity() throws {
         try board.apply(.insertElement(makeNode(name: "mine")))
         let originalID = board.id

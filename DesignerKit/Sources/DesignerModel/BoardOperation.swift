@@ -21,6 +21,9 @@ public enum BoardOperation: Equatable, Sendable {
     case insertGroup(Group)
     case removeGroup(GroupID)
     case replaceGroup(Group)
+    /// Set (or clear, with nil) one board-level `extra` entry — board-wide
+    /// toggles like the hand-drawn style live there.
+    case setExtra(key: String, value: JSONValue?)
     /// Replace the board's entire CONTENT (title, layers, elements, groups,
     /// flows, extra) with another board's — one undo step. Identity (id,
     /// createdAt, schemaVersion) stays; this is what "restore a version"
@@ -184,6 +187,15 @@ extension Board {
             let old = groups[index]
             groups[index] = group
             return .replaceGroup(old)
+
+        case .setExtra(let key, let value):
+            let old = extra[key]
+            if let value {
+                extra[key] = value
+            } else {
+                extra.removeValue(forKey: key)
+            }
+            return .setExtra(key: key, value: old)
 
         case .replaceBoard(let replacement):
             // Only CONTENT moves; identity (id, createdAt, schemaVersion)

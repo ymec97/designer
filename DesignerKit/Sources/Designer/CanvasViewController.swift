@@ -480,6 +480,18 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         return nil
     }
 
+    // MARK: Hand-drawn style (P3)
+
+    @objc func toggleSketchyStyle(_ sender: Any?) {
+        document.perform(
+            .setExtra(
+                key: Board.sketchyExtraKey,
+                value: document.board.isSketchy ? nil : .bool(true)
+            ),
+            actionName: document.board.isSketchy ? "Clean Style" : "Hand-drawn Style"
+        )
+    }
+
     // MARK: Zoom HUD (P1)
 
     private let zoomHUDModel = ZoomHUDModel()
@@ -1031,6 +1043,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Straighten Selected Connectors", shortcut: nil, systemImage: "line.diagonal") { [weak self] in
                 self?.canvasView.straightenSelection(nil)
+            },
+            PaletteCommand(title: "Toggle Hand-drawn Style", shortcut: nil, systemImage: "scribble.variable") { [weak self] in
+                self?.toggleSketchyStyle(nil)
             },
             PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3") { [weak self] in
                 self?.toggleInspector(nil)
@@ -1641,6 +1656,9 @@ extension CanvasViewController: NSMenuItemValidation {
             }
         case #selector(toggleLiveRecognition(_:)):
             menuItem.state = liveRecognitionEnabled ? .on : .off
+            return true
+        case #selector(toggleSketchyStyle(_:)):
+            menuItem.state = document.board.isSketchy ? .on : .off
             return true
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty

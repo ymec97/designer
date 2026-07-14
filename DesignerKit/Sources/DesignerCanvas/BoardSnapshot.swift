@@ -38,6 +38,7 @@ public enum BoardSnapshot {
         }
 
         let renderer = BoardRenderer()
+        renderer.sketchy = board.isSketchy
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)
         let spread = EdgeGeometry.anchorSpread(in: board)

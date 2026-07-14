@@ -16,6 +16,7 @@ public final class CanvasView: NSView {
 
     public var board = Board(title: "") {
         didSet {
+            renderer.sketchy = board.isSketchy
             parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
             anchorSpreadCache = EdgeGeometry.anchorSpread(in: board)
             routeCache = SpatialIndex.resolveRoutes(for: board)

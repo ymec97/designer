@@ -40,6 +40,62 @@ final class BoardRenderer {
     /// costly) — imperceptible on a dense board, and it keeps the frame budget.
     var elevateNodes = true
 
+    /// P3 — hand-drawn style: outlines wobble (two overlaid jittered passes),
+    /// text goes handwritten. Mirrors `board.isSketchy`; set by the canvas
+    /// and snapshotters. Invalidate text caches when it flips.
+    var sketchy = false {
+        didSet { if sketchy != oldValue { textCache.removeAll() } }
+    }
+
+    /// Strokes a jittered two-pass version of `viewPoints` (already in view
+    /// space; `closed` re-joins the shape). Stroke state must be set by the
+    /// caller — this only replaces the geometry.
+    private func strokeSketchy(
+        _ viewPoints: [CGPoint], closed: Bool, seed: UInt64,
+        viewport: CanvasViewport, in context: CGContext
+    ) {
+        let worldish = viewPoints.map { Point(x: Double($0.x), y: Double($0.y)) }
+        // World-attached wobble: constant in world units, scales with zoom.
+        let roughness = 1.7 * viewport.scale
+        let step = 30 * viewport.scale
+        for pass in 0..<2 {
+            let jittered = closed
+                ? Sketch.roughPolygon(worldish, seed: seed, roughness: roughness, step: step, pass: pass)
+                : Sketch.roughPolyline(worldish, seed: seed, roughness: roughness, step: step, pass: pass)
+            guard jittered.count >= 2 else { continue }
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: jittered[0].x, y: jittered[0].y))
+            for point in jittered.dropFirst() {
+                path.addLine(to: CGPoint(x: point.x, y: point.y))
+            }
+            if closed { path.closeSubpath() }
+            context.addPath(path)
+            context.strokePath()
+        }
+    }
+
+    /// Deterministic per-shape wobble seed. Size-based (not position-based)
+    /// so dragging a node doesn't make its outline shimmer.
+    private func sketchSeed(width: Double, height: Double, salt: UInt64) -> UInt64 {
+        UInt64(bitPattern: Int64(width * 8)) &* 31
+            &+ UInt64(bitPattern: Int64(height * 8)) &* 17
+            &+ salt
+    }
+
+    /// Straight-segment corners of a simple polygon CGPath (diamond/triangle).
+    private func polygonCorners(of path: CGPath) -> [CGPoint] {
+        var corners: [CGPoint] = []
+        path.applyWithBlock { element in
+            switch element.pointee.type {
+            case .moveToPoint, .addLineToPoint:
+                corners.append(element.pointee.points[0])
+            default:
+                break
+            }
+        }
+        return corners
+    }
+
     func draw(
         _ element: Element,
         in context: CGContext,
@@ -186,8 +242,31 @@ final class BoardRenderer {
 
         context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
         context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.25) * viewport.scale)
-        context.addPath(path)
-        context.strokePath()
+        if sketchy {
+            // Hand-drawn outline: two wobbly passes instead of the clean path
+            // (the fill stays clean underneath — tidy color, rough ink).
+            context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.0) * viewport.scale)
+            let corners: [CGPoint]
+            switch node.shape {
+            case .ellipse:
+                corners = Sketch.ellipsePolygon(
+                    in: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+                ).map { CGPoint(x: $0.x, y: $0.y) }
+            case .diamond, .triangle:
+                corners = polygonCorners(of: path)
+            default:
+                corners = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                           CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
+            }
+            strokeSketchy(
+                corners, closed: true,
+                seed: sketchSeed(width: frame.width, height: frame.height, salt: UInt64(node.shape.rawValue.count)),
+                viewport: viewport, in: context
+            )
+        } else {
+            context.addPath(path)
+            context.strokePath()
+        }
 
         // The kind dot — one saturated spot of colour, top-left inside the
         // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
@@ -301,7 +380,19 @@ final class BoardRenderer {
         if isDangling {
             context.setLineDash(phase: 0, lengths: [max(5 * viewport.scale, 3), max(4 * viewport.scale, 2.5)])
         }
-        strokePolyline(viewPoints, in: context)
+        if sketchy, !simplified, !isDangling {
+            context.setLineWidth(max(lineWidth * 0.75, 0.8))
+            strokeSketchy(
+                viewPoints, closed: false,
+                seed: sketchSeed(
+                    width: route.points[0].x + route.points[route.points.count - 1].x,
+                    height: route.points[0].y + route.points[route.points.count - 1].y,
+                    salt: UInt64(route.points.count)),
+                viewport: viewport, in: context
+            )
+        } else {
+            strokePolyline(viewPoints, in: context)
+        }
         if isDangling {
             context.setLineDash(phase: 0, lengths: [])
             // Open circle at each unattached endpoint: "plug me back in".
@@ -833,12 +924,23 @@ final class BoardRenderer {
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byTruncatingTail
         let attributed = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: bucketed, weight: .medium),
+            .font: labelFont(ofSize: bucketed),
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ])
         textCache[key] = attributed
         return attributed
+    }
+
+    /// Hand-drawn boards write by hand (P3). Noteworthy ships with macOS;
+    /// the rounded system face is the graceful fallback.
+    private func labelFont(ofSize size: CGFloat) -> NSFont {
+        guard sketchy else { return NSFont.systemFont(ofSize: size, weight: .medium) }
+        if let hand = NSFont(name: "Noteworthy-Bold", size: size) { return hand }
+        let descriptor = NSFont.systemFont(ofSize: size, weight: .medium)
+            .fontDescriptor.withDesign(.rounded)
+        return descriptor.flatMap { NSFont(descriptor: $0, size: size) }
+            ?? NSFont.systemFont(ofSize: size, weight: .medium)
     }
 
     // MARK: Colors

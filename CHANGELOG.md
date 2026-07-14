@@ -30,6 +30,9 @@ First testable release: the full MVP plus the post-MVP feature set.
   (⌥⌘B): labeled subsystem/trust-zone containers rendered behind content.
 - Inspector (⌥⌘I): edit names, kinds, shapes, and connector semantics
   directly. Snapping & alignment guides; fuzzy ⌘K command palette.
+- Hand-drawn style (Board menu): the whole board renders like a marker
+  sketch — wobbly outlines, handwritten labels — while staying fully
+  structured. Per board, undoable, off by default.
 - Layers (⌘L): one board, many concerns; visibility, locking, focus dimming.
 - Library (⌘Y): save and reuse diagram patterns.
 

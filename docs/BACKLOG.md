@@ -135,8 +135,14 @@ ink strokes, and edge waypoints. Should be one undo step (batch operation —
 the operation layer already supports this). UI: replace the current
 single-selection-only handle box with a multi-selection variant.
 
-### P3. Hand-drawn ("sketchy") render style, toggleable
-*Requested 2026-07-12 by Yarden. Post-MVP.*
+### P3. Hand-drawn ("sketchy") render style, toggleable — DONE 2026-07-15
+*Requested 2026-07-12 by Yarden.* Shipped: Board ▸ Hand-drawn Style (per-board
+flag in extra["sketchy"], undoable via the new setExtra op, off by default).
+Outlines render as two overlaid deterministically-jittered passes (seeded by
+element size so drags don't shimmer; wobble is world-attached), fills stay
+clean, labels go handwritten (Noteworthy, rounded-system fallback). Applies
+to canvas + PNG/thumbnail snapshots. SVG export stays clean for now.
+Original notes:
 An Excalidraw-style roughness option: blocks, connectors, and text render
 with hand-drawn jitter/wobble even after structurizing — keeps diagrams
 feeling informal. Must be a per-board (or per-export?) toggle, default off.
