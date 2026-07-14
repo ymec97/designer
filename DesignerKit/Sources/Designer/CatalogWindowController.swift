@@ -26,9 +26,37 @@ final class CatalogWindowController: NSWindowController {
             onNew: { AppActions.newCanvas() },
             onOpen: { AppActions.open($0) },
             onOpenElsewhere: { AppActions.openPanel() },
-            onExample: { AppActions.openExample() }
+            onExample: { AppActions.openExample() },
+            onDelete: { [weak self] entry in self?.confirmDelete(entry) }
         )
         window.contentView = NSHostingView(rootView: view)
+    }
+
+    /// Right-click ▸ Move to Trash: confirm, close the board's window if it's
+    /// open, trash the package (recoverable), refresh the grid.
+    private func confirmDelete(_ entry: CatalogEntry) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move “\(entry.title)” to the Trash?"
+        alert.informativeText = "The board is moved to the Trash, not deleted — you can put it back from there."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let target = entry.url.resolvingSymlinksInPath().standardizedFileURL
+            for document in NSDocumentController.shared.documents
+            where document.fileURL?.resolvingSymlinksInPath().standardizedFileURL == target {
+                document.close()
+            }
+            do {
+                try BoardCatalog.trash(entry.url)
+                self.model.thumbnails[entry.url] = nil
+                self.model.reload()
+            } catch {
+                NSAlert(error: error).beginSheetModal(for: window)
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }

@@ -52,7 +52,8 @@ First testable release: the full MVP plus the post-MVP feature set.
 
 ### Interchange & files
 - Boards are folder packages (board.json + assets), autosaved, with a
-  catalog start screen (New Canvas + previous boards with thumbnails).
+  catalog start screen (New Canvas + previous boards with thumbnails;
+  right-click a board to open, reveal in Finder, or move it to the Trash).
 - Copy for LLM / import back (lossless text round-trip), PNG + SVG export,
   copy/paste/duplicate across windows.
 

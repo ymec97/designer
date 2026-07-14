@@ -63,6 +63,13 @@ enum BoardCatalog {
         return CatalogEntry(url: url, title: title, modified: modified)
     }
 
+    /// Moves a board package to the Trash (recoverable — never a hard
+    /// delete). The catalog and recents self-heal: entries whose files are
+    /// gone are skipped on the next reload.
+    static func trash(_ url: URL) throws {
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    }
+
     /// A fresh, unused board file URL in the managed folder ("Untitled",
     /// "Untitled 2", …), so a new canvas is tracked and appears in the catalog.
     static func newBoardURL(in folder: URL? = nil, baseName: String = "Untitled") -> URL {

@@ -20,6 +20,7 @@ struct CatalogView: View {
     let onOpen: (URL) -> Void
     let onOpenElsewhere: () -> Void
     let onExample: () -> Void
+    let onDelete: (CatalogEntry) -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 208, maximum: 260), spacing: 20)]
 
@@ -42,6 +43,14 @@ struct CatalogView: View {
                             thumbnail: model.thumbnails[entry.url],
                             action: { onOpen(entry.url) }
                         )
+                        .contextMenu {
+                            Button("Open") { onOpen(entry.url) }
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+                            }
+                            Divider()
+                            Button("Move to Trash…", role: .destructive) { onDelete(entry) }
+                        }
                         .onAppear { loadThumbnail(entry) }
                     }
                 }
