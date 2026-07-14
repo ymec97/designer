@@ -1,9 +1,33 @@
 import SwiftUI
 import DesignerCanvas
+import DesignerModel
 
 /// The app's one piece of persistent chrome (D17): a floating capsule with
 /// the four core actions and their shortcuts, Excalidraw-style. Everything
 /// else stays in menus and keys.
+/// The typed-block palette (feature 3): the kinds and symbolic shapes a user
+/// can insert directly, with sensible shape defaults per kind.
+struct BlockPaletteEntry: Identifiable {
+    let title: String
+    let icon: String
+    let kind: NodeKind
+    let shape: NodeShape
+    var orientation: ShapeOrientation = .up
+    var id: String { title }
+
+    static let all: [BlockPaletteEntry] = [
+        .init(title: "Service", icon: "square", kind: .service, shape: .rectangle),
+        .init(title: "Database", icon: "cylinder", kind: .database, shape: .ellipse),
+        .init(title: "Queue", icon: "text.line.first.and.arrowtriangle.forward", kind: .queue, shape: .rectangle),
+        .init(title: "Cache", icon: "bolt.square", kind: .cache, shape: .rectangle),
+        .init(title: "Gateway", icon: "point.3.connected.trianglepath.dotted", kind: .gateway, shape: .rectangle),
+        .init(title: "Client", icon: "person.crop.square", kind: .client, shape: .rectangle),
+        .init(title: "External", icon: "arrow.up.right.square", kind: .external, shape: .rectangle),
+        .init(title: "Decision", icon: "diamond", kind: .generic, shape: .diamond),
+        .init(title: "Alert", icon: "exclamationmark.triangle", kind: .generic, shape: .triangle),
+    ]
+}
+
 final class ToolbarState: ObservableObject {
     @Published var tool: CanvasView.Tool = .select
     @Published var layersPanelVisible = false
@@ -20,6 +44,7 @@ struct CanvasToolbar: View {
     let onLayers: () -> Void
     let onLibrary: () -> Void
     let onSimulate: () -> Void
+    let onAddTypedBlock: (BlockPaletteEntry) -> Void
 
     var body: some View {
         HStack(spacing: 2) {
@@ -32,10 +57,29 @@ struct CanvasToolbar: View {
                 isActive: state.tool == .draw, action: onDrawTool
             )
             Divider().frame(height: 22).padding(.horizontal, 3)
-            toolButton(
-                icon: "plus.square", hint: "⌘B", label: "Add Block",
-                isActive: false, action: onAddBlock
-            )
+            Menu {
+                ForEach(BlockPaletteEntry.all) { entry in
+                    Button {
+                        onAddTypedBlock(entry)
+                    } label: {
+                        Label(entry.title, systemImage: entry.icon)
+                    }
+                }
+            } label: {
+                VStack(spacing: 1) {
+                    Image(systemName: "plus.square")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(height: 20)
+                    Text("⌘B").font(.system(size: 8)).foregroundStyle(GraphiteStyle.inkFaint)
+                }
+                .frame(width: 40, height: 36)
+            } primaryAction: {
+                onAddBlock()
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .foregroundStyle(GraphiteStyle.inkDim)
+            .help("Add Block (⌘B) — click for a plain block, or open the menu for a typed one")
             toolButton(
                 icon: "wand.and.stars", hint: "⌘R", label: "Structurize",
                 help: "Structurize (⌘R) — turn selected freehand sketches into clean blocks & connectors",

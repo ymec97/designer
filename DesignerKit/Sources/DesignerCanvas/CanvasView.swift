@@ -1504,14 +1504,37 @@ public final class CanvasView: NSView {
     // MARK: Block creation & label editing
 
     private func createBlock(at world: Point) {
+        insertBlock(at: world, kind: .generic, shape: .rectangle)
+    }
+
+    /// The typed-insertion entry point (feature 3): drop a block of a chosen
+    /// kind and shape at the viewport center and start naming it.
+    public func addBlock(kind: NodeKind, shape: NodeShape, orientation: ShapeOrientation = .up) {
+        insertBlock(
+            at: viewport.toWorld(CGPoint(x: bounds.midX, y: bounds.midY)),
+            kind: kind, shape: shape, orientation: orientation
+        )
+    }
+
+    private func insertBlock(
+        at world: Point, kind: NodeKind, shape: NodeShape, orientation: ShapeOrientation = .up
+    ) {
         let layerIDs = activeLayerIDs()
         Self.debugTrace?("createBlock world=\(world) layers=\(layerIDs.count) delegate=\(delegate != nil)")
         guard !layerIDs.isEmpty else { return }
-        let frame = Rect(x: world.x - 80, y: world.y - 40, width: 160, height: 80)
+        // Squarer default for the symbolic shapes so they read correctly.
+        let size = shape == .rectangle ? CGSize(width: 160, height: 80) : CGSize(width: 130, height: 90)
+        let frame = Rect(
+            x: world.x - Double(size.width) / 2, y: world.y - Double(size.height) / 2,
+            width: Double(size.width), height: Double(size.height)
+        )
         let element = Element(
             layerIDs: layerIDs,
             sortKey: board.topSortKey,
-            content: .node(Node(semantic: NodeSemantic(kind: .generic, name: ""), frame: frame))
+            content: .node(Node(
+                semantic: NodeSemantic(kind: kind, name: ""),
+                frame: frame, shape: shape, orientation: orientation
+            ))
         )
         delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Block")
         selection = [element.id]

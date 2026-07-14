@@ -744,6 +744,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Add Block", shortcut: "⌘B", systemImage: "plus.square") { [weak self] in
                 self?.canvasView.addBlock(nil)
             },
+        ] + BlockPaletteEntry.all.map { entry in
+            PaletteCommand(title: "Add \(entry.title) Block", shortcut: nil, systemImage: entry.icon) { [weak self] in
+                self?.canvasView.addBlock(kind: entry.kind, shape: entry.shape, orientation: entry.orientation)
+            }
+        } + [
             PaletteCommand(title: "Draw Tool", shortcut: "D", systemImage: "pencil.line") { [weak self] in
                 self?.canvasView.activateDrawTool(nil)
             },
@@ -923,6 +928,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 guard let self else { return }
                 self.simulateTraffic(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
+            },
+            onAddTypedBlock: { [weak self] entry in
+                // No focus hand-back: addBlock opens the label editor.
+                self?.canvasView.addBlock(kind: entry.kind, shape: entry.shape, orientation: entry.orientation)
             }
         )
         let host = NSHostingView(rootView: toolbar)
