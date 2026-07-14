@@ -1,7 +1,7 @@
 #!/usr/bin/env swift
 // Generates App/AppIcon.iconset (run `iconutil -c icns` on it afterwards).
-// The mark: a freehand stroke morphing into a clean connector + block — the
-// sketch-to-structure identity — on a Studio Graphite squircle.
+// The mark: a miniature system diagram — a gateway block fanning out to a
+// service and a data store — on a Studio Graphite squircle.
 import AppKit
 
 func hex(_ value: String, alpha: CGFloat = 1) -> NSColor {
@@ -24,70 +24,60 @@ func drawIcon(size: CGFloat) -> NSImage {
     let square = NSRect(x: margin, y: margin, width: size - margin * 2, height: size - margin * 2)
     let squircle = NSBezierPath(roundedRect: square, xRadius: 185 * s, yRadius: 185 * s)
 
-    // Graphite ground with a faint indigo bloom low in the tile.
+    // Graphite ground, slightly lifted at the top.
     NSGraphicsContext.current?.saveGraphicsState()
     squircle.addClip()
-    NSGradient(colors: [hex("#232733"), hex("#151820")])!
+    NSGradient(colors: [hex("#252A38"), hex("#14171E")])!
         .draw(in: square, angle: -90)
-    let bloom = NSGradient(colors: [hex("#3B5BDB", alpha: 0.32), hex("#3B5BDB", alpha: 0)])!
-    bloom.draw(fromCenter: NSPoint(x: size * 0.62, y: size * 0.34), radius: 0,
-               toCenter: NSPoint(x: size * 0.62, y: size * 0.34), radius: 520 * s, options: [])
     NSGraphicsContext.current?.restoreGraphicsState()
 
-    // 1. The freehand sketch: a wobbly stroke wandering in from the left.
-    let sketch = NSBezierPath()
-    sketch.lineWidth = 30 * s
-    sketch.lineCapStyle = .round
-    sketch.lineJoinStyle = .round
-    sketch.move(to: NSPoint(x: 200 * s, y: 655 * s))
-    sketch.curve(to: NSPoint(x: 330 * s, y: 555 * s),
-                 controlPoint1: NSPoint(x: 265 * s, y: 700 * s),
-                 controlPoint2: NSPoint(x: 275 * s, y: 520 * s))
-    sketch.curve(to: NSPoint(x: 445 * s, y: 512 * s),
-                 controlPoint1: NSPoint(x: 385 * s, y: 590 * s),
-                 controlPoint2: NSPoint(x: 405 * s, y: 512 * s))
-    hex("#9AA0AD", alpha: 0.85).setStroke()
-    sketch.stroke()
+    let indigo = hex("#7D97FF")
+    let lineWidth = 26 * s
 
-    // 2. …snapping into a clean connector…
-    let wire = NSBezierPath()
-    wire.lineWidth = 30 * s
-    wire.lineCapStyle = .round
-    wire.move(to: NSPoint(x: 445 * s, y: 512 * s))
-    wire.line(to: NSPoint(x: 620 * s, y: 512 * s))
-    hex("#7D97FF").setStroke()
-    wire.stroke()
+    // Layout (1024-space, y-up): gateway top-center, service bottom-left,
+    // data store (ellipse) bottom-right.
+    let gateway = NSRect(x: 392 * s, y: 610 * s, width: 240 * s, height: 160 * s)
+    let service = NSRect(x: 196 * s, y: 254 * s, width: 240 * s, height: 160 * s)
+    let store   = NSRect(x: 592 * s, y: 250 * s, width: 244 * s, height: 168 * s)
 
-    // Arrowhead into the block.
-    let arrow = NSBezierPath()
-    arrow.move(to: NSPoint(x: 596 * s, y: 568 * s))
-    arrow.line(to: NSPoint(x: 668 * s, y: 512 * s))
-    arrow.line(to: NSPoint(x: 596 * s, y: 456 * s))
-    arrow.close()
-    hex("#7D97FF").setFill()
-    arrow.fill()
+    // Connectors first (under the blocks): gateway → each child.
+    func connector(from: NSPoint, to: NSPoint) {
+        let path = NSBezierPath()
+        path.lineWidth = lineWidth
+        path.lineCapStyle = .round
+        path.move(to: from)
+        path.line(to: to)
+        indigo.withAlphaComponent(0.9).setStroke()
+        path.stroke()
+    }
+    connector(from: NSPoint(x: 468 * s, y: 640 * s), to: NSPoint(x: 344 * s, y: 396 * s))
+    connector(from: NSPoint(x: 556 * s, y: 640 * s), to: NSPoint(x: 690 * s, y: 400 * s))
 
-    // 3. …into a clean block.
-    let block = NSRect(x: 668 * s, y: 408 * s, width: 236 * s, height: 208 * s)
-    let blockPath = NSBezierPath(roundedRect: block, xRadius: 36 * s, yRadius: 36 * s)
-    hex("#26305A").setFill()
-    blockPath.fill()
-    blockPath.lineWidth = 16 * s
-    hex("#7D97FF").setStroke()
-    blockPath.stroke()
+    // Blocks: filled panels with indigo outlines.
+    func block(_ rect: NSRect, radius: CGFloat, fill: NSColor, ellipse: Bool = false) {
+        let path = ellipse
+            ? NSBezierPath(ovalIn: rect)
+            : NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        path.lineWidth = 18 * s
+        indigo.setStroke()
+        path.stroke()
+    }
+    block(gateway, radius: 34 * s, fill: hex("#2C3560"))
+    block(service, radius: 34 * s, fill: hex("#222839"))
+    block(store, radius: 0, fill: hex("#222839"), ellipse: true)
 
-    // Kind dot on the block (teal, like the canvas).
-    let dot = NSRect(x: 700 * s, y: 552 * s, width: 34 * s, height: 34 * s)
-    hex("#38D9A9").setFill()
-    NSBezierPath(ovalIn: dot).fill()
-
-    // 4. The travelling packet (flows) riding the connector.
-    let packet = NSRect(x: 505 * s, y: 477 * s, width: 70 * s, height: 70 * s)
-    hex("#38D9A9").setFill()
-    NSBezierPath(ovalIn: packet).fill()
-    let core = NSRect(x: 526 * s, y: 498 * s, width: 28 * s, height: 28 * s)
-    NSColor.white.withAlphaComponent(0.92).setFill()
-    NSBezierPath(ovalIn: core).fill()
+    // Kind dots (teal on the gateway, muted on the children).
+    func dot(_ center: NSPoint, _ color: NSColor) {
+        let r = 20 * s
+        let rect = NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+        color.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+    }
+    dot(NSPoint(x: gateway.minX + 46 * s, y: gateway.maxY - 46 * s), hex("#38D9A9"))
+    dot(NSPoint(x: service.minX + 46 * s, y: service.maxY - 46 * s), hex("#9AA0AD", alpha: 0.8))
+    dot(NSPoint(x: store.midX, y: store.maxY - 40 * s), hex("#9AA0AD", alpha: 0.8))
 
     return image
 }
