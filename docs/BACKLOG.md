@@ -61,6 +61,34 @@ Design (CLI-bridge approach, the only subscription-billed path):
   later); setup detection (`which claude`, logged-in probe) with friendly
   guidance when missing; session continuity via --resume.
 
+### F7. Distribution & first-run (new-machine story)
+*Identified 2026-07-14 during the Claude-integration review.*
+Gaps between "builds on Yarden's Mac" and "installs on a new laptop":
+- **Signing/notarization**: build a Developer-ID-signed, notarized .app (+DMG)
+  so Gatekeeper allows it without right-click-open. Hardened runtime must
+  still allow spawning the claude CLI (no sandbox — MAS distribution would
+  block Process(); stay outside the App Store or drop the chat bridge there).
+- **Agent access is per-launch**: the MCP toggle isn't persisted; external
+  clients (Claude Desktop) must re-enable it every launch. Persist the
+  preference + auto-start the server on launch when enabled.
+- **Port conflicts**: preferred port 51737 falls back to an ephemeral port,
+  silently breaking saved connector configs; surface the change and/or retry.
+- **Boards folder isn't synced** (~/Library/Application Support): consider an
+  iCloud Drive container so boards follow the user across Macs.
+- Chat prerequisites are handled (CLI detection + guidance) but could add a
+  one-click "install & sign in" helper flow.
+
+### P9. iPad story
+*Assessed 2026-07-14.* The pure-Swift core (Model, Interop, Recognition,
+Agent) is portable to iOS today; DesignerCanvas + the app shell are AppKit
+(NSDocument/NSView/NSMenu) and would need a UIKit/SwiftUI canvas rewrite —
+a dedicated milestone. The chat bridge cannot work on iPadOS (no spawning
+processes; no Claude Code CLI) — an iPad build would need direct-API chat or
+none. NEAR-TERM ANSWER: Sidecar — the Mac app already supports pencil
+pressure through the ink pipeline, so an iPad + Sidecar gives touch/pencil
+drawing today with zero work. Revisit a native iPad app only after the Mac
+app stabilizes.
+
 ### F3. Version history (Confluence-style) for boards
 *Requested 2026-07-13 by Yarden while designing the MCP agent surface.*
 A named-version history per board: snapshot points (manual "save version" and/or

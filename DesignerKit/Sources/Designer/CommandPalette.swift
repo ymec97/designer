@@ -52,21 +52,54 @@ struct CommandPalette: View {
         return total
     }
 
-    /// One token against the title: word-prefix > substring > subsequence.
+    /// One token against the title. Exact-ish matches rank highest; anything
+    /// else falls through to fzf-style fuzzy scoring, so "smltrfc" finds
+    /// "Simulate Traffic…" and near-misses still land.
     private func tokenScore(_ token: String, in title: String) -> Int {
         let words = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        if words.contains(where: { $0.hasPrefix(token) }) { return 80 }
-        if title.contains(token) { return 60 }
-        return isSubsequence(token, of: title) ? 20 : 0
+        if words.contains(where: { $0.hasPrefix(token) }) { return 200 + token.count }
+        if title.contains(token) { return 160 }
+        return fuzzyScore(token, in: title)
     }
 
-    private func isSubsequence(_ query: String, of text: String) -> Bool {
-        var index = text.startIndex
-        for character in query {
-            guard let found = text[index...].firstIndex(of: character) else { return false }
-            index = text.index(after: found)
+    /// Greedy in-order character match with quality scoring: word-boundary
+    /// hits and consecutive runs score high, scattered matches low. Tokens of
+    /// five-plus characters may skip one character (typo forgiveness). 0 = no
+    /// match.
+    private func fuzzyScore(_ token: String, in text: String) -> Int {
+        let haystack = Array(text)
+        let needle = Array(token)
+        var score = 0
+        var hayIndex = 0
+        var lastMatch = -2
+        var skipsLeft = needle.count >= 5 ? 1 : 0
+        var matched = 0
+
+        for character in needle {
+            var found: Int?
+            var scan = hayIndex
+            while scan < haystack.count {
+                if haystack[scan] == character { found = scan; break }
+                scan += 1
+            }
+            guard let position = found else {
+                // Typo forgiveness: drop this query character once.
+                if skipsLeft > 0 { skipsLeft -= 1; continue }
+                return 0
+            }
+            matched += 1
+            score += 4
+            if position == lastMatch + 1 {
+                score += 6 // consecutive run
+            } else if position == 0 || !(haystack[position - 1].isLetter || haystack[position - 1].isNumber) {
+                score += 8 // word boundary
+            }
+            lastMatch = position
+            hayIndex = position + 1
         }
-        return true
+        // Too little actually matched to mean anything.
+        guard matched >= 2 || matched == needle.count else { return 0 }
+        return score
     }
 
     var body: some View {
