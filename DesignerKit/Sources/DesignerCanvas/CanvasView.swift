@@ -261,7 +261,12 @@ public final class CanvasView: NSView {
         case rubberBand(start: CGPoint, current: CGPoint)
         case connect(from: ElementID, current: CGPoint, target: ElementID?)
         case draw(points: [StrokePoint], startedAt: TimeInterval)
+        /// Dragging an already-selected connector bends it (P5).
+        case bendEdge(id: ElementID, start: CGPoint)
     }
+
+    /// Live bend during a `.bendEdge` drag; committed as one operation on up.
+    private var transientBend: (id: ElementID, point: Point)?
 
     /// World-space width of the border band that starts a connection drag
     /// instead of a move (in view pixels, so it feels constant at any zoom).
@@ -335,13 +340,19 @@ public final class CanvasView: NSView {
                 }
             }
         }
+        if let bend = transientBend { dragAffectedEdges.insert(bend.id) }
         let overrideFrames = transientFrames.isEmpty
             ? nil
             : board.frameProvider(overrides: transientFrames)
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
-        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache] element in
+        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache, transientBend, board] element in
+            if let transientBend, transientBend.id == element.id, var edge = element.edge {
+                edge.waypoints = [transientBend.point]
+                return EdgeGeometry.route(
+                    for: edge, frames: overrideFrames ?? board.frameProvider())
+            }
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames,
@@ -482,6 +493,14 @@ public final class CanvasView: NSView {
 
         if let handleBox = singleSelectionViewRect() {
             renderer.drawResizeHandles(around: handleBox, in: context)
+        }
+
+        // Bend handle on a lone selected connector (P5): grab anywhere on the
+        // line to bow it; the dot marks the spot most people reach for.
+        if selection.count == 1, let id = selection.first,
+           board.elements[id]?.edge != nil,
+           let element = board.elements[id], let route = routeFor(element) {
+            renderer.drawBendHandle(at: viewport.toView(route.midpoint), in: context)
         }
 
         for guide in snapGuides {
@@ -1140,6 +1159,15 @@ public final class CanvasView: NSView {
             return
         }
 
+        // Dragging a connector that is already the (sole) selection bends it:
+        // the curve follows the mouse, dropping near the straight line
+        // straightens it back (P5).
+        if let hit, hit.edge != nil, selection == [hit.id],
+           !event.modifierFlags.contains(.shift) {
+            gesture = .bendEdge(id: hit.id, start: point)
+            return
+        }
+
         if let hit {
             if event.modifierFlags.contains(.shift) {
                 if selection.contains(hit.id) {
@@ -1161,6 +1189,12 @@ public final class CanvasView: NSView {
         let point = convert(event.locationInWindow, from: nil)
 
         switch gesture {
+        case .bendEdge(let id, let start):
+            let distance = hypot(point.x - start.x, point.y - start.y)
+            guard distance > 3 || transientBend != nil else { return }
+            transientBend = (id, viewport.toWorld(point))
+            needsDisplay = true
+
         case .mouseDown(let start, let hitID, _):
             let distance = hypot(point.x - start.x, point.y - start.y)
             guard distance > 3 else { return }
@@ -1327,6 +1361,26 @@ public final class CanvasView: NSView {
                 strokeFinished?(element.id)
             }
             needsDisplay = true
+
+        case .bendEdge(let id, _):
+            defer { transientBend = nil }
+            if let bend = transientBend, var element = board.elements[id], var edge = element.edge {
+                // Dropping near the straight line straightens the connector.
+                var straight = edge
+                straight.waypoints = []
+                let tolerance = Double(8 / viewport.scale)
+                if let route = EdgeGeometry.route(for: straight, frames: board.frameProvider()),
+                   let last = route.points.last,
+                   EdgeGeometry.Route.segmentDistance(bend.point, route.start, last) < tolerance {
+                    edge.waypoints = []
+                } else {
+                    edge.waypoints = [bend.point]
+                }
+                element.content = .edge(edge)
+                delegate?.canvasView(
+                    self, perform: .replaceElement(element),
+                    actionName: edge.waypoints.isEmpty ? "Straighten Connector" : "Bend Connector")
+            }
 
         case .mouseDown, .idle:
             break
@@ -1563,6 +1617,22 @@ public final class CanvasView: NSView {
 
     public var canPaste: Bool {
         NSPasteboard.general.data(forType: Self.clipPasteboardType) != nil
+    }
+
+    /// Removes manual bends from every selected connector (P5).
+    @objc public func straightenSelection(_ sender: Any?) {
+        let operations: [BoardOperation] = selection.compactMap { id in
+            guard var element = board.elements[id], var edge = element.edge,
+                  !edge.waypoints.isEmpty else { return nil }
+            edge.waypoints = []
+            element.content = .edge(edge)
+            return .replaceElement(element)
+        }
+        guard !operations.isEmpty else { return }
+        delegate?.canvasView(
+            self,
+            perform: operations.count == 1 ? operations[0] : .batch(operations),
+            actionName: "Straighten Connector")
     }
 
     @objc public func activateSelectTool(_ sender: Any?) {

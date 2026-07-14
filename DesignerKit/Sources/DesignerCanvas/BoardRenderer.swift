@@ -589,6 +589,16 @@ final class BoardRenderer {
         context.strokePath()
     }
 
+    /// The grab dot on a selected connector (P5 bend affordance).
+    func drawBendHandle(at point: CGPoint, in context: CGContext) {
+        let rect = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
+        context.setFillColor(Graphite.panel.cgColor)
+        context.setStrokeColor(Palette.selection.cgColor)
+        context.setLineWidth(1.5)
+        context.fillEllipse(in: rect)
+        context.strokeEllipse(in: rect)
+    }
+
     func drawResizeHandles(around viewRect: CGRect, in context: CGContext) {
         context.setFillColor(Graphite.panel.cgColor)
         context.setStrokeColor(Palette.selection.cgColor)

@@ -40,6 +40,55 @@ final class EdgeGeometryTests: XCTestCase {
         return EdgeGeometry.route(for: edge, frames: board.frameProvider(overrides: overrides))
     }
 
+    // MARK: Curved connectors + node avoidance (P5)
+
+    func testWaypointBendsSmoothlyThroughThePoint() throws {
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 400, y: 0, width: 80, height: 40))
+        var edgeElement = connect(a, b)
+        var edge = edgeElement.edge!
+        let bend = Point(x: 240, y: -120)
+        edge.waypoints = [bend]
+        edgeElement.content = .edge(edge)
+        try! board.apply(.replaceElement(edgeElement))
+
+        let route = try XCTUnwrap(self.route(edgeElement))
+        XCTAssertGreaterThan(route.points.count, 3, "waypoint routes are sampled curves")
+        XCTAssertLessThan(route.distance(to: bend), 1.5, "curve passes through the bend")
+        // The connector leaves its node toward the bend (above), not toward b.
+        XCTAssertEqual(route.start.y, 0, accuracy: 0.001, "exits a's top side")
+    }
+
+    func testStraightRouteDetoursAroundBlockingNode() throws {
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 500, y: 0, width: 80, height: 40))
+        let blocker = Rect(x: 250, y: -20, width: 90, height: 80)
+        _ = addNode("wall", frame: blocker)
+        let edgeElement = connect(a, b)
+
+        let obstacles = SpatialIndex.nodeObstacleQuery(for: board)
+        let route = try XCTUnwrap(EdgeGeometry.route(
+            for: edgeElement.edge!, frames: board.frameProvider(), obstacles: obstacles))
+        XCTAssertGreaterThan(route.points.count, 2, "blocked line curves")
+        for point in route.points {
+            XCTAssertFalse(blocker.contains(point), "route stays out of the blocking node")
+        }
+
+        // Without the blocker in the query, the same edge is a straight line.
+        let straight = try XCTUnwrap(EdgeGeometry.route(
+            for: edgeElement.edge!, frames: board.frameProvider()))
+        XCTAssertEqual(straight.points.count, 2)
+    }
+
+    func testAvoidanceGivesUpOnHugeBlockers() {
+        let wall = Rect(x: 200, y: -400, width: 60, height: 800)
+        let waypoint = EdgeGeometry.avoidanceWaypoint(
+            from: Point(x: 0, y: 0), to: Point(x: 500, y: 0),
+            obstacles: { _ in [wall] }
+        )
+        XCTAssertNil(waypoint, "a wild swing is worse than a crossing")
+    }
+
     // MARK: Anchor spreading (arrows sharing a node side)
 
     func testAnchorSpreadSeparatesArrowsIntoTheSameSide() {

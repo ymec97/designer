@@ -43,17 +43,33 @@ public struct SpatialIndex {
         }
     }
 
+    /// A bounding-box query over the board's NODE frames — what straight
+    /// routes dodge (P5). Builds its own index once; hold the closure, not
+    /// the board.
+    public static func nodeObstacleQuery(for board: Board) -> (Rect) -> [Rect] {
+        var index = SpatialIndex()
+        var frames: [ElementID: Rect] = [:]
+        for element in board.elements.values {
+            guard let node = element.node else { continue }
+            frames[element.id] = node.frame
+            index.insert(element.id, bounds: node.frame)
+        }
+        return { rect in index.query(rect).compactMap { frames[$0] } }
+    }
+
     public static func resolveRoutes(for board: Board) -> [ElementID: EdgeGeometry.Route] {
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)
         let spread = EdgeGeometry.anchorSpread(in: board)
+        let obstacles = nodeObstacleQuery(for: board)
         var routes: [ElementID: EdgeGeometry.Route] = [:]
         for element in board.elements.values {
             if let edge = element.edge,
                let route = EdgeGeometry.route(
                    for: edge, frames: frames,
                    parallelOffset: offsets[element.id] ?? 0,
-                   anchorOffsets: spread[element.id]) {
+                   anchorOffsets: spread[element.id],
+                   obstacles: obstacles) {
                 routes[element.id] = route
             }
         }

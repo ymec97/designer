@@ -41,9 +41,10 @@ public enum BoardSnapshot {
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)
         let spread = EdgeGeometry.anchorSpread(in: board)
+        let obstacles = SpatialIndex.nodeObstacleQuery(for: board)
         for element in board.elementsInZOrder {
             if let edge = element.edge {
-                if let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id]) {
+                if let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id], obstacles: obstacles) {
                     renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false,
                                       captionFraction: spread[element.id]?.captionT ?? 0.5)
                 }

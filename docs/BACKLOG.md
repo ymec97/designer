@@ -158,8 +158,14 @@ if ugly: parallel-edge separation (offset curves between same node pair),
 fan-out anchor spreading (distribute anchor offsets along the node side
 instead of all hitting the midpoint), and label decluttering at density.
 
-### P5. Curve connectors after snapping + node-avoiding routing
-*Requested 2026-07-12 by Yarden. Post-MVP.*
+### P5. Curve connectors after snapping + node-avoiding routing — DONE 2026-07-15
+*Requested 2026-07-12 by Yarden.* Shipped: (a) drag a selected connector to
+bend it (smooth Catmull-Rom curve through the waypoint; grab dot at the
+midpoint; drop back on the line — or run "Straighten Selected Connectors" —
+to straighten; one undo step); (b) straight connectors automatically detour
+around blocking nodes (perpendicular clearance on the cheaper side, capped so
+wild swings never happen; manual waypoints and orthogonal routing opt out).
+Original notes:
 (a) Let users curve a snapped connector (drag its midpoint to bow it —
 `Edge.waypoints` already exists in the model, needs manipulation UX and
 curved rendering). (b) Routing should avoid crossing over other nodes where

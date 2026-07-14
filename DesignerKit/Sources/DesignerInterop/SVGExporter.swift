@@ -47,9 +47,10 @@ public enum SVGExporter {
         // Edges under nodes, parallels fanned apart like the canvas.
         let offsets = EdgeGeometry.parallelOffsets(in: source)
         let spread = EdgeGeometry.anchorSpread(in: source)
+        let obstacles = SpatialIndex.nodeObstacleQuery(for: source)
         for element in source.elementsInZOrder {
             guard let edge = element.edge,
-                  let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id]) else { continue }
+                  let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id], obstacles: obstacles) else { continue }
             body += svgEdge(edge, route: route, palette: palette,
                             captionFraction: spread[element.id]?.captionT ?? 0.5)
         }

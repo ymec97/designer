@@ -91,17 +91,25 @@ public enum EdgeGeometry {
     /// you must be able to see *which* of two connectors carries a flow).
     /// `anchorOffsets` (from `anchorSpread(in:)`) slides auto anchors along
     /// their side; explicit model offsets always win.
+    /// `obstacles` (bounding-box query for NODE frames, e.g. from
+    /// `SpatialIndex.nodeObstacleQuery`) lets plain straight routes curve
+    /// around blocks they'd otherwise cross (P5).
     public static func route(
         for edge: Edge,
         frames: FrameProvider,
         parallelOffset: Double = 0,
-        anchorOffsets: EndpointOffsets? = nil
+        anchorOffsets: EndpointOffsets? = nil,
+        obstacles: ((Rect) -> [Rect])? = nil
     ) -> Route? {
+        // With manual waypoints the connector should LEAVE its node toward
+        // the first bend, not toward the far node.
+        let towardFrom: Anchor = edge.waypoints.first.map { .free($0) } ?? edge.to
+        let towardTo: Anchor = edge.waypoints.last.map { .free($0) } ?? edge.from
         guard
             let fromResolution = resolve(
-                edge.from, toward: edge.to, frames: frames, offsetOverride: anchorOffsets?.from),
+                edge.from, toward: towardFrom, frames: frames, offsetOverride: anchorOffsets?.from),
             let toResolution = resolve(
-                edge.to, toward: edge.from, frames: frames, offsetOverride: anchorOffsets?.to)
+                edge.to, toward: towardTo, frames: frames, offsetOverride: anchorOffsets?.to)
         else { return nil }
 
         var points: [Point]
@@ -115,6 +123,11 @@ public enum EdgeGeometry {
             if result.last != point { result.append(point) }
         }
         guard points.count >= 2 else { return nil }
+
+        // Manual waypoints render as a smooth curve through the bends (P5).
+        if !edge.waypoints.isEmpty, edge.routing != .orthogonal, points.count >= 3 {
+            points = smoothed(points)
+        }
 
         // Bow parallels: only direct, waypoint-less lines participate (manual
         // waypoints are the user's routing; orthogonal parallels are rare).
@@ -134,7 +147,111 @@ public enum EdgeGeometry {
                 points = [a, bowed(0.25, 0.8), bowed(0.5, 1), bowed(0.75, 0.8), b]
             }
         }
+
+        // Node avoidance (P5): a plain straight line that would cross an
+        // unrelated block detours around it with a gentle curve. Manual
+        // waypoints, orthogonal routing, and bowed parallels are left alone.
+        if points.count == 2, let obstacles,
+           let detour = avoidanceWaypoint(from: points[0], to: points[1], obstacles: obstacles) {
+            points = smoothed([points[0], detour, points[1]])
+        }
+
         return Route(points: points)
+    }
+
+    /// Centripetal-ish Catmull-Rom sampling: a polyline that passes exactly
+    /// through every input point but bends smoothly. Downstream code (hit
+    /// tests, packets, arrowheads, exports) keeps working on plain polylines.
+    static func smoothed(_ points: [Point], samplesPerSegment: Int = 14) -> [Point] {
+        guard points.count >= 3 else { return points }
+        func interpolate(_ p0: Point, _ p1: Point, _ p2: Point, _ p3: Point, _ t: Double) -> Point {
+            let t2 = t * t, t3 = t2 * t
+            func axis(_ a: Double, _ b: Double, _ c: Double, _ d: Double) -> Double {
+                0.5 * ((2 * b) + (c - a) * t
+                       + (2 * a - 5 * b + 4 * c - d) * t2
+                       + (3 * b - a - 3 * c + d) * t3)
+            }
+            return Point(x: axis(p0.x, p1.x, p2.x, p3.x), y: axis(p0.y, p1.y, p2.y, p3.y))
+        }
+        var result: [Point] = []
+        for index in 0..<(points.count - 1) {
+            let p0 = points[max(index - 1, 0)]
+            let p1 = points[index]
+            let p2 = points[index + 1]
+            let p3 = points[min(index + 2, points.count - 1)]
+            for sample in 0..<samplesPerSegment {
+                result.append(interpolate(p0, p1, p2, p3, Double(sample) / Double(samplesPerSegment)))
+            }
+        }
+        result.append(points[points.count - 1])
+        return result
+    }
+
+    /// Where a straight `a`→`b` line should bend to clear the blocks it
+    /// crosses, or nil when the line is already clear (or a detour would be
+    /// absurd). One perpendicular waypoint at the midpoint, on the cheaper
+    /// side, just past the blockers.
+    static func avoidanceWaypoint(
+        from a: Point, to b: Point, obstacles: (Rect) -> [Rect]
+    ) -> Point? {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let length = (dx * dx + dy * dy).squareRoot()
+        guard length > 1 else { return nil }
+        let nx = -dy / length, ny = dx / length
+
+        let margin = 14.0
+        let searchBox = Rect(
+            x: min(a.x, b.x) - margin, y: min(a.y, b.y) - margin,
+            width: abs(dx) + margin * 2, height: abs(dy) + margin * 2
+        )
+        let blockers = obstacles(searchBox)
+            .map { Rect(x: $0.x - margin, y: $0.y - margin, width: $0.width + margin * 2, height: $0.height + margin * 2) }
+            .filter { rect in
+                !rect.contains(a) && !rect.contains(b) && segmentIntersects(rect, a, b)
+            }
+        guard !blockers.isEmpty else { return nil }
+
+        // Signed perpendicular clearance needed on each side: past the
+        // farthest corner of any blocker.
+        var maxSigned = -Double.infinity
+        var minSigned = Double.infinity
+        for rect in blockers {
+            for corner in [Point(x: rect.x, y: rect.y), Point(x: rect.maxX, y: rect.y),
+                           Point(x: rect.x, y: rect.maxY), Point(x: rect.maxX, y: rect.maxY)] {
+                let signed = (corner.x - a.x) * nx + (corner.y - a.y) * ny
+                maxSigned = max(maxSigned, signed)
+                minSigned = min(minSigned, signed)
+            }
+        }
+        let clearance = 18.0
+        let positive = maxSigned + clearance      // detour on the +normal side
+        let negative = minSigned - clearance      // detour on the -normal side
+        let offset = abs(positive) <= abs(negative) ? positive : negative
+        guard abs(offset) <= 220 else { return nil } // a wild swing is worse than a crossing
+        let mid = Point(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        return Point(x: mid.x + nx * offset, y: mid.y + ny * offset)
+    }
+
+    private static func segmentIntersects(_ rect: Rect, _ a: Point, _ b: Point) -> Bool {
+        // Liang–Barsky clip of segment against rect.
+        let dx = b.x - a.x, dy = b.y - a.y
+        var t0 = 0.0, t1 = 1.0
+        for (p, q) in [(-dx, a.x - rect.x), (dx, rect.maxX - a.x),
+                       (-dy, a.y - rect.y), (dy, rect.maxY - a.y)] {
+            if p == 0 {
+                if q < 0 { return false }
+                continue
+            }
+            let r = q / p
+            if p < 0 {
+                if r > t1 { return false }
+                t0 = max(t0, r)
+            } else {
+                if r < t0 { return false }
+                t1 = min(t1, r)
+            }
+        }
+        return t0 <= t1
     }
 
     /// Perpendicular offsets that fan out edges sharing the same node pair

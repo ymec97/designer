@@ -1029,6 +1029,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Add Boundary around Selection", shortcut: "⌥⌘B", systemImage: "rectangle.dashed") { [weak self] in
                 self?.canvasView.addBoundaryAroundSelection(nil)
             },
+            PaletteCommand(title: "Straighten Selected Connectors", shortcut: nil, systemImage: "line.diagonal") { [weak self] in
+                self?.canvasView.straightenSelection(nil)
+            },
             PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3") { [weak self] in
                 self?.toggleInspector(nil)
             },

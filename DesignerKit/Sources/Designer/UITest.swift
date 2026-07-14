@@ -55,9 +55,10 @@ final class UITestDriver {
         step19GroupsAndBoundaries()
         step20Inspector()
         step21VersionHistory()
+        step22BendConnector()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend verified")
             exit(0)
         } else {
             for failure in failures {
@@ -606,6 +607,72 @@ final class UITestDriver {
         if let failure = controller.runVersionHistorySelfTest() {
             expect(false, "version history failed: \(failure)")
         }
+    }
+
+    /// P5: dragging a selected connector bends it; dropping the bend back on
+    /// the straight line straightens it.
+    private func step22BendConnector() {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 3000, width: 120, height: 60))))
+        }
+        let a = node("bend-a", 0), b = node("bend-b", 420)
+        let edgeElement = Element(
+            layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.batch([
+            .insertElement(a), .insertElement(b), .insertElement(edgeElement),
+        ]), actionName: "Bend Test Graph")
+        canvasView.reveal(worldRect: Rect(x: -50, y: 2900, width: 700, height: 300))
+        canvasView.select([edgeElement.id])
+        pumpRunLoop()
+
+        func currentWaypoints() -> [Point] {
+            document.board.elements[edgeElement.id]?.edge?.waypoints ?? []
+        }
+        guard let straightRoute = EdgeGeometry.route(
+            for: edgeElement.edge!, frames: document.board.frameProvider()) else {
+            expect(false, "no route for bend edge")
+            return
+        }
+        let midView = canvasView.viewport.toView(straightRoute.midpoint)
+
+        // Bend: drag the middle of the selected connector upward.
+        send(.leftMouseDown, at: midView, clickCount: 1)
+        for step in 1...5 {
+            send(.leftMouseDragged, at: CGPoint(x: midView.x, y: midView.y - CGFloat(step) * 16), clickCount: 1)
+        }
+        send(.leftMouseUp, at: CGPoint(x: midView.x, y: midView.y - 80), clickCount: 1)
+        pumpRunLoop()
+        expect(currentWaypoints().count == 1, "drag should bend the connector (one waypoint)")
+
+        // Straighten: drag the bend back onto the straight line.
+        guard let bentRoute = EdgeGeometry.route(
+            for: document.board.elements[edgeElement.id]!.edge!,
+            frames: document.board.frameProvider()) else {
+            expect(false, "no bent route")
+            return
+        }
+        canvasView.select([edgeElement.id])
+        let bendView = canvasView.viewport.toView(bentRoute.point(atFraction: 0.5))
+        send(.leftMouseDown, at: bendView, clickCount: 1)
+        for step in 1...5 {
+            let t = CGFloat(step) / 5
+            send(.leftMouseDragged, at: CGPoint(
+                x: bendView.x + (midView.x - bendView.x) * t,
+                y: bendView.y + (midView.y - bendView.y) * t
+            ), clickCount: 1)
+        }
+        send(.leftMouseUp, at: midView, clickCount: 1)
+        pumpRunLoop()
+        expect(currentWaypoints().isEmpty, "dropping on the line should straighten")
+
+        document.undoManager?.undo() // straighten
+        document.undoManager?.undo() // bend
+        document.undoManager?.undo() // test graph
     }
 
     // MARK: Event synthesis

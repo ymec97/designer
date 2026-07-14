@@ -23,6 +23,9 @@ First testable release: the full MVP plus the post-MVP feature set.
   name-on-snap opens the label editor immediately.
 - Typed block palette (toolbar menu / ⌘K): service, database, queue, cache,
   gateway, client, external, decision, alert.
+- Connectors bend: drag a selected connector to curve it smoothly through
+  your drop point (drop back on the line to straighten). Straight connectors
+  automatically curve around blocks that would otherwise be crossed.
 - Grouping (⌘G/⇧⌘G): click one member, move the whole group. Boundaries
   (⌥⌘B): labeled subsystem/trust-zone containers rendered behind content.
 - Inspector (⌥⌘I): edit names, kinds, shapes, and connector semantics
