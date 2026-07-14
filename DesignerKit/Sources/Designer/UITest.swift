@@ -53,9 +53,10 @@ final class UITestDriver {
         step17AgentProposal()
         step18Flows()
         step19GroupsAndBoundaries()
+        step20Inspector()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector verified")
             exit(0)
         } else {
             for failure in failures {
@@ -583,6 +584,16 @@ final class UITestDriver {
         }
         if let failure = controller.runGroupsAndBoundariesSelfTest() {
             expect(false, "groups+boundaries failed: \(failure)")
+        }
+    }
+
+    private func step20Inspector() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for inspector test")
+            return
+        }
+        if let failure = controller.runInspectorSelfTest() {
+            expect(false, "inspector failed: \(failure)")
         }
     }
 

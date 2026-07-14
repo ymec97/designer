@@ -18,6 +18,11 @@ public struct NodeKind: RawRepresentable, Hashable, Codable, Sendable, Expressib
     public static let client: NodeKind = "client"
     public static let external: NodeKind = "external"
     public static let generic: NodeKind = "generic"
+
+    /// The kinds the UI offers (unknown values still round-trip).
+    public static let allBuiltIn: [NodeKind] = [
+        .service, .database, .queue, .cache, .gateway, .client, .external, .generic,
+    ]
 }
 
 public struct EdgeDirection: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
@@ -30,6 +35,8 @@ public struct EdgeDirection: RawRepresentable, Hashable, Codable, Sendable, Expr
     public static let backward: EdgeDirection = "backward"
     public static let both: EdgeDirection = "both"
     public static let none: EdgeDirection = "none"
+
+    public static let allBuiltIn: [EdgeDirection] = [.forward, .backward, .both, .none]
 }
 
 /// Node outline shape (presentation). Sketch recognition preserves what the
@@ -44,6 +51,8 @@ public struct NodeShape: RawRepresentable, Hashable, Codable, Sendable, Expressi
     public static let ellipse: NodeShape = "ellipse"
     public static let diamond: NodeShape = "diamond"
     public static let triangle: NodeShape = "triangle"
+
+    public static let allBuiltIn: [NodeShape] = [.rectangle, .ellipse, .diamond, .triangle]
 }
 
 /// Orientation for shapes that have one (triangles): which way the apex
@@ -58,6 +67,8 @@ public struct ShapeOrientation: RawRepresentable, Hashable, Codable, Sendable, E
     public static let down: ShapeOrientation = "down"
     public static let left: ShapeOrientation = "left"
     public static let right: ShapeOrientation = "right"
+
+    public static let allBuiltIn: [ShapeOrientation] = [.up, .down, .left, .right]
 }
 
 public struct RoutingMode: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {

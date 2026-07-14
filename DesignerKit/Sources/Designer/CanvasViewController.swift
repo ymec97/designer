@@ -60,6 +60,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 self.setActiveLayer(board.layers.first?.id)
             }
             self.refreshFlowsPanel(board)
+            self.refreshInspector()
         }
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
@@ -75,6 +76,52 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installAgentProposalPanel()
         installFlowsPanel()
         installChatPanel()
+        installInspectorPanel()
+    }
+
+    // MARK: Inspector (feature 2)
+
+    private let inspectorModel = InspectorModel()
+    private var inspectorHost: NSView?
+
+    @objc func toggleInspector(_ sender: Any?) {
+        inspectorModel.visible.toggle()
+        inspectorHost?.isHidden = !inspectorModel.visible
+        refreshInspector()
+        view.window?.makeFirstResponder(canvasView)
+    }
+
+    private func refreshInspector() {
+        inspectorModel.selectionCount = canvasView.selection.count
+        if canvasView.selection.count == 1, let id = canvasView.selection.first {
+            inspectorModel.element = document.board.elements[id]
+        } else {
+            inspectorModel.element = nil
+        }
+    }
+
+    /// Commits an inspector edit as one undo step (also the self-test hook).
+    func applyInspectorEdit(_ element: Element) {
+        guard document.board.elements[element.id] != nil else { return }
+        document.perform(.replaceElement(element), actionName: "Edit Properties")
+    }
+
+    private func installInspectorPanel() {
+        let panel = InspectorPanel(
+            model: inspectorModel,
+            actions: InspectorActions(apply: { [weak self] element in
+                self?.applyInspectorEdit(element)
+            })
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+        ])
+        inspectorHost = host
     }
 
     // MARK: In-app assistant (F6)
@@ -240,6 +287,42 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             flowsModel.focusedFlowID = id
             canvasView.emphasizedElements = flow.memberElements
         }
+    }
+
+    /// Headless inspector check for --ui-test (feature 2): edit a node's
+    /// name/kind/shape and an edge's protocol via the inspector apply path,
+    /// verifying commits and single-step undo.
+    func runInspectorSelfTest() -> String? {
+        let layer = document.board.layers[0].id
+        let node = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                           content: .node(Node(semantic: NodeSemantic(name: "insp-a"),
+                                               frame: Rect(x: 0, y: 2100, width: 100, height: 50))))
+        document.perform(.insertElement(node), actionName: "Inspector Test Node")
+
+        canvasView.select([node.id])
+        refreshInspector()
+        guard inspectorModel.element?.id == node.id else { return "inspector didn't track selection" }
+
+        // Edit name + kind + shape through the apply path.
+        var edited = document.board.elements[node.id]!
+        guard var n = edited.node else { return "node missing" }
+        n.semantic.name = "orders-db"
+        n.semantic.kind = .database
+        n.shape = .ellipse
+        edited.content = .node(n)
+        applyInspectorEdit(edited)
+
+        guard let after = document.board.elements[node.id]?.node,
+              after.semantic.name == "orders-db", after.semantic.kind == .database,
+              after.shape == .ellipse else {
+            return "inspector edit not applied"
+        }
+        document.undoManager?.undo()
+        guard document.board.elements[node.id]?.node?.semantic.name == "insp-a" else {
+            return "inspector edit wasn't one undo step"
+        }
+        document.undoManager?.undo() // remove test node
+        return nil
     }
 
     /// Headless groups+boundaries check for --ui-test (feature 4): group two
@@ -778,6 +861,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             PaletteCommand(title: "Add Boundary around Selection", shortcut: "⌥⌘B", systemImage: "rectangle.dashed") { [weak self] in
                 self?.canvasView.addBoundaryAroundSelection(nil)
+            },
+            PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3") { [weak self] in
+                self?.toggleInspector(nil)
             },
             PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
                 self?.toggleLayersPanel(nil)
@@ -1333,7 +1419,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     }
 
     func canvasViewDidChangeSelection(_ view: CanvasView) {
-        // Inspector panels subscribe here from M2 on.
+        refreshInspector()
     }
 }
 
