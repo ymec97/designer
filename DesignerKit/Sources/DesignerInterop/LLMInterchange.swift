@@ -44,6 +44,15 @@ public enum LLMInterchange {
     #   forward|backward|both|none. `data`, `condition` describe the payload
     #   and when it fires; any other key/value goes under `props`.
     # - notes: free-text annotations with `at` and `size`.
+    # - layers (optional): objects with `name`, `tint`, `hidden` — views over
+    #   the same elements. First layer = base. Elements pick layers by NAME
+    #   via their own `layers` array (omitted = base). Use for progressive
+    #   disclosure: a simple "Overview" base, then one layer per concern.
+    # - flows (optional): recorded journeys played as animated packets. Each
+    #   has `name`, `source` (node id), and `steps`: an ordered array where
+    #   each step is an array of hops firing together; a hop has `from`,
+    #   `to`, and `via` (a connector's label/protocol, to pick among
+    #   parallel connectors).
     # Add, remove, relabel, and reconnect freely; keep ids unique.
     """
 

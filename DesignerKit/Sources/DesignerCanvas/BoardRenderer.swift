@@ -755,32 +755,65 @@ final class BoardRenderer {
         context.restoreGState()
     }
 
-    /// A proposed-addition marker: dashed accent outline around a ghost node.
-    func drawProposalAddedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+    /// A proposed-addition marker: dashed outline around a ghost node.
+    /// Accent by default (flow-recording candidate rings); the proposal
+    /// overlay passes `Graphite.proposalAdd` so green consistently means
+    /// "will be added".
+    func drawProposalAddedOutline(
+        _ rect: CGRect, in context: CGContext, viewport: CanvasViewport,
+        color: NSColor = Graphite.accent
+    ) {
         let r = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
         let path = CGPath(roundedRect: rect.insetBy(dx: -3, dy: -3), cornerWidth: r, cornerHeight: r, transform: nil)
         context.saveGState()
-        context.setStrokeColor(Graphite.accent.cgColor)
-        context.setLineWidth(1.6 * viewport.scale)
+        context.setStrokeColor(color.cgColor)
+        context.setLineWidth(1.8 * viewport.scale)
         context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
         context.addPath(path)
         context.strokePath()
         context.restoreGState()
     }
 
+    /// A proposed-addition marker along a connector's route (green dashed).
+    func drawProposalAddedRoute(_ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport) {
+        guard viewPoints.count >= 2 else { return }
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalAdd.withAlphaComponent(0.9).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 5 * viewport.scale])
+        strokePolyline(viewPoints, in: context)
+        context.restoreGState()
+    }
+
     /// A proposed-removal marker: dashed red outline on a current node.
     func drawProposalRemovedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
-        let red = NSColor.systemRed
+        let red = Graphite.proposalRemove
         let r = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
         let path = CGPath(roundedRect: rect.insetBy(dx: -3, dy: -3), cornerWidth: r, cornerHeight: r, transform: nil)
         context.saveGState()
-        context.setFillColor(red.withAlphaComponent(0.10).cgColor)
+        context.setFillColor(red.withAlphaComponent(0.14).cgColor)
         context.addPath(path)
         context.fillPath()
-        context.setStrokeColor(red.withAlphaComponent(0.85).cgColor)
-        context.setLineWidth(1.6 * viewport.scale)
+        context.setStrokeColor(red.withAlphaComponent(0.9).cgColor)
+        context.setLineWidth(1.8 * viewport.scale)
         context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
         context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// The unmistakable "this gets deleted": a diagonal ✕ across the block.
+    func drawProposalRemovedStrike(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+        let inset = rect.insetBy(dx: rect.width * 0.18, dy: rect.height * 0.18)
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalRemove.withAlphaComponent(0.75).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
+        context.setLineCap(.round)
+        context.move(to: CGPoint(x: inset.minX, y: inset.minY))
+        context.addLine(to: CGPoint(x: inset.maxX, y: inset.maxY))
+        context.move(to: CGPoint(x: inset.maxX, y: inset.minY))
+        context.addLine(to: CGPoint(x: inset.minX, y: inset.maxY))
         context.strokePath()
         context.restoreGState()
     }
@@ -789,11 +822,39 @@ final class BoardRenderer {
     func drawProposalRemovedRoute(_ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport) {
         guard viewPoints.count >= 2 else { return }
         context.saveGState()
-        context.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.8).cgColor)
-        context.setLineWidth(2 * viewport.scale)
+        context.setStrokeColor(Graphite.proposalRemove.withAlphaComponent(0.85).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
         context.setLineCap(.round)
         context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
         strokePolyline(viewPoints, in: context)
+        context.restoreGState()
+    }
+
+    enum GhostBadgeKind {
+        case added, removed
+    }
+
+    /// A small +/− chip at a ghosted block's corner — legible even where
+    /// dashes and tints blend into a busy board.
+    func drawGhostBadge(kind: GhostBadgeKind, at corner: CGPoint, in context: CGContext, viewport: CanvasViewport) {
+        let radius = max(7 * viewport.scale, 5)
+        let center = CGPoint(x: corner.x, y: corner.y)
+        let color = kind == .added ? Graphite.proposalAdd : Graphite.proposalRemove
+        context.saveGState()
+        context.setFillColor(color.cgColor)
+        context.fillEllipse(in: CGRect(
+            x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(max(1.6 * viewport.scale, 1.2))
+        context.setLineCap(.round)
+        let arm = radius * 0.48
+        context.move(to: CGPoint(x: center.x - arm, y: center.y))
+        context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
+        if kind == .added {
+            context.move(to: CGPoint(x: center.x, y: center.y - arm))
+            context.addLine(to: CGPoint(x: center.x, y: center.y + arm))
+        }
+        context.strokePath()
         context.restoreGState()
     }
 

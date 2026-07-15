@@ -47,6 +47,25 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private let toolbarState = ToolbarState()
     private let layersModel = LayersPanelModel()
 
+    /// One trailing column for every right-side panel (layers, versions,
+    /// library, flows, chat): open panels STACK instead of overlapping, and
+    /// the column never runs past the window bottom.
+    private lazy var rightPanelStack: NSStackView = {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .trailing
+        stack.spacing = 10
+        stack.detachesHiddenViews = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -18),
+        ])
+        return stack
+    }()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         boardSubscription = document.$board.sink { [weak self] board in
@@ -208,11 +227,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
         host.isHidden = true
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
-        ])
+        rightPanelStack.addArrangedSubview(host)
         chatPanelHost = host
     }
 
@@ -598,11 +613,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
         host.isHidden = true
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
-        ])
+        rightPanelStack.addArrangedSubview(host)
         versionsPanelHost = host
         versionsSubscription = document.$versions.sink { [weak self] _ in
             DispatchQueue.main.async { self?.refreshVersionsPanel() }
@@ -668,11 +679,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
         host.isHidden = true
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            host.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
-        ])
+        rightPanelStack.addArrangedSubview(host)
         flowsPanelHost = host
 
         let bar = FlowRecordBar(
@@ -818,17 +825,19 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// and returns the diff (echoed to the agent). Nothing is applied yet.
     @discardableResult
     func presentAgentProposal(_ proposed: Board, note: String?) -> BoardDiff {
+        var proposed = proposed
         let diff = LLMInterchange.diff(current: document.board, proposed: proposed)
         if diff.isEmpty {
             clearAgentProposal()
             return diff
         }
+        relocateOverlappingAdditions(in: &proposed, diff: diff)
         pendingProposal = proposed
         proposalModel.pending = AgentProposalPending(
             summary: diff.summaryLine, detail: diff.detail, note: note
         )
         // Show the change on the canvas, not just in the banner: additions as
-        // accent ghosts, removals marked red — and bring them into view.
+        // green ghosts, removals struck red — and bring them into view.
         canvasView.proposalGhost = CanvasView.ProposalGhost(
             proposedBoard: proposed,
             addedElements: diff.addedElementIDs,
@@ -841,14 +850,42 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         return diff
     }
 
+    /// Added blocks must never land ON TOP of blocks that stay: when the
+    /// agent's (usually auto-laid-out) new nodes collide with surviving
+    /// current nodes, the colliding ones shift as a group below the current
+    /// content, keeping their arrangement. Explicitly separated placements
+    /// are untouched.
+    private func relocateOverlappingAdditions(in proposed: inout Board, diff: BoardDiff) {
+        let obstacles: [Rect] = document.board.elements.values.compactMap { element in
+            guard element.node != nil, !diff.removedElementIDs.contains(element.id) else { return nil }
+            return element.node?.frame
+        }
+        guard !obstacles.isEmpty else { return }
+        let colliding = diff.addedElementIDs.filter { id in
+            guard let frame = proposed.elements[id]?.node?.frame else { return false }
+            return obstacles.contains { $0.intersects(frame) }
+        }
+        guard !colliding.isEmpty else { return }
+
+        let contentMaxY = obstacles.map(\.maxY).max() ?? 0
+        let clusterMinY = colliding.compactMap { proposed.elements[$0]?.node?.frame.y }.min() ?? 0
+        let dy = (contentMaxY + 80) - clusterMinY
+        guard dy > 0 else { return }
+        for id in colliding {
+            guard var element = proposed.elements[id], var node = element.node else { continue }
+            node.frame.y += dy
+            element.content = .node(node)
+            try? proposed.apply(.replaceElement(element))
+        }
+    }
+
     @objc func acceptAgentProposal(_ sender: Any?) {
         guard let proposed = pendingProposal else { return }
         // F3: the pre-proposal board becomes an automatic version, so agent
         // edits stay recoverable long after the undo stack is gone.
         document.saveVersion(named: "Before assistant proposal", kind: .auto)
-        let layer = document.board.layers.first?.id ?? proposed.layers[0].id
         let operation = ProposalApply.replaceOperation(
-            current: document.board, proposed: proposed, targetLayer: layer)
+            current: document.board, proposed: proposed)
         document.perform(operation, actionName: "Accept Claude’s Proposal")
         canvasView.select([])
         clearAgentProposal()
@@ -1162,11 +1199,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LayersPanelContainer(document: document, model: layersModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
-            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
-        ])
+        rightPanelStack.addArrangedSubview(host)
     }
 
     private func updateLayer(_ id: LayerID, _ mutate: (inout Layer) -> Void) {
@@ -1408,12 +1441,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LibraryPanelContainer(model: libraryModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
-            // Below the layers panel's top anchor so both can be open.
-            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 320),
-        ])
+        rightPanelStack.addArrangedSubview(host)
     }
 
     private func reloadLibrary() {

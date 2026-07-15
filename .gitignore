@@ -7,7 +7,7 @@ xcuserdata/
 .swiftpm/
 AppIcon.iconset/
 
-# Local-only: process docs, agent workspace, packaged artifacts
+# Local-only: process docs, machine-local agent settings, packaged artifacts
 internal/
-.claude/
+.claude/settings.local.json
 *.zip

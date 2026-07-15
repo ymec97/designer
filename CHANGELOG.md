@@ -40,6 +40,9 @@ First testable release: the full MVP plus the post-MVP feature set.
   sketch — wobbly outlines, handwritten labels — while staying fully
   structured. Per board, undoable, off by default.
 - Layers (⌘L): one board, many concerns; visibility, locking, focus dimming.
+- Side panels (layers, versions, library, flows, assistant) stack in one
+  right-hand column — open panels never overlap, windows have a sane
+  minimum size.
 - Library (⌘Y): save and reuse diagram patterns.
 
 ### Understanding traffic
@@ -56,11 +59,15 @@ First testable release: the full MVP plus the post-MVP feature set.
 ### AI collaboration
 - Local MCP server (Board ▸ Enable Agent Access, persists): any MCP client —
   Claude Desktop, Claude Code — can read the board and PROPOSE edits.
-  Proposals appear as ghosts on the canvas with a diff banner; nothing
+  Proposals appear as ghosts on the canvas with a diff banner and legend:
+  green dashed + "+" badge = will be added, red dashed + ✕ strike = will be
+  removed; auto-placed additions never land on existing blocks. Nothing
   applies until accepted (one undo step). Agents receive an authoring guide
-  (kinds, shape conventions, labeling) automatically; renames are detected
-  instead of read as remove+add; freehand ink and boundaries are never
-  touched by proposals.
+  (kinds, shapes, labeling, progressive-disclosure layering) automatically;
+  they can create LAYERS (name-addressed, tint, hidden, multi-membership)
+  and FLOWS (recorded journeys with per-hop connector choice); renames are
+  detected instead of read as remove+add; freehand ink and boundaries are
+  never touched by proposals.
 - In-app assistant (⇧⌘A): chat with Claude inside Designer, billed to your
   Claude subscription via the Claude Code CLI — model and thinking-effort
   selectors included. Edits arrive through the same propose→review flow.

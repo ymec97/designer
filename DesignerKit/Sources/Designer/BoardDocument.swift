@@ -15,6 +15,9 @@ final class BoardDocument: NSDocument, ObservableObject {
         let window = NSWindow(contentViewController: CanvasViewController(document: self))
         window.setContentSize(NSSize(width: 1100, height: 720))
         window.styleMask.insert([.resizable, .miniaturizable, .closable, .titled])
+        // Small enough for split-screen, big enough that the toolbar and a
+        // side panel never collide.
+        window.contentMinSize = NSSize(width: 880, height: 560)
         window.center()
         addWindowController(NSWindowController(window: window))
     }

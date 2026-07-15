@@ -815,42 +815,46 @@ public final class CanvasView: NSView {
         guard let ghost = proposalGhost else { return }
         let ghostFrames = ghost.proposedBoard.frameProvider()
 
-        // Removals: dashed red outline on current elements.
+        // Removals: red dashed outline + a diagonal ✕ — "this gets deleted".
         for id in ghost.removedElements {
             guard let element = board.elements[id] else { continue }
-            let rect: CGRect?
             if let node = element.node {
-                rect = viewport.toView(node.frame)
-            } else if let edge = element.edge, let route = routeCache[id] {
-                renderer.drawProposalRemovedRoute(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
-                _ = edge
-                rect = nil
-            } else {
-                rect = nil
-            }
-            if let rect {
+                let rect = viewport.toView(node.frame)
                 renderer.drawProposalRemovedOutline(rect, in: context, viewport: viewport)
+                renderer.drawProposalRemovedStrike(rect, in: context, viewport: viewport)
+                renderer.drawGhostBadge(kind: .removed, at: CGPoint(x: rect.minX, y: rect.minY), in: context, viewport: viewport)
+            } else if element.edge != nil, let route = routeCache[id] {
+                renderer.drawProposalRemovedRoute(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
             }
         }
 
-        // Additions: the proposed elements rendered translucent + dashed.
+        // Additions: translucent content in GREEN dress — green dashed
+        // outline + "+" badge on blocks, green dashed routes on connectors.
         context.saveGState()
         context.setAlpha(0.62)
         context.beginTransparencyLayer(auxiliaryInfo: nil)
         for element in ghost.proposedBoard.elementsInZOrder where ghost.addedElements.contains(element.id) {
             if let edge = element.edge {
                 if let route = EdgeGeometry.route(for: edge, frames: ghostFrames) {
-                    renderer.drawFlowCandidate(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
+                    renderer.drawProposalAddedRoute(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
                 }
             } else {
                 renderer.draw(element, in: context, viewport: viewport, isSelected: false)
                 if let node = element.node {
-                    renderer.drawProposalAddedOutline(viewport.toView(node.frame), in: context, viewport: viewport)
+                    renderer.drawProposalAddedOutline(
+                        viewport.toView(node.frame), in: context, viewport: viewport,
+                        color: Graphite.proposalAdd)
                 }
             }
         }
         context.endTransparencyLayer()
         context.restoreGState()
+        // Badges above the translucency so they read at full strength.
+        for id in ghost.addedElements {
+            guard let node = ghost.proposedBoard.elements[id]?.node else { continue }
+            let rect = viewport.toView(node.frame)
+            renderer.drawGhostBadge(kind: .added, at: CGPoint(x: rect.minX, y: rect.minY), in: context, viewport: viewport)
+        }
     }
 
     // MARK: Flow recording (F5)

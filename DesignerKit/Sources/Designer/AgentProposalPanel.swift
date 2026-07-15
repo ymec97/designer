@@ -1,4 +1,5 @@
 import SwiftUI
+import DesignerCanvas
 
 struct AgentProposalPending {
     var summary: String
@@ -36,6 +37,21 @@ struct AgentProposalPanel: View {
                         Text(pending.summary)
                             .font(.system(size: 11))
                             .foregroundStyle(GraphiteStyle.inkDim)
+                        // Canvas legend: the ghost colors' meaning at a glance.
+                        HStack(spacing: 12) {
+                            HStack(spacing: 4) {
+                                Circle().fill(Color(nsColor: Graphite.proposalAdd))
+                                    .frame(width: 7, height: 7)
+                                Text("green + added").font(.system(size: 10)).fixedSize()
+                            }
+                            HStack(spacing: 4) {
+                                Circle().fill(Color(nsColor: Graphite.proposalRemove))
+                                    .frame(width: 7, height: 7)
+                                Text("red ✕ removed").font(.system(size: 10)).fixedSize()
+                            }
+                        }
+                        .foregroundStyle(GraphiteStyle.inkFaint)
+                        .padding(.top, 2)
                     }
                     Spacer(minLength: 16)
                     Button { withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() } } label: {

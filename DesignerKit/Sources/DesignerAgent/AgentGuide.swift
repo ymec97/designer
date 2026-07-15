@@ -41,6 +41,35 @@ public enum AgentGuide {
     label/protocol. (By hand, connecting an already-connected pair again \
     simply adds a parallel connector.)
 
+    ## Layers (progressive disclosure — USE THEM on non-trivial boards)
+    Layers are views over the SAME elements (multi-membership), toggled \
+    visible/hidden — that is their power: a board that starts as a simple \
+    overview and reveals depth layer by layer, perfect for walking someone \
+    through a system.
+    - Declare `layers: [{name, tint?, hidden?}]` at the top level; the FIRST \
+    layer is the base. Give each element `layers: ["…"]` (names; omitted = \
+    base layer only). An element may be on several layers.
+    - Recommended structure: a base "Overview" layer with the core components \
+    and happy-path connections everyone must understand; then one layer per \
+    added concern or depth level — e.g. "Caching", "Security", "Failure \
+    modes", "Infra detail". Keep the overview readable on its own; put \
+    detail elements (and their connectors) on their concern layer.
+    - Connectors should live on the layers where BOTH their meaning and \
+    endpoints make sense (a cache-fill connector belongs on "Caching").
+    - Tint layers (hex) so focus mode color-codes concerns.
+
+    ## Flows (recorded journeys — add them when you explain traffic)
+    A flow replays one request's exact path as an animated packet — including \
+    WHICH of two parallel connectors it takes.
+    - `flows: [{name, source, steps}]`; `source` is the starting node id; \
+    `steps` is an ordered array; each step is an array of hops that fire \
+    together (one hop normally, several = fan-out).
+    - A hop is {from, to, via?} — node ids plus `via` matching the \
+    connector's label or protocol, REQUIRED when parallels exist.
+    - Example: [[{from:"client",to:"gw"}], [{from:"gw",to:"orders",\
+    via:"gRPC"}], [{from:"orders",to:"db"},{from:"orders",to:"billing"}]]
+    - Name flows after the scenario ("Checkout (gRPC)", "Login journey").
+
     ## App features you can explain to the user (you cannot drive these; they're in-app)
     - Draw tool (D): freehand sketches snap into blocks/connectors; ⌘R \
     structurizes a selection.

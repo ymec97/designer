@@ -34,6 +34,11 @@ public enum Graphite {
     public static let accent       = dynamic(light: "#3B5BDB", dark: "#7D97FF")
     public static let accentSoft   = dynamic(light: "#E7ECFD", dark: "#26305A")
 
+    /// Proposal-review semantics: green = will be added, red = will be
+    /// removed. Distinct from the accent so ghosts never read as selection.
+    public static let proposalAdd    = dynamic(light: "#0CA678", dark: "#3DDC97")
+    public static let proposalRemove = dynamic(light: "#E03131", dark: "#FF7B7B")
+
     /// Palette for recorded flows (F5): distinct hues that read on both
     /// canvas grounds. Index 0 is the app accent; assignment cycles.
     public static let flowColors: [NSColor] = [

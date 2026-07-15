@@ -13,7 +13,7 @@ final class ProposalApplyTests: XCTestCase {
         let proposed = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"c","name":"c"},{"id":"d","name":"d"}],"edges":[]}"#)
         let before = LLMInterchange.export(current)
 
-        let op = ProposalApply.replaceOperation(current: current, proposed: proposed, targetLayer: current.layers[0].id)
+        let op = ProposalApply.replaceOperation(current: current, proposed: proposed)
         let inverse = try! current.apply(op)
 
         // The board now matches the proposal (structurally).
@@ -41,10 +41,40 @@ final class ProposalApplyTests: XCTestCase {
         let proposed = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)
         var applied = current
         _ = try! applied.apply(ProposalApply.replaceOperation(
-            current: current, proposed: proposed, targetLayer: layer))
+            current: current, proposed: proposed))
 
         XCTAssertNotNil(applied.elements[inkID], "ink stroke must survive an agent proposal")
         XCTAssertEqual(applied.elements.values.filter { $0.node != nil }.count, 2)
+    }
+
+    func testProposalCreatesLayersAndFlows() {
+        var current = board(#"{"nodes":[{"id":"a","name":"a"}],"edges":[]}"#)
+        let proposed = board("""
+        {"layers": [{"name": "Overview"}, {"name": "Caching", "tint": "#38D9A9"}],
+         "nodes": [{"id": "a", "name": "a"},
+                   {"id": "cache", "name": "cache", "layers": ["Caching"]}],
+         "edges": [{"from": "a", "to": "cache", "label": "fill", "layers": ["Caching"]}],
+         "flows": [{"name": "Fill", "source": "a",
+                    "steps": [[{"from": "a", "to": "cache"}]]}]}
+        """)
+
+        let inverse = try! current.apply(ProposalApply.replaceOperation(
+            current: current, proposed: proposed))
+
+        XCTAssertEqual(current.layers.map(\.name), ["Base", "Caching"],
+                       "proposed base maps onto the existing base; new layers append")
+        let cachingID = current.layers[1].id
+        let cacheNode = current.elements.values.first { $0.node?.semantic.name == "cache" }
+        XCTAssertEqual(cacheNode?.layerIDs, [cachingID])
+        XCTAssertEqual(current.flows.count, 1)
+        XCTAssertEqual(current.flows[0].name, "Fill")
+        XCTAssertNotNil(current.elements[current.flows[0].source],
+                        "flow references inserted proposed elements")
+
+        // One undo step returns everything: layers, flows, elements.
+        try! current.apply(inverse)
+        XCTAssertEqual(current.layers.count, 1)
+        XCTAssertTrue(current.flows.isEmpty)
     }
 
     func testProposedElementIdsArePreserved() {
@@ -54,7 +84,7 @@ final class ProposalApplyTests: XCTestCase {
 
         var applied = current
         _ = try! applied.apply(ProposalApply.replaceOperation(
-            current: current, proposed: proposed, targetLayer: current.layers[0].id))
+            current: current, proposed: proposed))
         XCTAssertEqual(Set(applied.elements.keys), proposedIDs)
     }
 }
