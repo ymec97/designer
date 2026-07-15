@@ -976,11 +976,16 @@ final class BoardRenderer {
     ) {
         let attributed = attributedString(text, fontSize: fontSize, color: color)
         let size = attributed.size()
+        // Center the VISIBLE (possibly truncated) width — centering the full
+        // text width made oversized names start left of their own block and
+        // spill over neighbors.
+        let maxWidth = rect.width - 8
+        let visibleWidth = min(size.width, max(maxWidth, 10))
         let origin = CGPoint(
-            x: rect.midX - size.width / 2,
+            x: rect.midX - visibleWidth / 2,
             y: rect.midY - size.height / 2
         )
-        draw(attributed, at: origin, maxWidth: rect.width - 8, context: context)
+        draw(attributed, at: origin, maxWidth: maxWidth, context: context)
     }
 
     private func drawText(

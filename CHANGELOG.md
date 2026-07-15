@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.1 — 2026-07-15
+
+- FIX: oversized block names rendered centered on their FULL width, spilling
+  left over neighboring blocks — the visible (truncated) width is centered
+  now.
+- FIX: avoidance detours re-anchor connector endpoints toward the detour
+  they arrive from (no more hooked arrivals on the wrong side), and the
+  smoothed route is verified against blockers — it flips sides or falls
+  back to a straight line rather than clipping a third block's corner.
+
 ## v0.3.0 — 2026-07-15
 
 Agent boards now read like a human drew them (analysis of two real bad

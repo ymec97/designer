@@ -152,9 +152,34 @@ public enum EdgeGeometry {
         // unrelated block detours around it with a gentle curve. Manual
         // waypoints, orthogonal routing, and bowed parallels are left alone.
         if points.count == 2, let obstacles {
-            let detours = avoidanceWaypoints(from: points[0], to: points[1], obstacles: obstacles)
+            var detours = avoidanceWaypoints(from: points[0], to: points[1], obstacles: obstacles)
             if !detours.isEmpty {
-                points = smoothed([points[0]] + detours + [points[1]])
+                // Re-anchor the endpoints toward the detour they actually
+                // approach from — anchors chosen for the straight line made
+                // curves hook around and arrive on the wrong side.
+                var start = points[0], end = points[1]
+                if let first = detours.first,
+                   let resolved = resolve(edge.from, toward: .free(first), frames: frames,
+                                          offsetOverride: anchorOffsets?.from) {
+                    start = resolved.point
+                }
+                if let last = detours.last,
+                   let resolved = resolve(edge.to, toward: .free(last), frames: frames,
+                                          offsetOverride: anchorOffsets?.to) {
+                    end = resolved.point
+                }
+                var candidate = smoothed([start] + detours + [end])
+                // Spline overshoot can clip blocks the straight line missed
+                // (dense rows). Verify; if dirty, flip the detour side once;
+                // if still dirty, an honest straight line beats a weird hook.
+                if routeIntersectsBlockers(candidate, from: start, to: end, obstacles: obstacles) {
+                    detours = mirroredWaypoints(detours, from: points[0], to: points[1])
+                    candidate = smoothed([start] + detours + [end])
+                    if routeIntersectsBlockers(candidate, from: start, to: end, obstacles: obstacles) {
+                        candidate = points
+                    }
+                }
+                points = candidate
             }
         }
 
@@ -324,6 +349,35 @@ public enum EdgeGeometry {
             let length = (dx * dx + dy * dy).squareRoot()
             guard length > 0.001 else { return Point(x: 0, y: -1) }
             return Point(x: -dy / length, y: dx / length)
+        }
+    }
+
+    /// True when a sampled route passes through any blocking node (the ones
+    /// not hosting its endpoints) — the post-detour sanity check.
+    private static func routeIntersectsBlockers(
+        _ points: [Point], from a: Point, to b: Point, obstacles: (Rect) -> [Rect]
+    ) -> Bool {
+        guard let minX = points.map(\.x).min(), let maxX = points.map(\.x).max(),
+              let minY = points.map(\.y).min(), let maxY = points.map(\.y).max() else { return false }
+        let blockers = obstacles(Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
+            .filter { !$0.contains(a) && !$0.contains(b) }
+        guard !blockers.isEmpty else { return false }
+        // Endpoints hug their node borders; skip the first/last few samples.
+        for point in points.dropFirst(3).dropLast(3) {
+            if blockers.contains(where: { $0.contains(point) }) { return true }
+        }
+        return false
+    }
+
+    /// The same waypoints reflected to the other side of the a→b line.
+    private static func mirroredWaypoints(_ waypoints: [Point], from a: Point, to b: Point) -> [Point] {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0.001 else { return waypoints }
+        return waypoints.map { point in
+            let t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared
+            let projection = Point(x: a.x + dx * t, y: a.y + dy * t)
+            return Point(x: 2 * projection.x - point.x, y: 2 * projection.y - point.y)
         }
     }
 
