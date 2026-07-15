@@ -18,25 +18,20 @@ steps in order — never tag or package a build that hasn't passed the battery.
 - **`CHANGELOG.md`** gets a section per version. Update it in the release
   commit, not after.
 
-## Tag policy
+## Workflow (post-ship, since 2026-07-15)
 
-- **Pre-ship (current phase):** the user has NOT yet shipped the first version
-  to their work laptop. Until they say they have, every release commit
-  **force-retags `v0.1.0`** — do not mint new versions:
+v0.1.0 shipped to the work Mac and is FROZEN — existing tags never move.
 
-  ```sh
-  git tag -fa v0.1.0 -m "Designer v0.1.0 — <short summary>"
-  ```
-
-- **Post-ship:** once the user says v0.1.0 shipped, that tag is frozen forever.
-  From then on each release bumps `VERSION` (SemVer: patch = fixes, minor =
-  features, major = breaking board-format changes) and creates a NEW annotated
-  tag `v<version>` — never move an existing tag again.
-- Tags are annotated (`-a`), named `v<VERSION>`, and placed on the exact commit
-  the artifact was built from.
-- **Never push** unless the user asks. When they do:
-  `git push -u origin main --tags` (`-f` on the tag ref only while pre-ship
-  retagging, e.g. `git push origin +refs/tags/v0.1.0`).
+1. **Branch** for each change set: `git checkout -b fix/<slug>` or
+   `feature/<slug>` from main.
+2. Commit on the branch (author `Yarden <yarden@c.com>`, no co-author
+   trailers); run the verification battery before merging.
+3. **Merge to main** with `git merge --no-ff <branch>` (no PRs for now —
+   Yarden will say when to switch to a PR-based flow).
+4. **Tag when releasing**: bump `VERSION` (SemVer: patch = fixes, minor =
+   features, major = breaking board-format changes), update CHANGELOG, then
+   `git tag -a v<version> -m "Designer v<version> — <summary>"` on main.
+5. Push: `git push origin main v<version>`. Delete the merged branch.
 
 ## Verification battery (all must pass before tagging)
 
