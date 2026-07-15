@@ -359,7 +359,8 @@ final class BoardRenderer {
         isSelected: Bool,
         isDangling: Bool = false,
         simplified: Bool = false,
-        captionFraction: Double = 0.5
+        captionFraction: Double = 0.5,
+        captionObstacles: ((Rect) -> [Rect])? = nil
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
@@ -427,10 +428,59 @@ final class BoardRenderer {
         }
 
         // Label pill + well-known-key badges along the route (parallel edges
-        // get staggered fractions so pills don't overlap).
+        // get staggered fractions so pills don't overlap; the pill also
+        // slides along the route so it never sits ON a block).
         if viewport.scale >= Self.textVisibilityScale {
-            drawEdgeCaption(edge, at: viewport.toView(route.point(atFraction: captionFraction)), viewport: viewport, in: context)
+            var fraction = captionFraction
+            if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
+                fraction = EdgeGeometry.captionFraction(
+                    preferred: captionFraction,
+                    route: route,
+                    pillSize: Size(width: Double(pillView.width) / viewport.scale,
+                                   height: Double(pillView.height) / viewport.scale),
+                    obstacles: captionObstacles
+                )
+            }
+            drawEdgeCaption(edge, at: viewport.toView(route.point(atFraction: fraction)), viewport: viewport, in: context)
         }
+    }
+
+    /// The caption pill's rendered size, or nil when the edge has no caption.
+    private func captionPillSize(for edge: Edge, viewport: CanvasViewport) -> CGSize? {
+        guard let content = captionContent(for: edge, viewport: viewport) else { return nil }
+        return content.pillSize
+    }
+
+    private func captionContent(
+        for edge: Edge, viewport: CanvasViewport
+    ) -> (lines: [NSAttributedString], sizes: [CGSize], pillSize: CGSize)? {
+        let label = edge.semantic.label ?? ""
+        let badgeKeys = [
+            WellKnownEdgeProperty.protocolKey,
+            WellKnownEdgeProperty.data,
+            WellKnownEdgeProperty.condition,
+        ]
+        let badges = badgeKeys.compactMap { key in
+            edge.semantic.properties[key].map { "\(key): \($0)" }
+        }
+        guard !label.isEmpty || !badges.isEmpty else { return nil }
+
+        var lines: [NSAttributedString] = []
+        if !label.isEmpty {
+            lines.append(attributedString(label, fontSize: 12 * viewport.scale, color: Palette.nodeText))
+        }
+        if !badges.isEmpty {
+            lines.append(attributedString(
+                badges.joined(separator: "  ·  "),
+                fontSize: 10 * viewport.scale,
+                color: Palette.noteText
+            ))
+        }
+        let sizes = lines.map { $0.size() }
+        let width = sizes.map(\.width).max() ?? 0
+        let height = sizes.map(\.height).reduce(0, +)
+        let padding = 5 * viewport.scale
+        return (lines, sizes, CGSize(width: width + padding * 2, height: height + padding * 2))
     }
 
     private func strokePolyline(_ points: [CGPoint], in context: CGContext) {
@@ -469,38 +519,14 @@ final class BoardRenderer {
     private func drawEdgeCaption(
         _ edge: Edge, at center: CGPoint, viewport: CanvasViewport, in context: CGContext
     ) {
-        let label = edge.semantic.label ?? ""
-        let badgeKeys = [
-            WellKnownEdgeProperty.protocolKey,
-            WellKnownEdgeProperty.data,
-            WellKnownEdgeProperty.condition,
-        ]
-        let badges = badgeKeys.compactMap { key in
-            edge.semantic.properties[key].map { "\(key): \($0)" }
-        }
-        guard !label.isEmpty || !badges.isEmpty else { return }
-
-        var lines: [NSAttributedString] = []
-        if !label.isEmpty {
-            lines.append(attributedString(label, fontSize: 12 * viewport.scale, color: Palette.nodeText))
-        }
-        if !badges.isEmpty {
-            lines.append(attributedString(
-                badges.joined(separator: "  ·  "),
-                fontSize: 10 * viewport.scale,
-                color: Palette.noteText
-            ))
-        }
-
-        let sizes = lines.map { $0.size() }
-        let width = sizes.map(\.width).max() ?? 0
-        let height = sizes.map(\.height).reduce(0, +)
+        guard let content = captionContent(for: edge, viewport: viewport) else { return }
+        let (lines, sizes, pillSize) = content
         let padding = 5 * viewport.scale
         let pill = CGRect(
-            x: center.x - width / 2 - padding,
-            y: center.y - height / 2 - padding,
-            width: width + padding * 2,
-            height: height + padding * 2
+            x: center.x - pillSize.width / 2,
+            y: center.y - pillSize.height / 2,
+            width: pillSize.width,
+            height: pillSize.height
         )
         let path = CGPath(
             roundedRect: pill,

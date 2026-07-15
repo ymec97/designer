@@ -82,11 +82,56 @@ final class EdgeGeometryTests: XCTestCase {
 
     func testAvoidanceGivesUpOnHugeBlockers() {
         let wall = Rect(x: 200, y: -400, width: 60, height: 800)
-        let waypoint = EdgeGeometry.avoidanceWaypoint(
+        let waypoints = EdgeGeometry.avoidanceWaypoints(
             from: Point(x: 0, y: 0), to: Point(x: 500, y: 0),
             obstacles: { _ in [wall] }
         )
-        XCTAssertNil(waypoint, "a wild swing is worse than a crossing")
+        XCTAssertTrue(waypoints.isEmpty, "a wild swing is worse than a crossing")
+    }
+
+    func testLongRouteWeavesPastSeveralBlockers() throws {
+        // A long connector over a ROW of nodes (the agent-layout case): one
+        // waypoint per blocker cluster, and the sampled route clears both.
+        let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
+        let b = addNode("b", frame: Rect(x: 900, y: 0, width: 80, height: 40))
+        let blocker1 = Rect(x: 250, y: -20, width: 90, height: 80)
+        let blocker2 = Rect(x: 600, y: -20, width: 90, height: 80)
+        _ = addNode("wall1", frame: blocker1)
+        _ = addNode("wall2", frame: blocker2)
+        let edgeElement = connect(a, b)
+
+        let waypoints = EdgeGeometry.avoidanceWaypoints(
+            from: Point(x: 80, y: 20), to: Point(x: 900, y: 20),
+            obstacles: SpatialIndex.nodeObstacleQuery(for: board)
+        )
+        XCTAssertEqual(waypoints.count, 2, "separated blockers get separate waypoints")
+
+        let route = try XCTUnwrap(EdgeGeometry.route(
+            for: edgeElement.edge!, frames: board.frameProvider(),
+            obstacles: SpatialIndex.nodeObstacleQuery(for: board)))
+        for point in route.points {
+            XCTAssertFalse(blocker1.contains(point), "route clears the first blocker")
+            XCTAssertFalse(blocker2.contains(point), "route clears the second blocker")
+        }
+    }
+
+    func testCaptionSlidesOffBlockingNode() {
+        // A node sits exactly at the route midpoint: the caption fraction
+        // moves to a clear spot; with no obstruction it stays at preferred.
+        let route = EdgeGeometry.Route(points: [Point(x: 0, y: 0), Point(x: 600, y: 0)])
+        let nodeAtMid = Rect(x: 250, y: -30, width: 100, height: 60)
+        let pill = Size(width: 90, height: 30)
+
+        let dodged = EdgeGeometry.captionFraction(
+            preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [nodeAtMid] })
+        let pillCenter = route.point(atFraction: dodged)
+        let pillRect = Rect(x: pillCenter.x - pill.width / 2, y: pillCenter.y - pill.height / 2,
+                            width: pill.width, height: pill.height)
+        XCTAssertFalse(nodeAtMid.intersects(pillRect), "caption slides off the node")
+
+        let clear = EdgeGeometry.captionFraction(
+            preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [] })
+        XCTAssertEqual(clear, 0.5, "unobstructed captions stay at the preferred spot")
     }
 
     // MARK: Anchor spreading (arrows sharing a node side)

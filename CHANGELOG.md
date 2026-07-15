@@ -12,6 +12,13 @@ Feedback round from the first work-machine deployment, plus interchange.
   into bands, staying ~2,000pt wide.
 - Space-bar panning: hold ⎵ and drag to pan with any pointing device — no
   trackpad needed.
+- FIX: connector labels no longer sit on top of blocks — caption pills probe
+  the board and slide along their route to the nearest clear spot (canvas,
+  PNG, and SVG export).
+- FIX: long connectors (the agent's speciality) now weave past EVERY block
+  in their way — avoidance places one waypoint per blocker cluster instead
+  of attempting a single giant bow and giving up. Ghost previews route with
+  the same avoidance, so what you review is what you get.
 - ⌘S on a new untitled board now prompts for a name and location instead of
   silently keeping "Untitled" (the draft file is cleaned up; autosave
   unchanged).
