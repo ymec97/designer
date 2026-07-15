@@ -486,6 +486,12 @@ public final class CanvasView: NSView {
             let visibleNodeCount = drawables.reduce(0) { $0 + ($1.node != nil ? 1 : 0) }
             renderer.elevateNodes = visibleNodeCount <= 70
 
+            // Connector captions dodge blocks (they slid ON TOP of nodes on
+            // dense boards); the spatial index answers the pill-rect probes.
+            let captionObstacles: (Rect) -> [Rect] = { [spatialIndex, board] rect in
+                spatialIndex.query(rect).compactMap { board.elements[$0]?.node?.frame }
+            }
+
             for element in drawables {
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     if let edge = element.edge {
@@ -495,7 +501,8 @@ public final class CanvasView: NSView {
                                 in: context, viewport: viewport,
                                 isSelected: selection.contains(element.id),
                                 isDangling: danglingEdgeIDs.contains(element.id),
-                                captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5
+                                captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5,
+                                captionObstacles: captionObstacles
                             )
                         }
                     } else {
@@ -759,8 +766,15 @@ public final class CanvasView: NSView {
     }
 
     public var proposalGhost: ProposalGhost? {
-        didSet { needsDisplay = true }
+        didSet {
+            ghostObstacles = proposalGhost.map { SpatialIndex.nodeObstacleQuery(for: $0.proposedBoard) }
+            needsDisplay = true
+        }
     }
+
+    /// Node-frame query over the PROPOSED board, so ghost connectors route
+    /// around blocks exactly like they will after accepting.
+    private var ghostObstacles: ((Rect) -> [Rect])?
 
     /// World bounds of the ghosted additions (for the reveal camera).
     public func proposalGhostBounds() -> Rect? {
@@ -844,7 +858,7 @@ public final class CanvasView: NSView {
         context.beginTransparencyLayer(auxiliaryInfo: nil)
         for element in ghost.proposedBoard.elementsInZOrder where ghost.addedElements.contains(element.id) {
             if let edge = element.edge {
-                if let route = EdgeGeometry.route(for: edge, frames: ghostFrames) {
+                if let route = EdgeGeometry.route(for: edge, frames: ghostFrames, obstacles: ghostObstacles) {
                     renderer.drawProposalAddedRoute(route.points.map { viewport.toView($0) }, in: context, viewport: viewport)
                 }
             } else {

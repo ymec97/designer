@@ -151,9 +151,11 @@ public enum EdgeGeometry {
         // Node avoidance (P5): a plain straight line that would cross an
         // unrelated block detours around it with a gentle curve. Manual
         // waypoints, orthogonal routing, and bowed parallels are left alone.
-        if points.count == 2, let obstacles,
-           let detour = avoidanceWaypoint(from: points[0], to: points[1], obstacles: obstacles) {
-            points = smoothed([points[0], detour, points[1]])
+        if points.count == 2, let obstacles {
+            let detours = avoidanceWaypoints(from: points[0], to: points[1], obstacles: obstacles)
+            if !detours.isEmpty {
+                points = smoothed([points[0]] + detours + [points[1]])
+            }
         }
 
         return Route(points: points)
@@ -188,15 +190,18 @@ public enum EdgeGeometry {
     }
 
     /// Where a straight `a`→`b` line should bend to clear the blocks it
-    /// crosses, or nil when the line is already clear (or a detour would be
-    /// absurd). One perpendicular waypoint at the midpoint, on the cheaper
-    /// side, just past the blockers.
-    static func avoidanceWaypoint(
+    /// crosses (empty when it's already clear). Blockers are grouped into
+    /// clusters ALONG the line, and each cluster gets its own perpendicular
+    /// waypoint on its cheaper side — a long connector over a row of nodes
+    /// weaves past each one instead of attempting (and giving up on) a
+    /// single giant bow. A cluster whose detour would be absurd (>220pt) is
+    /// crossed rather than dodged.
+    static func avoidanceWaypoints(
         from a: Point, to b: Point, obstacles: (Rect) -> [Rect]
-    ) -> Point? {
+    ) -> [Point] {
         let dx = b.x - a.x, dy = b.y - a.y
         let length = (dx * dx + dy * dy).squareRoot()
-        guard length > 1 else { return nil }
+        guard length > 1 else { return [] }
         let nx = -dy / length, ny = dx / length
 
         let margin = 14.0
@@ -204,32 +209,90 @@ public enum EdgeGeometry {
             x: min(a.x, b.x) - margin, y: min(a.y, b.y) - margin,
             width: abs(dx) + margin * 2, height: abs(dy) + margin * 2
         )
-        let blockers = obstacles(searchBox)
-            .map { Rect(x: $0.x - margin, y: $0.y - margin, width: $0.width + margin * 2, height: $0.height + margin * 2) }
-            .filter { rect in
-                !rect.contains(a) && !rect.contains(b) && segmentIntersects(rect, a, b)
-            }
-        guard !blockers.isEmpty else { return nil }
-
-        // Signed perpendicular clearance needed on each side: past the
-        // farthest corner of any blocker.
-        var maxSigned = -Double.infinity
-        var minSigned = Double.infinity
-        for rect in blockers {
+        struct Blocker {
+            var rect: Rect
+            var tMin: Double // projection range along a→b, in [0, 1]
+            var tMax: Double
+        }
+        var blockers: [Blocker] = []
+        for raw in obstacles(searchBox) {
+            let rect = Rect(x: raw.x - margin, y: raw.y - margin,
+                            width: raw.width + margin * 2, height: raw.height + margin * 2)
+            guard !rect.contains(a), !rect.contains(b), segmentIntersects(rect, a, b) else { continue }
+            var tMin = Double.infinity, tMax = -Double.infinity
             for corner in [Point(x: rect.x, y: rect.y), Point(x: rect.maxX, y: rect.y),
                            Point(x: rect.x, y: rect.maxY), Point(x: rect.maxX, y: rect.maxY)] {
-                let signed = (corner.x - a.x) * nx + (corner.y - a.y) * ny
-                maxSigned = max(maxSigned, signed)
-                minSigned = min(minSigned, signed)
+                let t = ((corner.x - a.x) * dx + (corner.y - a.y) * dy) / (length * length)
+                tMin = min(tMin, t)
+                tMax = max(tMax, t)
+            }
+            blockers.append(Blocker(rect: rect, tMin: max(tMin, 0), tMax: min(tMax, 1)))
+        }
+        guard !blockers.isEmpty else { return [] }
+
+        // Merge blockers whose spans along the line touch into clusters.
+        blockers.sort { $0.tMin < $1.tMin }
+        var clusters: [[Blocker]] = []
+        for blocker in blockers {
+            if var last = clusters.last, let end = last.map(\.tMax).max(),
+               blocker.tMin <= end + 0.02 {
+                last.append(blocker)
+                clusters[clusters.count - 1] = last
+            } else {
+                clusters.append([blocker])
             }
         }
-        let clearance = 18.0
-        let positive = maxSigned + clearance      // detour on the +normal side
-        let negative = minSigned - clearance      // detour on the -normal side
-        let offset = abs(positive) <= abs(negative) ? positive : negative
-        guard abs(offset) <= 220 else { return nil } // a wild swing is worse than a crossing
-        let mid = Point(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
-        return Point(x: mid.x + nx * offset, y: mid.y + ny * offset)
+
+        var waypoints: [Point] = []
+        for cluster in clusters {
+            var maxSigned = -Double.infinity
+            var minSigned = Double.infinity
+            for blocker in cluster {
+                let rect = blocker.rect
+                for corner in [Point(x: rect.x, y: rect.y), Point(x: rect.maxX, y: rect.y),
+                               Point(x: rect.x, y: rect.maxY), Point(x: rect.maxX, y: rect.maxY)] {
+                    let signed = (corner.x - a.x) * nx + (corner.y - a.y) * ny
+                    maxSigned = max(maxSigned, signed)
+                    minSigned = min(minSigned, signed)
+                }
+            }
+            let clearance = 18.0
+            let positive = maxSigned + clearance
+            let negative = minSigned - clearance
+            let offset = abs(positive) <= abs(negative) ? positive : negative
+            guard abs(offset) <= 220 else { continue } // cross this one
+            let tMid = ((cluster.map(\.tMin).min() ?? 0) + (cluster.map(\.tMax).max() ?? 1)) / 2
+            waypoints.append(Point(
+                x: a.x + dx * tMid + nx * offset,
+                y: a.y + dy * tMid + ny * offset
+            ))
+        }
+        return waypoints
+    }
+
+    /// The fraction along `route` where a caption pill of `pillSize` (world
+    /// units) does NOT sit on a node: scans outward from `preferred` and
+    /// returns the first clear spot (or `preferred` when everything is
+    /// blocked — an overlapping label beats a missing one).
+    public static func captionFraction(
+        preferred: Double,
+        route: Route,
+        pillSize: Size,
+        obstacles: (Rect) -> [Rect]
+    ) -> Double {
+        let offsets: [Double] = [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.32, -0.32, 0.4, -0.4]
+        for offset in offsets {
+            let t = min(0.92, max(0.08, preferred + offset))
+            let center = route.point(atFraction: t)
+            let pill = Rect(
+                x: center.x - pillSize.width / 2, y: center.y - pillSize.height / 2,
+                width: pillSize.width, height: pillSize.height
+            )
+            if !obstacles(pill).contains(where: { $0.intersects(pill) }) {
+                return t
+            }
+        }
+        return preferred
     }
 
     private static func segmentIntersects(_ rect: Rect, _ a: Point, _ b: Point) -> Bool {

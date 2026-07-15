@@ -52,7 +52,8 @@ public enum SVGExporter {
             guard let edge = element.edge,
                   let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id], obstacles: obstacles) else { continue }
             body += svgEdge(edge, route: route, palette: palette,
-                            captionFraction: spread[element.id]?.captionT ?? 0.5)
+                            captionFraction: spread[element.id]?.captionT ?? 0.5,
+                            captionObstacles: obstacles)
         }
         for element in source.elementsInZOrder {
             switch element.content {
@@ -104,7 +105,7 @@ public enum SVGExporter {
         """
     }
 
-    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette, captionFraction: Double = 0.5) -> String {
+    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette, captionFraction: Double = 0.5, captionObstacles: ((Rect) -> [Rect])? = nil) -> String {
         let points = route.points.map { "\(fmt($0.x)),\(fmt($0.y))" }.joined(separator: " ")
         let markerStart = (edge.semantic.direction == .backward || edge.semantic.direction == .both)
             ? " marker-start=\"url(#arrow)\"" : ""
@@ -127,7 +128,16 @@ public enum SVGExporter {
             edge.semantic.properties[WellKnownEdgeProperty.protocolKey].map { "protocol: \($0)" },
         ].compactMap { $0 }.filter { !$0.isEmpty }
         if !caption.isEmpty {
-            let mid = route.point(atFraction: captionFraction)
+            var fraction = captionFraction
+            if let captionObstacles {
+                let longest = caption.map(\.count).max() ?? 0
+                fraction = EdgeGeometry.captionFraction(
+                    preferred: captionFraction, route: route,
+                    pillSize: Size(width: Double(longest) * 7.2, height: Double(caption.count) * 14 + 6),
+                    obstacles: captionObstacles
+                )
+            }
+            let mid = route.point(atFraction: fraction)
             for (index, line) in caption.enumerated() {
                 svg += centeredText(
                     line, x: mid.x, y: mid.y + Double(index) * 14 - Double(caption.count - 1) * 7,

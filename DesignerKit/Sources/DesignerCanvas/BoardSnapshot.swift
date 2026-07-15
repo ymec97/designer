@@ -47,7 +47,8 @@ public enum BoardSnapshot {
             if let edge = element.edge {
                 if let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id], obstacles: obstacles) {
                     renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false,
-                                      captionFraction: spread[element.id]?.captionT ?? 0.5)
+                                      captionFraction: spread[element.id]?.captionT ?? 0.5,
+                                      captionObstacles: obstacles)
                 }
             } else {
                 renderer.draw(element, in: context, viewport: viewport, isSelected: false)

@@ -37,6 +37,15 @@ final class RoutingVisualCheck: XCTestCase {
         let d = node("auth", 700, 400)
         edge(c, d, "manual bend", waypoints: [Point(x: 400, y: 560)])
 
+        // Row 3: LONG connector over a row of nodes (agent-layout case) with
+        // a caption that would land on the middle node.
+        let e = node("ingest", 0, 700)
+        let f = node("sink", 1200, 700)
+        _ = node("step-1", 280, 680)
+        _ = node("mid-node", 560, 680)
+        _ = node("step-3", 860, 680)
+        edge(e, f, "long haul")
+
         let image = try XCTUnwrap(BoardSnapshot.image(of: board, pointSize: CGSize(width: 1000, height: 620)))
         let tiff = try XCTUnwrap(image.tiffRepresentation)
         let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
