@@ -37,8 +37,12 @@ public enum LLMInterchange {
     #   `shape` ∈ rectangle|ellipse|diamond|triangle — convention: ellipse for
     #   databases/data stores, diamond for decision points, triangle for
     #   alerts, rectangle otherwise. `at` = [x, y] top-left, `size` =
-    #   [width, height] in points. Omit `at`/`size` for new nodes and they
-    #   will be auto-arranged left-to-right in data-flow order.
+    #   [width, height] in points. PREFER omitting `at`/`size`: Designer then
+    #   lays the board out like a human would (entry points left, flow
+    #   left-to-right, related blocks adjacent, externals at the edge,
+    #   compact). Keep names SHORT (2-4 words; details go in props/notes).
+    # - layout (optional, top level): flow direction — "left-right"
+    #   (default) | "right-left" | "top-down".
     # - edges: connections. `from`/`to` are node ids. ALWAYS set `label`
     #   (what happens) and `protocol` (HTTPS, gRPC, SQL, Kafka…). `direction` ∈
     #   forward|backward|both|none. `data`, `condition` describe the payload

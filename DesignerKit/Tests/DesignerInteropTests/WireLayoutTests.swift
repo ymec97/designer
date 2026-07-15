@@ -18,9 +18,10 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertLessThan(frame(b, "b").x, frame(b, "c").x)
     }
 
-    func testDeepChainWrapsIntoBands() {
-        // A 24-hop pipeline must not become an 8,000-point-wide board that
-        // only fits at ~13% zoom: columns wrap after 8 depths.
+    func testDeepChainCompressesMonotonically() {
+        // A 24-hop pipeline squeezes into <=8 columns while KEEPING the
+        // left-to-right story: no bands, no 8,000pt marches, x never
+        // decreases along the chain.
         var nodes: [String] = []
         var edges: [String] = []
         for index in 0..<24 {
@@ -29,13 +30,78 @@ final class WireLayoutTests: XCTestCase {
         }
         let b = board("{\"nodes\": [\(nodes.joined(separator: ","))], \"edges\": [\(edges.joined(separator: ","))]}")
         let frames = b.elements.values.compactMap(\.node?.frame)
-        XCTAssertLessThanOrEqual(frames.map(\.maxX).max() ?? 0, 80 + 8 * 260 + 160,
-                                 "wraps after 8 columns")
-        XCTAssertGreaterThan(frames.map(\.maxY).max() ?? 0, 400,
-                             "later depths land in lower bands")
-        XCTAssertEqual(frame(b, "n8").x, frame(b, "n0").x, accuracy: 0.5,
-                       "a new band restarts at column 0")
-        XCTAssertGreaterThan(frame(b, "n8").y, frame(b, "n0").y)
+        XCTAssertLessThanOrEqual(frames.map(\.maxX).max() ?? 0, 2600, "stays a few screens wide")
+        XCTAssertLessThanOrEqual(frames.map(\.maxY).max() ?? 0, 1600, "no towers")
+        for index in 1..<24 {
+            XCTAssertGreaterThanOrEqual(
+                frame(b, "n\(index)").x, frame(b, "n\(index - 1)").x,
+                "the chain reads left to right (n\(index))")
+        }
+    }
+
+    func testCyclicGraphStaysCompact() {
+        // The bug that produced the 27,000pt board: cycles pushed longest-
+        // path depths to node-count. Kahn-based depths must keep a cyclic
+        // 30-node graph within a few screens.
+        var nodes: [String] = []
+        var edges: [String] = []
+        for index in 0..<30 {
+            nodes.append("{\"id\": \"n\(index)\", \"name\": \"n\(index)\"}")
+            edges.append("{\"from\": \"n\(index)\", \"to\": \"n\((index + 1) % 30)\"}") // one big cycle
+            if index % 3 == 0 { edges.append("{\"from\": \"n\((index + 5) % 30)\", \"to\": \"n\(index)\"}") }
+        }
+        let b = board("{\"nodes\": [\(nodes.joined(separator: ","))], \"edges\": [\(edges.joined(separator: ","))]}")
+        let frames = b.elements.values.compactMap(\.node?.frame)
+        XCTAssertLessThanOrEqual(frames.map(\.maxX).max() ?? 0, 3200)
+        XCTAssertLessThanOrEqual(frames.map(\.maxY).max() ?? 0, 2400)
+        // And nothing overlaps.
+        for i in 0..<frames.count {
+            for j in (i + 1)..<frames.count {
+                XCTAssertFalse(frames[i].intersects(frames[j]), "blocks must not overlap")
+            }
+        }
+    }
+
+    func testDirectionTopDownSwapsAxes() {
+        let json = #"{"layout": "top-down", "nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[{"from":"a","to":"b"}]}"#
+        let b = board(json)
+        XCTAssertLessThan(frame(b, "a").y, frame(b, "b").y, "top-down flows downward")
+        if case .string(let direction)? = b.extra["layoutDirection"] {
+            XCTAssertEqual(direction, "top-down", "direction persists on the board")
+        } else {
+            XCTFail("layoutDirection not stored")
+        }
+    }
+
+    func testDirectionRightLeftMirrors() {
+        let json = #"{"layout": "right-left", "nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[{"from":"a","to":"b"}]}"#
+        let b = board(json)
+        XCTAssertGreaterThan(frame(b, "a").x, frame(b, "b").x, "right-left flows leftward")
+    }
+
+    func testExternalsFormBottomRow() {
+        let json = #"{"nodes":[{"id":"svc","name":"svc"},{"id":"db","name":"db"},{"id":"jira","name":"JIRA","kind":"external"},{"id":"slack","name":"Slack","kind":"external"}],"edges":[{"from":"svc","to":"db"},{"from":"svc","to":"jira"},{"from":"svc","to":"slack"}]}"#
+        let b = board(json)
+        let coreMaxY = max(frame(b, "svc").maxY, frame(b, "db").maxY)
+        XCTAssertGreaterThan(frame(b, "JIRA").y, coreMaxY, "externals sit below the core")
+        XCTAssertEqual(frame(b, "JIRA").y, frame(b, "Slack").y, "externals share the bottom row")
+    }
+
+    func testLayerMatesStayAdjacent() {
+        // Nodes sharing a specialty layer must be contiguous in their column.
+        let json = """
+        {"layers": [{"name": "Base"}, {"name": "Analysis"}],
+         "nodes": [{"id": "src", "name": "src"},
+                   {"id": "a1", "name": "a1", "layers": ["Analysis"]},
+                   {"id": "plain", "name": "plain"},
+                   {"id": "a2", "name": "a2", "layers": ["Analysis"]}],
+         "edges": [{"from": "src", "to": "a1"}, {"from": "src", "to": "plain"}, {"from": "src", "to": "a2"}]}
+        """
+        let b = board(json)
+        let ys = ["a1", "plain", "a2"].map { (name: $0, y: frame(b, $0).y) }.sorted { $0.y < $1.y }
+        let order = ys.map(\.name)
+        XCTAssertTrue(order == ["a1", "a2", "plain"] || order == ["plain", "a1", "a2"],
+                      "cluster mates a1/a2 stay adjacent, got \(order)")
     }
 
     func testFanOutSharesColumn() {
@@ -74,10 +140,15 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(node.semantic.kind, .cache)
     }
 
-    func testNoEdgesFallsBackToGrid() {
+    func testNoEdgesStacksCompactly() {
+        // No edges = no flow: one tidy column (spilling sideways past 10).
         let b = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)
-        // Same row, different x — the grid path.
-        XCTAssertEqual(frame(b, "a").y, frame(b, "b").y)
-        XCTAssertNotEqual(frame(b, "a").x, frame(b, "b").x)
+        XCTAssertEqual(frame(b, "a").x, frame(b, "b").x, "same column without flow")
+        XCTAssertNotEqual(frame(b, "a").y, frame(b, "b").y)
+        var many: [String] = []
+        for index in 0..<14 { many.append("{\"id\": \"m\(index)\", \"name\": \"m\(index)\"}") }
+        let big = board("{\"nodes\": [\(many.joined(separator: ","))], \"edges\": []}")
+        let xs = Set(big.elements.values.compactMap(\.node?.frame.x))
+        XCTAssertGreaterThan(xs.count, 1, "14 flow-less nodes spill into a second column")
     }
 }

@@ -23,6 +23,28 @@ public enum AgentGuide {
     Accepts or Rejects. Nothing applies until they accept. Call get_board \
     afterwards to see what they decided before proposing again.
 
+    ## Composition — build diagrams the way a human reads them
+    - A diagram has a NARRATIVE: entry points (clients, collectors, triggers) \
+    on the left, traffic progressing left→right toward stores and outputs. \
+    A reader should find where a request enters without hunting.
+    - Logically related blocks sit PHYSICALLY together, as a visible group; \
+    wrap subsystems in labeled boundaries when they deserve a name.
+    - `kind: external` blocks (SaaS, third parties) belong at the edge of \
+    the board, not woven through the middle.
+    - Keep it compact: a reader should grasp the board within a few screens \
+    (~1500×900 each). Only truly complex systems may exceed 3–4 screens.
+    - NAMES STAY SHORT (2–4 words). Long lists ("PaloAlto, Checkpoint, F5, \
+    Juniper…") truncate and destroy readability — put detail in `props`, a \
+    note, or the block's kind. Same for `condition`: one short clause.
+    - EASIEST PATH: omit `at`/`size` on every node and Designer lays the \
+    whole board out with these rules (cycle-safe flow columns, clusters \
+    from layer membership, externals at the bottom). If you DO place blocks \
+    yourself, leave ≥120pt gaps so connector labels have room.
+    - Top-level `layout` field picks the flow direction: "left-right" \
+    (default) | "right-left" | "top-down".
+    - propose_board's result reports the laid-out size and warnings — read \
+    it and fix what it flags before telling the user you're done.
+
     ## Authoring conventions (make boards read well)
     - EVERY node needs a human-readable `name` (e.g. "orders-svc", "Postgres") \
     and a `kind`: service | database | queue | cache | gateway | client | \
