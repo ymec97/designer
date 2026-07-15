@@ -34,20 +34,41 @@ Note: `xcodebuild` (and therefore Xcode-based building) requires Xcode's
 one-time component install, which needs admin rights:
 `sudo xcodebuild -runFirstLaunch`. The SwiftPM script works without it.
 
+## Package a release zip
+
+One command builds an optimized, version-stamped app and zips it:
+
+```sh
+scripts/package-app.sh            # → build/Designer-v<version>-<date>.zip
+```
+
+The zip is ad-hoc signed (no Developer ID yet), so on another Mac,
+Gatekeeper objects on first launch: unzip into /Applications, then
+right-click → Open (macOS ≤14), use System Settings → Privacy & Security →
+"Open Anyway" (macOS 15+), or clear quarantine up front with
+`xattr -dr com.apple.quarantine /Applications/Designer.app`.
+
+For the in-app assistant on that Mac, also install the Claude Code CLI
+(`npm install -g @anthropic-ai/claude-code`, run `claude` once and log in).
+
 ## Tests
 
 ```sh
-cd DesignerKit && swift test    # unit suite (model, persistence, canvas math)
+cd DesignerKit && swift test    # unit suite (model, geometry, persistence, recognition)
 ```
 
 End-to-end checks built into the app binary (no permissions or UI scripting needed):
 
 ```sh
+# Synthesized-event UI walk: create, connect, sketch, layers, flows, versions…
+build/Designer.app/Contents/MacOS/Designer --ui-test
+
 # Real NSDocument pipeline: create → mutate → save → reopen → verify
 build/Designer.app/Contents/MacOS/Designer --smoke-test /tmp/out.designerboard
 
-# Frame pacing on a synthetic 2,000-node board (M1/D12 criterion):
-# scripted pan + zoom phases, fails if >2% frames drop
+# Frame pacing on a synthetic 2,000-node + 4,000-edge board: scripted pan +
+# zoom phases; fails if >2% frames drop below 60 Hz. Also reports raw draw
+# cost against the 120 Hz budget. Needs the display awake.
 build/Designer.app/Contents/MacOS/Designer --perf-test
 ```
 
@@ -63,15 +84,9 @@ build/Designer.app/Contents/MacOS/Designer --perf-test
 
 ## Status
 
-Milestone M6 (export + LLM interchange + polish) — MVP feature-complete.
-Done: document model, versioned persistence, operation layer with undo/redo,
-canvas with pan/zoom/select/drag/resize/create/label-edit, and semantic
-connectors (border-drag to connect, auto-anchoring that survives move/resize/
-undo storms, straight + orthogonal routing, label/protocol/data/condition
-badges, popover editor, cascade delete) — fluid at 2k nodes + 4k edges.
-Freehand ink (mouse/trackpad + tablet pressure), geometric stroke recognition (rectangle/ellipse/diamond/line), live sketch-to-structure conversion, ⌘R structurize.
-Layers: floating panel (⌘L), multi-membership, active layer, show/hide/lock/tint/duplicate/reorder, focus mode dimming.
-Library (⌘Y): save selections/boards as tagged, searchable, thumbnailed patterns in a folder; insert with fresh IDs centered on the view.
-Alignment snapping, ⌘K palette, example board. Studio Graphite visual language (light+dark). Catalog start screen (F1): New Canvas + previous boards by last-modified with thumbnails.
-
-All MVP milestones (M0–M6) complete: see docs/PRODUCT_BRIEF.md §3 for the feature list and docs/BACKLOG.md for post-MVP work.
+**v0.1.0** — first testable release. The full feature set (canvas, sketch
+recognition, semantic connectors, layers, flows with recorded playback,
+traffic simulation, version history, MCP agent access + in-app Claude
+assistant, library, exports, hand-drawn style) is listed in
+[CHANGELOG.md](CHANGELOG.md); product definition and design decisions in
+[docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md).

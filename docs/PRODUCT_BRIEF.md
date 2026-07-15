@@ -1,7 +1,8 @@
 # Designer — Product Brief & MVP Definition
 
-*Working title: **Designer** (naming is an open question). Status: awaiting approval — no production code yet.*
-*Last updated: 2026-07-11*
+*Working title: **Designer**. This is the founding brief the app was built
+against; current feature state lives in CHANGELOG.md.*
+*Brief written 2026-07-11; header updated 2026-07-15.*
 
 ---
 
