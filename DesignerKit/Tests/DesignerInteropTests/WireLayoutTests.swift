@@ -18,6 +18,26 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertLessThan(frame(b, "b").x, frame(b, "c").x)
     }
 
+    func testDeepChainWrapsIntoBands() {
+        // A 24-hop pipeline must not become an 8,000-point-wide board that
+        // only fits at ~13% zoom: columns wrap after 8 depths.
+        var nodes: [String] = []
+        var edges: [String] = []
+        for index in 0..<24 {
+            nodes.append("{\"id\": \"n\(index)\", \"name\": \"n\(index)\"}")
+            if index > 0 { edges.append("{\"from\": \"n\(index - 1)\", \"to\": \"n\(index)\"}") }
+        }
+        let b = board("{\"nodes\": [\(nodes.joined(separator: ","))], \"edges\": [\(edges.joined(separator: ","))]}")
+        let frames = b.elements.values.compactMap(\.node?.frame)
+        XCTAssertLessThanOrEqual(frames.map(\.maxX).max() ?? 0, 80 + 8 * 260 + 160,
+                                 "wraps after 8 columns")
+        XCTAssertGreaterThan(frames.map(\.maxY).max() ?? 0, 400,
+                             "later depths land in lower bands")
+        XCTAssertEqual(frame(b, "n8").x, frame(b, "n0").x, accuracy: 0.5,
+                       "a new band restarts at column 0")
+        XCTAssertGreaterThan(frame(b, "n8").y, frame(b, "n0").y)
+    }
+
     func testFanOutSharesColumn() {
         let b = board(#"{"nodes":[{"id":"gw","name":"gw"},{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[{"from":"gw","to":"a"},{"from":"gw","to":"b"}]}"#)
         XCTAssertLessThan(frame(b, "gw").x, frame(b, "a").x)

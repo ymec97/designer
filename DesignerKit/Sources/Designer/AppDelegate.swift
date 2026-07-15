@@ -425,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let url = BoardCatalog.newBoardURL()
         document.board.title = url.deletingPathExtension().lastPathComponent
+        document.isAutoNamedDraft = true
         controller.addDocument(document)
         document.save(to: url, ofType: typeName, for: .saveOperation) { _ in
             document.makeWindowControllers()

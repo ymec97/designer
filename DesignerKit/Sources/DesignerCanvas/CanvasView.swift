@@ -269,7 +269,12 @@ public final class CanvasView: NSView {
         case draw(points: [StrokePoint], startedAt: TimeInterval)
         /// Dragging an already-selected connector bends it (P5).
         case bendEdge(id: ElementID, start: CGPoint)
+        /// Space-bar held: drag anywhere to pan (mouse-friendly navigation).
+        case spacePan(last: CGPoint)
     }
+
+    /// True while the space bar is held — the next drag pans the canvas.
+    private var isSpacePanHeld = false
 
     /// Live bend during a `.bendEdge` drag; committed as one operation on up.
     private var transientBend: (id: ElementID, point: Point)?
@@ -327,11 +332,15 @@ public final class CanvasView: NSView {
         if board.elements.isEmpty {
             // Still show the hint, but keep drawing so the very first stroke
             // on a blank canvas is visible while it's being drawn (it isn't
-            // committed to the board until mouseUp).
-            if case .draw = gesture {} else {
+            // committed to the board until mouseUp). An agent proposal must
+            // ALSO render here — a proposal onto a fresh untitled canvas was
+            // invisible until the user drew something.
+            if case .draw = gesture {} else if proposalGhost == nil {
                 renderer.drawEmptyHint(in: context, bounds: bounds)
             }
+            drawProposalGhostOverlay(in: context)
             drawInFlightGesture(in: context)
+            drawTransientHint(in: context)
             return
         }
 
@@ -1131,6 +1140,11 @@ public final class CanvasView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         Self.debugTrace?("mouseDown clicks=\(event.clickCount) window=\(event.locationInWindow)")
+        if isSpacePanHeld {
+            gesture = .spacePan(last: convert(event.locationInWindow, from: nil))
+            NSCursor.closedHand.set()
+            return
+        }
         // Simulation is a read-only mode; ignore edit gestures (pan/zoom still
         // work via scroll/pinch). The transport controls it.
         if isSimulating { return }
@@ -1213,6 +1227,10 @@ public final class CanvasView: NSView {
         let point = convert(event.locationInWindow, from: nil)
 
         switch gesture {
+        case .spacePan(let last):
+            viewport.pan(viewDeltaX: point.x - last.x, viewDeltaY: point.y - last.y)
+            gesture = .spacePan(last: point)
+
         case .bendEdge(let id, let start):
             let distance = hypot(point.x - start.x, point.y - start.y)
             guard distance > 3 || transientBend != nil else { return }
@@ -1394,6 +1412,9 @@ public final class CanvasView: NSView {
                     actionName: edge.waypoints.isEmpty ? "Straighten Connector" : "Bend Connector")
             }
 
+        case .spacePan:
+            (isSpacePanHeld ? NSCursor.openHand : NSCursor.arrow).set()
+
         case .mouseDown, .idle:
             break
         }
@@ -1447,6 +1468,16 @@ public final class CanvasView: NSView {
     // MARK: Keyboard
 
     public override func keyDown(with event: NSEvent) {
+        // Space: hold to pan with any pointing device (⎵ + drag), like every
+        // canvas app — essential for mouse-only setups without trackpad
+        // scrolling.
+        if event.keyCode == 49, editingElementID == nil {
+            if !event.isARepeat, !isSpacePanHeld {
+                isSpacePanHeld = true
+                NSCursor.openHand.set()
+            }
+            return
+        }
         // Single-key tool switching (Excalidraw-style), no modifiers.
         if event.modifierFlags.intersection([.command, .option, .control]).isEmpty {
             switch event.charactersIgnoringModifiers?.lowercased() {
@@ -1496,6 +1527,15 @@ public final class CanvasView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    public override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 {
+            isSpacePanHeld = false
+            if case .spacePan = gesture {} else { NSCursor.arrow.set() }
+            return
+        }
+        super.keyUp(with: event)
     }
 
     public override func selectAll(_ sender: Any?) {

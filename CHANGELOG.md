@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.0 — 2026-07-15
+
+Feedback round from the first work-machine deployment, plus interchange.
+
+- FIX: an agent proposal onto a fresh empty canvas rendered nothing — the
+  empty-board draw path skipped the ghost overlay. Ghosts (and hints) now
+  render on empty boards, and accepting a proposal frames the new content.
+- FIX: agent auto-layout marched deep chains far right (an onboarding map
+  landed at x≈8,300, fitting at 13% zoom). Layouts now wrap after 8 columns
+  into bands, staying ~2,000pt wide.
+- Space-bar panning: hold ⎵ and drag to pan with any pointing device — no
+  trackpad needed.
+- ⌘S on a new untitled board now prompts for a name and location instead of
+  silently keeping "Untitled" (the draft file is cleaned up; autosave
+  unchanged).
+- Everything since v0.1.0 shipped: agent layers + flows, clearer proposal
+  ghosts, stacked side panels, draw.io + Excalidraw interchange, toolbar
+  assistant/palette buttons, parallel-by-default connections.
+
 Versioning: [SemVer](https://semver.org). `VERSION` at the repo root is the
 source of truth; builds stamp it into the bundle together with the commit
 count (build number) and date+sha (`DesignerBuildInfo`). Release artifacts

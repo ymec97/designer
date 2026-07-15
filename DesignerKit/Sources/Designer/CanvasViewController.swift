@@ -881,6 +881,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     @objc func acceptAgentProposal(_ sender: Any?) {
         guard let proposed = pendingProposal else { return }
+        let ghostBounds = canvasView.proposalGhostBounds()
         // F3: the pre-proposal board becomes an automatic version, so agent
         // edits stay recoverable long after the undo stack is gone.
         document.saveVersion(named: "Before assistant proposal", kind: .auto)
@@ -889,6 +890,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         document.perform(operation, actionName: "Accept Claude’s Proposal")
         canvasView.select([])
         clearAgentProposal()
+        // The accepted content must be ON SCREEN - reveal frames it if the
+        // camera drifted (or never moved, on a fresh untitled canvas).
+        if let ghostBounds {
+            canvasView.reveal(worldRect: ghostBounds)
+        }
     }
 
     @objc func rejectAgentProposal(_ sender: Any?) {

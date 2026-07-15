@@ -1,5 +1,6 @@
 import AppKit
 import DesignerCanvas
+import UniformTypeIdentifiers
 import DesignerModel
 import DesignerPersistence
 
@@ -10,6 +11,41 @@ final class BoardDocument: NSDocument, ObservableObject {
     @Published var versions = VersionArchive()
 
     override class var autosavesInPlace: Bool { true }
+
+    /// True while the document lives under its auto-generated "Untitled N"
+    /// name in the managed Boards folder and the user never chose a name.
+    /// The first explicit ⌘S then PROMPTS (name + location) instead of
+    /// silently keeping "Untitled"; autosave is unaffected.
+    var isAutoNamedDraft = false
+
+    override func save(_ sender: Any?) {
+        guard isAutoNamedDraft, let window = windowForSheet else {
+            super.save(sender)
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = displayName ?? "Board"
+        panel.directoryURL = BoardCatalog.boardsFolder()
+        if let type = UTType(filenameExtension: BoardPackage.fileExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        panel.message = "Name this board"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            guard response == .OK, let url = panel.url else { return } // cancel keeps the draft
+            let previousURL = self.fileURL
+            self.isAutoNamedDraft = false
+            self.perform(.setTitle(url.deletingPathExtension().lastPathComponent), actionName: "Rename Board")
+            self.save(to: url, ofType: self.fileType ?? "", for: .saveAsOperation) { _ in
+                // The draft file in the managed folder is superseded; drop it
+                // so the catalog doesn't show a stale "Untitled" twin.
+                if let previousURL, previousURL != url {
+                    try? FileManager.default.trashItem(at: previousURL, resultingItemURL: nil)
+                }
+                CatalogWindowController.shared.refresh()
+            }
+        }
+    }
 
     override func makeWindowControllers() {
         let window = NSWindow(contentViewController: CanvasViewController(document: self))
