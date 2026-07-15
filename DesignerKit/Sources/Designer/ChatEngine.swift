@@ -81,6 +81,7 @@ final class ChatEngine {
         "mcp__designer__get_board",
         "mcp__designer__search_board",
         "mcp__designer__propose_board",
+        "mcp__designer__set_layer_visibility",
     ]
 
     static let steeringPrompt = """

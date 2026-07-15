@@ -63,6 +63,15 @@ final class AgentController: NSObject, AgentBoardBridge {
         DispatchQueue.main.sync { Self.frontmostController()?.hasPendingProposal ?? false }
     }
 
+    func setLayerVisibility(layerName: String, visible: Bool) -> String? {
+        DispatchQueue.main.sync {
+            guard let controller = Self.frontmostController() else {
+                return "No board is open in Designer right now."
+            }
+            return controller.agentSetLayerVisibility(layerName: layerName, visible: visible)
+        }
+    }
+
     /// The controller for the frontmost board window (key window first, then
     /// any board window in z-order).
     static func frontmostController() -> CanvasViewController? {

@@ -14,6 +14,8 @@ final class FlowsPanelModel: ObservableObject {
     @Published var flows: [FlowRowInfo] = []
     @Published var focusedFlowID: FlowID?
     @Published var playingFlowID: FlowID?
+    /// Per-flow playback speed multiplier (1 = default pace).
+    @Published var speeds: [FlowID: Double] = [:]
     @Published var visible = false
     /// Live recording state, mirrored into the panel so the in-progress flow
     /// is visible where flows live (not only in the bottom bar).
@@ -27,6 +29,7 @@ struct FlowsPanelActions {
     var toggleFocus: (FlowID) -> Void
     var delete: (FlowID) -> Void
     var rename: (FlowID, String) -> Void
+    var cycleSpeed: (FlowID) -> Void
 }
 
 /// The Flows panel (F5): recorded traffic journeys — play one, isolate one
@@ -86,6 +89,7 @@ struct FlowsPanel: View {
                             flow: flow,
                             isFocused: model.focusedFlowID == flow.id,
                             isPlaying: model.playingFlowID == flow.id,
+                            speed: model.speeds[flow.id] ?? 1,
                             actions: actions
                         )
                         .padding(.horizontal, 8)
@@ -95,7 +99,7 @@ struct FlowsPanel: View {
                 .padding(.vertical, 6)
             }
         }
-        .frame(width: 252)
+        .frame(width: 318)
         .floatingPanel(radius: 12)
         .graphiteAccent()
     }
@@ -105,6 +109,7 @@ private struct FlowRow: View {
     let flow: FlowRowInfo
     let isFocused: Bool
     let isPlaying: Bool
+    let speed: Double
     let actions: FlowsPanelActions
     @State private var editedName = ""
     @FocusState private var editing: Bool
@@ -116,8 +121,9 @@ private struct FlowRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 8, height: 8)
-            TextField("Flow name", text: $editedName)
+            TextField("Flow name", text: $editedName, axis: .vertical)
                 .textFieldStyle(.plain)
+                .lineLimit(1...3)
                 .font(.system(size: 12))
                 .foregroundStyle(GraphiteStyle.ink)
                 .focused($editing)
@@ -135,6 +141,15 @@ private struct FlowRow: View {
                 .font(.system(size: 10))
                 .foregroundStyle(GraphiteStyle.inkFaint)
                 .help("\(flow.hops) connector\(flow.hops == 1 ? "" : "s")")
+            Button { actions.cycleSpeed(flow.id) } label: {
+                Text(speed == 1.5 ? "1.5x" : speed == 0.5 ? "½x" : "\(Int(speed))x")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .frame(width: 26, height: 18)
+                    .background(GraphiteStyle.accentSoft.opacity(speed == 1 ? 0.35 : 0.9), in: Capsule())
+                    .foregroundStyle(speed == 1 ? GraphiteStyle.inkDim : GraphiteStyle.accent)
+            }
+            .buttonStyle(.plain)
+            .help("Playback speed — click to cycle 1x → 1.5x → 2x → ½x")
             rowButton(isFocused ? "eye.fill" : "eye",
                       help: "Isolate this flow (dim everything else)",
                       active: isFocused) { actions.toggleFocus(flow.id) }

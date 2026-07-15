@@ -5,7 +5,14 @@ struct PaletteCommand: Identifiable {
     let title: String
     let shortcut: String?
     let systemImage: String
+    /// Synonyms the fuzzy search also matches ("show", "chat", "ai"…) — the
+    /// user's words, not just the menu's.
+    var keywords: [String] = []
     let run: () -> Void
+
+    var searchText: String {
+        keywords.isEmpty ? title.lowercased() : (title + " " + keywords.joined(separator: " ")).lowercased()
+    }
 }
 
 final class CommandPaletteModel: ObservableObject {
@@ -28,7 +35,7 @@ struct CommandPalette: View {
         // Score each command; keep matches, best first. Stable ordering for
         // equal scores preserves the natural command order.
         return model.commands
-            .map { (command: $0, score: score(query: q, title: $0.title.lowercased())) }
+            .map { (command: $0, score: score(query: q, title: $0.searchText)) }
             .filter { $0.score > 0 }
             .enumerated()
             .sorted { ($0.element.score, -$0.offset) > ($1.element.score, -$1.offset) }

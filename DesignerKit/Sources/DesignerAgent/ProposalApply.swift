@@ -29,7 +29,12 @@ public enum ProposalApply {
                 // spawning a parallel "default" layer.
                 layerIDForProposed[proposedLayer.id] = current.layers[0].id
             } else {
-                operations.append(.insertLayer(proposedLayer, at: insertionIndex))
+                // Proposed layers land VISIBLE regardless of the wire's
+                // `hidden` flag: the user must SEE what they accepted. The
+                // agent stages reveals afterwards via set_layer_visibility.
+                var newLayer = proposedLayer
+                newLayer.isVisible = true
+                operations.append(.insertLayer(newLayer, at: insertionIndex))
                 insertionIndex += 1
                 layerIDForProposed[proposedLayer.id] = proposedLayer.id
             }
