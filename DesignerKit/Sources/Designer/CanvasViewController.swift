@@ -136,6 +136,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     @objc func toggleChatPanel(_ sender: Any?) {
         chatModel.visible.toggle()
         chatPanelHost?.isHidden = !chatModel.visible
+        toolbarState.chatVisible = chatModel.visible
         if chatModel.visible {
             refreshChatSetupState()
             // Warm up the local MCP server so the first message is fast.
@@ -1208,6 +1209,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                     self.recordFlow(nil)
                 }
                 self.view.window?.makeFirstResponder(self.canvasView)
+            },
+            onAssistant: { [weak self] in
+                self?.toggleChatPanel(nil)
+            },
+            onCommandPalette: { [weak self] in
+                self?.toggleCommandPalette(nil)
             },
             onAddTypedBlock: { [weak self] entry in
                 // No focus hand-back: addBlock opens the label editor.

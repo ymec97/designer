@@ -34,6 +34,7 @@ final class ToolbarState: ObservableObject {
     @Published var libraryPanelVisible = false
     @Published var simulating = false
     @Published var recordingFlow = false
+    @Published var chatVisible = false
 }
 
 struct CanvasToolbar: View {
@@ -46,6 +47,8 @@ struct CanvasToolbar: View {
     let onLibrary: () -> Void
     let onSimulate: () -> Void
     let onRecordFlow: () -> Void
+    let onAssistant: () -> Void
+    let onCommandPalette: () -> Void
     let onAddTypedBlock: (BlockPaletteEntry) -> Void
 
     var body: some View {
@@ -84,7 +87,7 @@ struct CanvasToolbar: View {
             .help("Add Block (⌘B) — click for a plain block, or open the menu for a typed one")
             toolButton(
                 icon: "wand.and.stars", hint: "⌘R", label: "Structurize",
-                help: "Structurize (⌘R) — turn selected freehand sketches into clean blocks & connectors",
+                help: "Structurize (⌘R) — convert sketches live recognition left as ink (scribbles, unfinished shapes); with live conversion off, converts everything",
                 isActive: false, action: onStructurize
             )
             toolButton(
@@ -111,6 +114,17 @@ struct CanvasToolbar: View {
                 icon: "books.vertical", hint: "⌘Y", label: "Library",
                 help: "Library (⌘Y) — save & reuse patterns; ⌥⌘S saves the selection",
                 isActive: state.libraryPanelVisible, action: onLibrary
+            )
+            Divider().frame(height: 22).padding(.horizontal, 3)
+            toolButton(
+                icon: "sparkles", hint: "⇧⌘A", label: "Assistant",
+                help: "Assistant (⇧⌘A) — chat with an AI that reads the board and proposes edits you review",
+                isActive: state.chatVisible, action: onAssistant
+            )
+            toolButton(
+                icon: "command", hint: "⌘K", label: "Commands",
+                help: "Command Palette (⌘K) — fuzzy-search every command",
+                isActive: false, action: onCommandPalette
             )
         }
         .padding(.horizontal, 7)

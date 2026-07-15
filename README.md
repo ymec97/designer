@@ -110,7 +110,7 @@ one undo step, with an automatic version snapshot first.
 | `V` / `D` | Select / Draw tool |
 | double-click | Create a block (⌘B at viewport center) |
 | drag from a block's border | Connect to another block |
-| `⌘R` | Structurize selected sketches |
+| `⌘R` | Convert remaining sketches (live conversion handles most as you draw) |
 | `⌘↩` / `⇧⌘↩` | Simulate traffic / Record a flow |
 | `⌘J` `⌘L` `⌘Y` `⌥⌘I` | Flows / Layers / Library / Inspector |
 | `⌃⌘S` / `⇧⌘H` | Save version / Version history |
