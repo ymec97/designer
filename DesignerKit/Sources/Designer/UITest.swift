@@ -1,5 +1,6 @@
 import AppKit
 import DesignerCanvas
+import DesignerInterop
 import DesignerModel
 
 /// In-process UI test: synthesizes mouse/keyboard events and dispatches them
@@ -34,6 +35,8 @@ final class UITestDriver {
         print("DIAG isKeyWindow:", window.isKeyWindow, "appActive:", NSApp.isActive)
 
         step0Diagnostics()
+        step0aGhostRendersOnEmptyBoard()
+        step0bSpacePan()
         step1CreateBlockByDoubleClick()
         step2TypeLabelAndCommit()
         step3DragBlock()
@@ -59,7 +62,7 @@ final class UITestDriver {
         step23RepeatConnectionCreatesParallel()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan verified")
             exit(0)
         } else {
             for failure in failures {
@@ -86,6 +89,64 @@ final class UITestDriver {
         print("DIAG board layers:", canvasView.board.layers.map { "\($0.name) v=\($0.isVisible) l=\($0.isLocked)" })
         print("DIAG doc board layers:", document.board.layers.count, "elements:", document.board.elements.count)
         print("DIAG firstResponder:", String(describing: window.firstResponder))
+    }
+
+    /// A proposal onto a FRESH EMPTY canvas must render its ghost preview
+    /// (the empty-board fast path used to skip the overlay entirely).
+    private func step0aGhostRendersOnEmptyBoard() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no canvas controller for empty-ghost test")
+            return
+        }
+        expect(document.board.elements.isEmpty, "board should start empty")
+        guard let proposed = try? LLMInterchange.parse(
+            #"{"format": "designer-board", "nodes": [{"id": "ghost-node", "name": "ghost-node"}], "edges": []}"#
+        ).board else {
+            expect(false, "couldn't build proposal board")
+            return
+        }
+        controller.presentAgentProposal(proposed, note: nil)
+        pumpRunLoop()
+        expect(canvasView.proposalGhost != nil, "proposal should stage a ghost")
+
+        // The ghost must actually PAINT: pixels inside its bounds differ
+        // from the empty canvas background.
+        if let bounds = canvasView.proposalGhostBounds(),
+           let bitmap = canvasView.bitmapImageRepForCachingDisplay(in: canvasView.bounds) {
+            canvasView.cacheDisplay(in: canvasView.bounds, to: bitmap)
+            let center = canvasView.viewport.toView(Point(x: bounds.midX, y: bounds.midY))
+            let scaleX = CGFloat(bitmap.pixelsWide) / canvasView.bounds.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / canvasView.bounds.height
+            let ghostPixel = bitmap.colorAt(x: Int(center.x * scaleX), y: Int(center.y * scaleY))
+            let backgroundPixel = bitmap.colorAt(x: 5, y: Int(CGFloat(bitmap.pixelsHigh) - 5))
+            expect(ghostPixel != nil && ghostPixel != backgroundPixel,
+                   "ghost must be visible on an empty canvas (ghost=\(String(describing: ghostPixel)) bg=\(String(describing: backgroundPixel)))")
+        } else {
+            expect(false, "no ghost bounds or bitmap")
+        }
+        controller.rejectAgentProposal(nil)
+        pumpRunLoop()
+        expect(canvasView.proposalGhost == nil, "reject should clear the ghost")
+        expect(document.board.elements.isEmpty, "reject must not mutate the board")
+    }
+
+    /// Holding space turns a drag into a pan (mouse-only navigation).
+    private func step0bSpacePan() {
+        let before = canvasView.viewport.origin
+        let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        keyEvent(.keyDown, keyCode: 49, characters: " ")
+        send(.leftMouseDown, at: center, clickCount: 1)
+        for step in 1...5 {
+            send(.leftMouseDragged, at: CGPoint(x: center.x + CGFloat(step) * 20, y: center.y), clickCount: 1)
+        }
+        send(.leftMouseUp, at: CGPoint(x: center.x + 100, y: center.y), clickCount: 1)
+        keyEvent(.keyUp, keyCode: 49, characters: " ")
+        pumpRunLoop()
+        let moved = canvasView.viewport.origin
+        expect(abs(moved.x - before.x) > 50, "space-drag should pan the canvas (dx=\(moved.x - before.x))")
+        expect(document.board.elements.isEmpty, "space-pan must not create anything")
+        // Restore the viewport for the steps that follow.
+        canvasView.viewport = CanvasViewport(origin: before, scale: canvasView.viewport.scale)
     }
 
     private func step1CreateBlockByDoubleClick() {
@@ -748,6 +809,17 @@ final class UITestDriver {
             eventNumber: 0,
             clickCount: clickCount,
             pressure: 1
+        ) else { return }
+        window.sendEvent(event)
+    }
+
+    private func keyEvent(_ type: NSEvent.EventType, keyCode: UInt16, characters: String) {
+        guard let event = NSEvent.keyEvent(
+            with: type, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: keyCode
         ) else { return }
         window.sendEvent(event)
     }

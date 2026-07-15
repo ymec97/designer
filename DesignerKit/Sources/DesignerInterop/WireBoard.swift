@@ -400,14 +400,27 @@ extension WireBoard {
             }
         }
 
+        // Deep chains wrap into bands after 8 columns — a 30-hop pipeline
+        // must not become an 8,000-point-wide board that fits at 13% zoom.
+        let maxColumns = 8
+        var rowsPerBand: [Int: Int] = [:]
+        for node in needing {
+            let column = (depth[node.id] ?? 0) % maxColumns
+            let band = (depth[node.id] ?? 0) / maxColumns
+            rowsPerBand[band * 1000 + column, default: 0] += 1
+        }
+        let bandHeight = Double((rowsPerBand.values.max() ?? 1)) * 140 + 120
         var rowInColumn: [Int: Int] = [:]
         for node in needing {
-            let column = depth[node.id] ?? 0
-            let row = rowInColumn[column, default: 0]
-            rowInColumn[column] = row + 1
+            let fullDepth = depth[node.id] ?? 0
+            let column = fullDepth % maxColumns
+            let band = fullDepth / maxColumns
+            let key = band * 1000 + column
+            let row = rowInColumn[key, default: 0]
+            rowInColumn[key] = row + 1
             frames[node.id] = Rect(
                 x: 80 + Double(column) * 260,
-                y: 80 + Double(row) * 140,
+                y: 80 + Double(band) * bandHeight + Double(row) * 140,
                 width: 160, height: 80
             )
         }
