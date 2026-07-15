@@ -270,29 +270,61 @@ public enum EdgeGeometry {
         return waypoints
     }
 
-    /// The fraction along `route` where a caption pill of `pillSize` (world
-    /// units) does NOT sit on a node: scans outward from `preferred` and
-    /// returns the first clear spot (or `preferred` when everything is
-    /// blocked — an overlapping label beats a missing one).
-    public static func captionFraction(
-        preferred: Double,
-        route: Route,
-        pillSize: Size,
-        obstacles: (Rect) -> [Rect]
-    ) -> Double {
-        let offsets: [Double] = [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.32, -0.32, 0.4, -0.4]
-        for offset in offsets {
-            let t = min(0.92, max(0.08, preferred + offset))
-            let center = route.point(atFraction: t)
-            let pill = Rect(
-                x: center.x - pillSize.width / 2, y: center.y - pillSize.height / 2,
-                width: pillSize.width, height: pillSize.height
-            )
-            if !obstacles(pill).contains(where: { $0.intersects(pill) }) {
-                return t
+    /// Collision-aware caption placement for one render pass. Each placed
+    /// pill registers as an obstacle for the pills after it, so labels never
+    /// stack on labels; candidates scan along the route AND perpendicular to
+    /// it (dense boards with short connectors have no clear on-route spot).
+    /// Falls back to the preferred midpoint when everything is blocked — an
+    /// overlapping label beats a missing one.
+    public struct CaptionPlacer {
+        private var placedPills: [Rect] = []
+
+        public init() {}
+
+        public mutating func place(
+            preferred: Double,
+            route: Route,
+            pillSize: Size,
+            obstacles: (Rect) -> [Rect]
+        ) -> Point {
+            let alongOffsets: [Double] = [0, 0.08, -0.08, 0.16, -0.16, 0.24, -0.24, 0.32, -0.32, 0.4, -0.4]
+            let perpendicularSteps: [Double] = [0, 1, -1, 2, -2]
+            var fallback: Point?
+            for along in alongOffsets {
+                let t = min(0.92, max(0.08, preferred + along))
+                let base = route.point(atFraction: t)
+                let normal = normalAt(route: route, fraction: t)
+                for step in perpendicularSteps {
+                    let push = step * (pillSize.height / 2 + 12)
+                    let center = Point(x: base.x + normal.x * push, y: base.y + normal.y * push)
+                    if fallback == nil { fallback = center }
+                    let pill = Rect(
+                        x: center.x - pillSize.width / 2, y: center.y - pillSize.height / 2,
+                        width: pillSize.width, height: pillSize.height
+                    )
+                    let blocked = placedPills.contains { $0.intersects(pill) }
+                        || obstacles(pill).contains { $0.intersects(pill) }
+                    if !blocked {
+                        placedPills.append(pill)
+                        return center
+                    }
+                }
             }
+            let center = fallback ?? route.midpoint
+            placedPills.append(Rect(
+                x: center.x - pillSize.width / 2, y: center.y - pillSize.height / 2,
+                width: pillSize.width, height: pillSize.height))
+            return center
         }
-        return preferred
+
+        private func normalAt(route: Route, fraction: Double) -> Point {
+            let ahead = route.point(atFraction: min(1, fraction + 0.05))
+            let behind = route.point(atFraction: max(0, fraction - 0.05))
+            let dx = ahead.x - behind.x, dy = ahead.y - behind.y
+            let length = (dx * dx + dy * dy).squareRoot()
+            guard length > 0.001 else { return Point(x: 0, y: -1) }
+            return Point(x: -dy / length, y: dx / length)
+        }
     }
 
     private static func segmentIntersects(_ rect: Rect, _ a: Point, _ b: Point) -> Bool {

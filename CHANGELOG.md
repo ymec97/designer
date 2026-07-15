@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.0 — 2026-07-15
+
+Agent boards now read like a human drew them (analysis of two real bad
+outputs drove this release).
+
+- Narrative auto-layout replaces the depth grid: cycle-safe columns (cycles
+  in real systems made the old longest-path depths explode into 27,000pt
+  towers), entry points on the left, deep pipelines compressed monotonically
+  into ≤8 columns, blocks sharing a specialty layer laid out adjacent,
+  `kind: external` blocks in a bottom row, blocks sized to their names, and
+  tall columns spilling sideways. Direction is selectable via the new
+  top-level `layout` wire field: left-right (default) | right-left |
+  top-down (persisted on the board).
+- Connector captions are now collision-managed as a set: each placed pill
+  repels the next, candidates slide along the route AND nudge perpendicular
+  (dense boards), runaway label/condition text truncates. Canvas, PNG, SVG.
+- propose_board reports layout metrics to the agent — extent, average
+  connector length, tightest block gap — with actionable warnings, so
+  external agents self-correct instead of shipping sprawl.
+- The agent guide now teaches composition: entry points left, related
+  blocks together, externals at the edge, short names, ~3–4 screens max.
+
 ## v0.2.0 — 2026-07-15
 
 Feedback round from the first work-machine deployment, plus interchange.

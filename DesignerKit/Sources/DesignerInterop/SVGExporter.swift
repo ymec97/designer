@@ -48,12 +48,13 @@ public enum SVGExporter {
         let offsets = EdgeGeometry.parallelOffsets(in: source)
         let spread = EdgeGeometry.anchorSpread(in: source)
         let obstacles = SpatialIndex.nodeObstacleQuery(for: source)
+        var captionPlacer = EdgeGeometry.CaptionPlacer()
         for element in source.elementsInZOrder {
             guard let edge = element.edge,
                   let route = EdgeGeometry.route(for: edge, frames: frames, parallelOffset: offsets[element.id] ?? 0, anchorOffsets: spread[element.id], obstacles: obstacles) else { continue }
             body += svgEdge(edge, route: route, palette: palette,
                             captionFraction: spread[element.id]?.captionT ?? 0.5,
-                            captionObstacles: obstacles)
+                            captionObstacles: obstacles, captionPlacer: &captionPlacer)
         }
         for element in source.elementsInZOrder {
             switch element.content {
@@ -105,7 +106,7 @@ public enum SVGExporter {
         """
     }
 
-    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette, captionFraction: Double = 0.5, captionObstacles: ((Rect) -> [Rect])? = nil) -> String {
+    private static func svgEdge(_ edge: Edge, route: EdgeGeometry.Route, palette: Palette, captionFraction: Double = 0.5, captionObstacles: ((Rect) -> [Rect])? = nil, captionPlacer: inout EdgeGeometry.CaptionPlacer) -> String {
         let points = route.points.map { "\(fmt($0.x)),\(fmt($0.y))" }.joined(separator: " ")
         let markerStart = (edge.semantic.direction == .backward || edge.semantic.direction == .both)
             ? " marker-start=\"url(#arrow)\"" : ""
@@ -128,16 +129,15 @@ public enum SVGExporter {
             edge.semantic.properties[WellKnownEdgeProperty.protocolKey].map { "protocol: \($0)" },
         ].compactMap { $0 }.filter { !$0.isEmpty }
         if !caption.isEmpty {
-            var fraction = captionFraction
+            var mid = route.point(atFraction: captionFraction)
             if let captionObstacles {
                 let longest = caption.map(\.count).max() ?? 0
-                fraction = EdgeGeometry.captionFraction(
+                mid = captionPlacer.place(
                     preferred: captionFraction, route: route,
                     pillSize: Size(width: Double(longest) * 7.2, height: Double(caption.count) * 14 + 6),
                     obstacles: captionObstacles
                 )
             }
-            let mid = route.point(atFraction: fraction)
             for (index, line) in caption.enumerated() {
                 svg += centeredText(
                     line, x: mid.x, y: mid.y + Double(index) * 14 - Double(caption.count - 1) * 7,

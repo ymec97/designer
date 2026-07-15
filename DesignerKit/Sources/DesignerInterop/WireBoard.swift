@@ -8,6 +8,8 @@ struct WireBoard: Codable {
     var format: String?
     var version: Int?
     var title: String?
+    /// Auto-layout direction: "left-right" (default) | "right-left" | "top-down".
+    var layout: String?
     var layers: [WireLayer]?
     var nodes: [WireNode]
     var edges: [WireEdge]
@@ -20,7 +22,7 @@ struct WireBoard: Codable {
     var edgeSourceIDs: [ElementID] = []
 
     enum CodingKeys: String, CodingKey {
-        case format, version, title, layers, nodes, edges, notes, flows
+        case format, version, title, layout, layers, nodes, edges, notes, flows
     }
 
     /// Layers are addressed by NAME in the wire format. The first layer is
@@ -86,6 +88,9 @@ extension WireBoard {
         format = LLMInterchange.formatName
         version = LLMInterchange.formatVersion
         title = board.title
+        if case .string(let storedDirection)? = board.extra["layoutDirection"] {
+            layout = storedDirection
+        }
 
         // Layers by name (only when the board actually uses them).
         let baseLayerID = board.layers.first?.id
@@ -229,11 +234,14 @@ extension WireBoard {
             return ids.isEmpty ? [layer] : ids
         }
 
-        // Nodes that omit positions get auto-laid-out left→right by data-flow
-        // depth (so an agent-built system reads like an architecture diagram,
-        // not a grid). Falls back to a grid when there are no edges to infer
-        // flow from.
-        let autoFrames = Self.autoLayoutFrames(nodes: nodes, edges: edges)
+        // Nodes that omit positions get the narrative auto-layout: cycle-safe
+        // left→right flow, semantic clusters adjacent, externals at the edge,
+        // direction-aware (see NarrativeLayout).
+        let autoFrames = NarrativeLayout.frames(
+            nodes: nodes, edges: edges, flows: flows, direction: layout)
+        if let layout {
+            board.extra["layoutDirection"] = .string(NarrativeLayout.normalizedDirection(layout))
+        }
 
         var elementForSlug: [String: ElementID] = [:]
         for wireNode in nodes {
@@ -364,68 +372,6 @@ extension WireBoard {
         return LLMInterchange.ParseResult(board: board, warnings: warnings, providedTitle: title)
     }
 
-    /// Frames for nodes that omit `at`/`size`. With edges present: longest-path
-    /// layering (left→right columns by flow depth, cycle-bounded), stacking
-    /// rows within a column. Without edges: a simple grid.
-    static func autoLayoutFrames(nodes: [WireNode], edges: [WireEdge]) -> [String: Rect] {
-        let needing = nodes.filter { !($0.at?.count == 2 && $0.size?.count == 2) }
-        guard !needing.isEmpty else { return [:] }
-        var frames: [String: Rect] = [:]
-
-        guard !edges.isEmpty else {
-            for (index, node) in needing.enumerated() {
-                frames[node.id] = Rect(
-                    x: 80 + Double(index % 6) * 200,
-                    y: 80 + Double(index / 6) * 140,
-                    width: 160, height: 80
-                )
-            }
-            return frames
-        }
-
-        // Longest-path depth from sources; the pass/increment bounds make
-        // cycles terminate with sensible depths.
-        var depth = Dictionary(nodes.map { ($0.id, 0) }, uniquingKeysWith: { first, _ in first })
-        let bound = nodes.count
-        var changed = true
-        var passes = 0
-        while changed, passes < bound {
-            changed = false
-            passes += 1
-            for edge in edges {
-                guard let from = depth[edge.from], let to = depth[edge.to],
-                      from + 1 > to, from + 1 < bound else { continue }
-                depth[edge.to] = from + 1
-                changed = true
-            }
-        }
-
-        // Deep chains wrap into bands after 8 columns — a 30-hop pipeline
-        // must not become an 8,000-point-wide board that fits at 13% zoom.
-        let maxColumns = 8
-        var rowsPerBand: [Int: Int] = [:]
-        for node in needing {
-            let column = (depth[node.id] ?? 0) % maxColumns
-            let band = (depth[node.id] ?? 0) / maxColumns
-            rowsPerBand[band * 1000 + column, default: 0] += 1
-        }
-        let bandHeight = Double((rowsPerBand.values.max() ?? 1)) * 140 + 120
-        var rowInColumn: [Int: Int] = [:]
-        for node in needing {
-            let fullDepth = depth[node.id] ?? 0
-            let column = fullDepth % maxColumns
-            let band = fullDepth / maxColumns
-            let key = band * 1000 + column
-            let row = rowInColumn[key, default: 0]
-            rowInColumn[key] = row + 1
-            frames[node.id] = Rect(
-                x: 80 + Double(column) * 260,
-                y: 80 + Double(band) * bandHeight + Double(row) * 140,
-                width: 160, height: 80
-            )
-        }
-        return frames
-    }
 }
 
 // MARK: - Slug helpers

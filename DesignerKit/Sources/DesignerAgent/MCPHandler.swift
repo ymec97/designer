@@ -155,6 +155,10 @@ public final class MCPHandler {
         }
         lines.append("")
         lines.append(diff.detail)
+        // Spatial feedback: agents can't see the canvas, so the tool result
+        // reports how the proposal actually LAYS OUT — and what to fix.
+        lines.append("")
+        lines.append(contentsOf: Self.layoutReport(for: proposed))
         if !parsed.warnings.isEmpty {
             lines.append("")
             lines.append("Warnings: " + parsed.warnings.joined(separator: "; "))
@@ -165,6 +169,53 @@ public final class MCPHandler {
     }
 
     private static let noBoardMessage = "No board is open in Designer right now."
+
+    /// Extent, connector stretch, and crowding metrics for a proposed board,
+    /// with actionable warnings — the agent's only view of the geometry.
+    static func layoutReport(for board: Board) -> [String] {
+        let frames = board.elements.values.compactMap(\.node?.frame)
+        guard frames.count >= 2 else { return [] }
+        let minX = frames.map(\.x).min() ?? 0
+        let maxX = frames.map(\.maxX).max() ?? 0
+        let minY = frames.map(\.y).min() ?? 0
+        let maxY = frames.map(\.maxY).max() ?? 0
+        let width = maxX - minX, height = maxY - minY
+
+        var lengths: [Double] = []
+        for element in board.elements.values {
+            guard let edge = element.edge,
+                  let from = edge.from.elementID.flatMap({ board.elements[$0]?.node?.frame }),
+                  let to = edge.to.elementID.flatMap({ board.elements[$0]?.node?.frame }) else { continue }
+            lengths.append(hypot(from.midX - to.midX, from.midY - to.midY))
+        }
+        let averageLength = lengths.isEmpty ? 0 : lengths.reduce(0, +) / Double(lengths.count)
+
+        var minGap = Double.infinity
+        if frames.count <= 150 {
+            for i in 0..<frames.count {
+                for j in (i + 1)..<frames.count {
+                    let a = frames[i], b = frames[j]
+                    let dx = max(max(a.x - b.maxX, b.x - a.maxX), 0)
+                    let dy = max(max(a.y - b.maxY, b.y - a.maxY), 0)
+                    minGap = min(minGap, max(dx, dy))
+                }
+            }
+        }
+
+        var lines = [String(format: "Layout: %d blocks spanning %.0f × %.0f pt; average connector length %.0f pt.",
+                            frames.count, width, height, averageLength)]
+        // ~3–4 screens is the outer comfort zone (screen ≈ 1450×900).
+        if width > 5800 || height > 3600 {
+            lines.append("⚠️ The board is very spread out — a reader would pan for days. Tighten the layout: related blocks adjacent, ~120pt gaps, or omit at/size and let Designer lay it out.")
+        }
+        if minGap.isFinite, minGap < 60 {
+            lines.append(String(format: "⚠️ Some blocks are only %.0f pt apart — connector labels have no room. Leave at least 120 pt between blocks.", minGap))
+        }
+        if averageLength > 900, lengths.count >= 5 {
+            lines.append("⚠️ Connectors are long on average — logically related blocks should sit near each other.")
+        }
+        return lines
+    }
 
     // MARK: Tool result / JSON-RPC envelope helpers
 

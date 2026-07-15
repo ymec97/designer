@@ -122,16 +122,32 @@ final class EdgeGeometryTests: XCTestCase {
         let nodeAtMid = Rect(x: 250, y: -30, width: 100, height: 60)
         let pill = Size(width: 90, height: 30)
 
-        let dodged = EdgeGeometry.captionFraction(
-            preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [nodeAtMid] })
-        let pillCenter = route.point(atFraction: dodged)
-        let pillRect = Rect(x: pillCenter.x - pill.width / 2, y: pillCenter.y - pill.height / 2,
+        var placer = EdgeGeometry.CaptionPlacer()
+        let center = placer.place(preferred: 0.5, route: route, pillSize: pill,
+                                  obstacles: { _ in [nodeAtMid] })
+        let pillRect = Rect(x: center.x - pill.width / 2, y: center.y - pill.height / 2,
                             width: pill.width, height: pill.height)
         XCTAssertFalse(nodeAtMid.intersects(pillRect), "caption slides off the node")
 
-        let clear = EdgeGeometry.captionFraction(
-            preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [] })
-        XCTAssertEqual(clear, 0.5, "unobstructed captions stay at the preferred spot")
+        var clearPlacer = EdgeGeometry.CaptionPlacer()
+        let clear = clearPlacer.place(preferred: 0.5, route: route, pillSize: pill,
+                                      obstacles: { _ in [] })
+        XCTAssertEqual(clear, route.midpoint, "unobstructed captions stay at the preferred spot")
+    }
+
+    func testCaptionsNeverStackOnEachOther() {
+        // Two captions preferring the SAME spot (parallel short edges on a
+        // dense board): the second must land clear of the first.
+        let route = EdgeGeometry.Route(points: [Point(x: 0, y: 0), Point(x: 300, y: 0)])
+        let pill = Size(width: 140, height: 34)
+        var placer = EdgeGeometry.CaptionPlacer()
+        let first = placer.place(preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [] })
+        let second = placer.place(preferred: 0.5, route: route, pillSize: pill, obstacles: { _ in [] })
+        let a = Rect(x: first.x - pill.width / 2, y: first.y - pill.height / 2,
+                     width: pill.width, height: pill.height)
+        let b = Rect(x: second.x - pill.width / 2, y: second.y - pill.height / 2,
+                     width: pill.width, height: pill.height)
+        XCTAssertFalse(a.intersects(b), "second caption dodges the first")
     }
 
     // MARK: Anchor spreading (arrows sharing a node side)

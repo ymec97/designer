@@ -47,6 +47,13 @@ final class BoardRenderer {
         didSet { if sketchy != oldValue { textCache.removeAll() } }
     }
 
+    /// Collision registry for connector captions — call once before each
+    /// full edge pass so labels placed earlier repel the ones after.
+    private var captionPlacer = EdgeGeometry.CaptionPlacer()
+    func beginCaptionPass() {
+        captionPlacer = EdgeGeometry.CaptionPlacer()
+    }
+
     /// Strokes a jittered two-pass version of `viewPoints` (already in view
     /// space; `closed` re-joins the shape). Stroke state must be set by the
     /// caller — this only replaces the geometry.
@@ -427,13 +434,13 @@ final class BoardRenderer {
             )
         }
 
-        // Label pill + well-known-key badges along the route (parallel edges
-        // get staggered fractions so pills don't overlap; the pill also
-        // slides along the route so it never sits ON a block).
+        // Label pill + well-known-key badges along the route. Placement is
+        // collision-aware: pills dodge blocks AND each other, sliding along
+        // the route and nudging perpendicular on dense boards.
         if viewport.scale >= Self.textVisibilityScale {
-            var fraction = captionFraction
+            var center = route.point(atFraction: captionFraction)
             if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
-                fraction = EdgeGeometry.captionFraction(
+                center = captionPlacer.place(
                     preferred: captionFraction,
                     route: route,
                     pillSize: Size(width: Double(pillView.width) / viewport.scale,
@@ -441,7 +448,7 @@ final class BoardRenderer {
                     obstacles: captionObstacles
                 )
             }
-            drawEdgeCaption(edge, at: viewport.toView(route.point(atFraction: fraction)), viewport: viewport, in: context)
+            drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context)
         }
     }
 
@@ -464,14 +471,17 @@ final class BoardRenderer {
             edge.semantic.properties[key].map { "\(key): \($0)" }
         }
         guard !label.isEmpty || !badges.isEmpty else { return nil }
+        func truncated(_ text: String, to limit: Int) -> String {
+            text.count > limit ? String(text.prefix(limit - 1)) + "…" : text
+        }
 
         var lines: [NSAttributedString] = []
         if !label.isEmpty {
-            lines.append(attributedString(label, fontSize: 12 * viewport.scale, color: Palette.nodeText))
+            lines.append(attributedString(truncated(label, to: 42), fontSize: 12 * viewport.scale, color: Palette.nodeText))
         }
         if !badges.isEmpty {
             lines.append(attributedString(
-                badges.joined(separator: "  ·  "),
+                truncated(badges.joined(separator: "  ·  "), to: 56),
                 fontSize: 10 * viewport.scale,
                 color: Palette.noteText
             ))

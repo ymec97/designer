@@ -486,8 +486,10 @@ public final class CanvasView: NSView {
             let visibleNodeCount = drawables.reduce(0) { $0 + ($1.node != nil ? 1 : 0) }
             renderer.elevateNodes = visibleNodeCount <= 70
 
-            // Connector captions dodge blocks (they slid ON TOP of nodes on
-            // dense boards); the spatial index answers the pill-rect probes.
+            // Connector captions dodge blocks AND each other; the spatial
+            // index answers the pill-rect probes, the renderer's caption
+            // pass tracks pill-vs-pill.
+            renderer.beginCaptionPass()
             let captionObstacles: (Rect) -> [Rect] = { [spatialIndex, board] rect in
                 spatialIndex.query(rect).compactMap { board.elements[$0]?.node?.frame }
             }
