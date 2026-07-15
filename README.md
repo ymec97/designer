@@ -48,8 +48,9 @@ and slow (draw.io-style editors). Designer refuses the trade-off:
 - **Hand-drawn style** — a per-board toggle that renders everything like a
   marker sketch (wobbly outlines, handwritten labels) while staying fully
   structured.
-- **Exports** — PNG, SVG (with semantic `data-*` attributes), and a lossless
-  text format designed for pasting into any LLM chat.
+- **Exports & interchange** — PNG, SVG (with semantic `data-*` attributes),
+  a lossless text format for pasting into any LLM chat, and two-way
+  draw.io + Excalidraw interchange (import their files, export to them).
 
 Boards are folder packages (`.designerboard`) with canonical JSON inside —
 diff-able, sync-able, and readable by other tools.

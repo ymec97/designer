@@ -1085,6 +1085,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Toggle Hand-drawn Style", shortcut: nil, systemImage: "scribble.variable") { [weak self] in
                 self?.toggleSketchyStyle(nil)
             },
+            PaletteCommand(title: "Export as draw.io", shortcut: nil, systemImage: "square.and.arrow.up") { [weak self] in
+                self?.exportAsDrawio(nil)
+            },
+            PaletteCommand(title: "Export as Excalidraw", shortcut: nil, systemImage: "square.and.arrow.up") { [weak self] in
+                self?.exportAsExcalidraw(nil)
+            },
             PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3") { [weak self] in
                 self?.toggleInspector(nil)
             },
@@ -1615,6 +1621,22 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private enum ExportError: Error, LocalizedError {
         case renderFailed
         var errorDescription: String? { "Couldn't render the board for export." }
+    }
+
+    @objc func exportAsDrawio(_ sender: Any?) {
+        runExportPanel(defaultName: exportBaseName(), extension: "drawio") { [weak self] url in
+            guard let self else { return }
+            let xml = DrawioFormat.xml(from: self.exportSource())
+            try xml.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    @objc func exportAsExcalidraw(_ sender: Any?) {
+        runExportPanel(defaultName: exportBaseName(), extension: "excalidraw") { [weak self] url in
+            guard let self else { return }
+            let data = try ExcalidrawFormat.data(from: self.exportSource())
+            try data.write(to: url)
+        }
     }
 
     private func exportSource() -> Board {

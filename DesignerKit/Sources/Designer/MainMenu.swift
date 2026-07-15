@@ -191,6 +191,15 @@ enum MainMenu {
         menu.addItem(withTitle: "Export as SVG…",
                      action: Selector(("exportAsSVG:")),
                      keyEquivalent: "")
+        menu.addItem(withTitle: "Export as draw.io…",
+                     action: Selector(("exportAsDrawio:")),
+                     keyEquivalent: "")
+        menu.addItem(withTitle: "Export as Excalidraw…",
+                     action: Selector(("exportAsExcalidraw:")),
+                     keyEquivalent: "")
+        menu.addItem(withTitle: "Import draw.io / Excalidraw…",
+                     action: Selector(("importDiagramFile:")),
+                     keyEquivalent: "")
         menu.addItem(.separator())
         let saveSelection = menu.addItem(withTitle: "Save Selection to Library",
                                          action: Selector(("saveSelectionToLibrary:")),

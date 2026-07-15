@@ -1,7 +1,9 @@
 import AppKit
 import DesignerAgent
+import DesignerInterop
 import DesignerModel
 import DesignerPersistence
+import UniformTypeIdentifiers
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private static let hasLaunchedKey = "HasLaunchedBefore"
@@ -435,6 +437,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in
             CatalogWindowController.shared.window?.close()
         }
+    }
+
+    /// File ▸ Import draw.io / Excalidraw…: picks a file, sniffs the format,
+    /// and opens the imported board as a NEW untitled document (the original
+    /// file is never touched).
+    @objc func importDiagramFile(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ["drawio", "xml", "excalidraw", "json"]
+            .compactMap { UTType(filenameExtension: $0) }
+        panel.allowsMultipleSelection = false
+        panel.message = "Import a draw.io (.drawio/.xml) or Excalidraw (.excalidraw/.json) diagram"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            let title = url.deletingPathExtension().lastPathComponent
+            let (board, warnings) = try Self.importForeignDiagram(data: data, title: title)
+
+            let controller = NSDocumentController.shared
+            guard let typeName = controller.defaultType,
+                  let document = try controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else { return }
+            document.board = board
+            controller.addDocument(document)
+            document.makeWindowControllers()
+            document.showWindows()
+            CatalogWindowController.shared.window?.close()
+
+            if !warnings.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = "Imported with notes"
+                alert.informativeText = warnings.joined(separator: "\n")
+                alert.runModal()
+            }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// Sniffs draw.io vs Excalidraw from the content (extension-agnostic:
+    /// both ecosystems also use .xml/.json).
+    static func importForeignDiagram(data: Data, title: String) throws -> (Board, [String]) {
+        let head = String(data: data.prefix(512), encoding: .utf8) ?? ""
+        if head.contains("<mxfile") || head.contains("<mxGraphModel") || head.hasPrefix("<?xml") {
+            let result = try DrawioFormat.board(from: data, title: title)
+            return (result.board, result.warnings)
+        }
+        let result = try ExcalidrawFormat.board(from: data, title: title)
+        return (result.board, result.warnings)
     }
 
     @objc func openExampleBoard(_ sender: Any?) {

@@ -84,6 +84,11 @@ First testable release: the full MVP plus the post-MVP feature set.
   right-click a board to open, reveal in Finder, or move it to the Trash).
 - Copy for LLM / import back (lossless text round-trip), PNG + SVG export,
   copy/paste/duplicate across windows.
+- draw.io and Excalidraw interchange (File menu): import .drawio/.xml
+  (including draw.io's compressed saves) and .excalidraw/.json into a new
+  board, and export any board (or selection) to either format — shapes,
+  labels, connectors with labels, and notes map across; freehand ink
+  round-trips with Excalidraw.
 
 ### Performance
 - Full-viewport redraw holds 60 fps on 6,000-element boards during
