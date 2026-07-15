@@ -425,6 +425,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let url = BoardCatalog.newBoardURL()
         document.board.title = url.deletingPathExtension().lastPathComponent
+        // Freehand-first: new canvases start in the hand-drawn (Excalidraw-
+        // style) look; Board ▸ Hand-drawn Style flips back to clean.
+        document.board.extra[Board.sketchyExtraKey] = .bool(true)
         document.isAutoNamedDraft = true
         controller.addDocument(document)
         document.save(to: url, ofType: typeName, for: .saveOperation) { _ in

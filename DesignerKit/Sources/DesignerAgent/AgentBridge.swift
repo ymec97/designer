@@ -18,8 +18,15 @@ public protocol AgentBoardBridge: AnyObject {
 
     /// Whether a previously staged proposal is still awaiting Accept/Reject.
     func hasPendingProposal() -> Bool
+
+    /// Show or hide a layer by name — applied IMMEDIATELY (view state, not
+    /// content; it's one undoable step). Returns an error message, or nil.
+    func setLayerVisibility(layerName: String, visible: Bool) -> String?
 }
 
 public extension AgentBoardBridge {
     func hasPendingProposal() -> Bool { false }
+    func setLayerVisibility(layerName: String, visible: Bool) -> String? {
+        "Layer visibility is not available in this context."
+    }
 }

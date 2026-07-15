@@ -253,6 +253,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     @objc func toggleFlowsPanel(_ sender: Any?) {
         flowsModel.visible.toggle()
         flowsPanelHost?.isHidden = !flowsModel.visible
+        toolbarState.flowsPanelVisible = flowsModel.visible
         view.window?.makeFirstResponder(canvasView)
     }
 
@@ -290,6 +291,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         document.perform(.insertFlow(flow, at: document.board.flows.count), actionName: "Record Flow")
     }
 
+    /// Flows narrate a journey — the default pace is deliberately calmer
+    /// than the flood simulation (1x here ≈ 0.65x of the old speed).
+    static let flowBaseSpeed = 0.65
+
     private func playFlow(_ id: FlowID) {
         if flowsModel.playingFlowID == id {
             canvasView.stopSimulation()
@@ -297,6 +302,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         }
         guard let flow = document.board.flows.first(where: { $0.id == id }) else { return }
         canvasView.startFlowPlayback(flow)
+        canvasView.simulationSpeed = Self.flowBaseSpeed * (flowsModel.speeds[id] ?? 1)
         view.window?.makeFirstResponder(canvasView)
     }
 
@@ -673,6 +679,16 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                           !name.trimmingCharacters(in: .whitespaces).isEmpty, flow.name != name else { return }
                     flow.name = name
                     self.document.perform(.replaceFlow(flow), actionName: "Rename Flow")
+                },
+                cycleSpeed: { [weak self] id in
+                    guard let self else { return }
+                    let ladder: [Double] = [1, 1.5, 2, 0.5]
+                    let current = self.flowsModel.speeds[id] ?? 1
+                    let next = ladder[((ladder.firstIndex(of: current) ?? 0) + 1) % ladder.count]
+                    self.flowsModel.speeds[id] = next
+                    if self.flowsModel.playingFlowID == id {
+                        self.canvasView.simulationSpeed = Self.flowBaseSpeed * next
+                    }
                 }
             )
         )
@@ -913,6 +929,20 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// The board the agent bridge reads (keeps `document` private to the class).
     func agentCurrentBoard() -> Board { document.board }
 
+    /// Agent-driven layer show/hide (the set_layer_visibility tool): applied
+    /// immediately as one undo step — it changes what's VISIBLE, never what
+    /// exists.
+    func agentSetLayerVisibility(layerName: String, visible: Bool) -> String? {
+        guard var layer = document.board.layers.first(where: { $0.name == layerName }) else {
+            let names = document.board.layers.map(\.name).joined(separator: ", ")
+            return "No layer named '\(layerName)'. Layers: \(names)."
+        }
+        guard layer.isVisible != visible else { return nil }
+        layer.isVisible = visible
+        document.perform(.replaceLayer(layer), actionName: visible ? "Show Layer" : "Hide Layer")
+        return nil
+    }
+
     /// Headless check for --ui-test: stage a proposal that adds a block, verify
     /// it's pending (not applied), accept it, verify it applied as one undo step.
     func runAgentProposalSelfTest() -> String? {
@@ -1044,11 +1074,6 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Add Block", shortcut: "⌘B", systemImage: "plus.square") { [weak self] in
                 self?.canvasView.addBlock(nil)
             },
-        ] + BlockPaletteEntry.all.map { entry in
-            PaletteCommand(title: "Add \(entry.title) Block", shortcut: nil, systemImage: entry.icon) { [weak self] in
-                self?.canvasView.addBlock(kind: entry.kind, shape: entry.shape, orientation: entry.orientation)
-            }
-        } + [
             PaletteCommand(title: "Draw Tool", shortcut: "D", systemImage: "pencil.line") { [weak self] in
                 self?.canvasView.activateDrawTool(nil)
             },
@@ -1058,22 +1083,22 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Structurize Sketch into Shapes", shortcut: "⌘R", systemImage: "wand.and.stars") { [weak self] in
                 self?.structurize(nil)
             },
-            PaletteCommand(title: "Simulate Traffic from Selection", shortcut: "⌘↩", systemImage: "play.circle") { [weak self] in
+            PaletteCommand(title: "Simulate Traffic from Selection", shortcut: "⌘↩", systemImage: "play.circle", keywords: ["simulation", "play", "run", "flood"]) { [weak self] in
                 self?.simulateTraffic(nil)
             },
-            PaletteCommand(title: "Record Flow from Selection", shortcut: "⇧⌘↩", systemImage: "record.circle") { [weak self] in
+            PaletteCommand(title: "Record Flow from Selection", shortcut: "⇧⌘↩", systemImage: "record.circle", keywords: ["recording", "start", "capture", "journey"]) { [weak self] in
                 self?.recordFlow(nil)
             },
-            PaletteCommand(title: "Show Flows Panel", shortcut: "⌘J", systemImage: "point.topleft.down.curvedto.point.bottomright.up") { [weak self] in
+            PaletteCommand(title: "Show Flows Panel", shortcut: "⌘J", systemImage: "point.topleft.down.curvedto.point.bottomright.up", keywords: ["flows", "show", "toggle", "journey", "traffic"]) { [weak self] in
                 self?.toggleFlowsPanel(nil)
             },
-            PaletteCommand(title: "Assistant (Chat with Claude)", shortcut: "⇧⌘A", systemImage: "sparkles") { [weak self] in
+            PaletteCommand(title: "Assistant (Chat with Claude)", shortcut: "⇧⌘A", systemImage: "sparkles", keywords: ["chat", "ai", "gpt", "show", "agent", "ask"]) { [weak self] in
                 self?.toggleChatPanel(nil)
             },
             PaletteCommand(title: "Save Version", shortcut: "⌃⌘S", systemImage: "clock.badge.checkmark") { [weak self] in
                 self?.saveVersionNow(nil)
             },
-            PaletteCommand(title: "Show Version History", shortcut: "⇧⌘H", systemImage: "clock.arrow.circlepath") { [weak self] in
+            PaletteCommand(title: "Show Version History", shortcut: "⇧⌘H", systemImage: "clock.arrow.circlepath", keywords: ["versions", "history", "snapshots", "restore"]) { [weak self] in
                 self?.toggleVersionsPanel(nil)
             },
             PaletteCommand(title: "Group Selection", shortcut: "⌘G", systemImage: "square.on.square.squareshape.controlhandles") { [weak self] in
@@ -1088,7 +1113,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Straighten Selected Connectors", shortcut: nil, systemImage: "line.diagonal") { [weak self] in
                 self?.canvasView.straightenSelection(nil)
             },
-            PaletteCommand(title: "Toggle Hand-drawn Style", shortcut: nil, systemImage: "scribble.variable") { [weak self] in
+            PaletteCommand(title: "Toggle Hand-drawn Style", shortcut: nil, systemImage: "scribble.variable", keywords: ["sketchy", "excalidraw", "rough", "style", "freehand"]) { [weak self] in
                 self?.toggleSketchyStyle(nil)
             },
             PaletteCommand(title: "Export as draw.io", shortcut: nil, systemImage: "square.and.arrow.up") { [weak self] in
@@ -1097,13 +1122,13 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Export as Excalidraw", shortcut: nil, systemImage: "square.and.arrow.up") { [weak self] in
                 self?.exportAsExcalidraw(nil)
             },
-            PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3") { [weak self] in
+            PaletteCommand(title: "Inspector", shortcut: "⌥⌘I", systemImage: "slider.horizontal.3", keywords: ["properties", "edit", "show", "panel", "details"]) { [weak self] in
                 self?.toggleInspector(nil)
             },
-            PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d") { [weak self] in
+            PaletteCommand(title: "Toggle Layers Panel", shortcut: "⌘L", systemImage: "square.3.layers.3d", keywords: ["layers", "show", "hide", "panel", "visibility"]) { [weak self] in
                 self?.toggleLayersPanel(nil)
             },
-            PaletteCommand(title: "Toggle Library", shortcut: "⌘Y", systemImage: "books.vertical") { [weak self] in
+            PaletteCommand(title: "Toggle Library", shortcut: "⌘Y", systemImage: "books.vertical", keywords: ["library", "show", "patterns", "saved", "templates"]) { [weak self] in
                 self?.toggleLibraryPanel(nil)
             },
             PaletteCommand(title: "Save Selection to Library", shortcut: "⌥⌘S", systemImage: "square.and.arrow.down") { [weak self] in
@@ -1124,8 +1149,23 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Zoom to Fit", shortcut: "⌘9", systemImage: "arrow.up.left.and.arrow.down.right") { [weak self] in
                 self?.canvasView.zoomToFit(nil)
             },
-            PaletteCommand(title: "Actual Size", shortcut: "⌘0", systemImage: "1.magnifyingglass") { [weak self] in
+            PaletteCommand(title: "Actual Size", shortcut: "⌘0", systemImage: "1.magnifyingglass", keywords: ["zoom", "100", "reset"]) { [weak self] in
                 self?.canvasView.zoomActualSize(nil)
+            },
+            PaletteCommand(title: "Zoom In", shortcut: "⌘+", systemImage: "plus.magnifyingglass", keywords: ["bigger", "closer"]) { [weak self] in
+                self?.canvasView.zoomIn(nil)
+            },
+            PaletteCommand(title: "Zoom Out", shortcut: "⌘-", systemImage: "minus.magnifyingglass", keywords: ["smaller", "farther"]) { [weak self] in
+                self?.canvasView.zoomOut(nil)
+            },
+            PaletteCommand(title: "Import draw.io / Excalidraw…", shortcut: nil, systemImage: "square.and.arrow.down", keywords: ["import", "drawio", "excalidraw", "open", "diagram"]) {
+                NSApp.sendAction(Selector(("importDiagramFile:")), to: nil, from: nil)
+            },
+            PaletteCommand(title: "Toggle Agent Access (MCP)", shortcut: nil, systemImage: "antenna.radiowaves.left.and.right", keywords: ["mcp", "agent", "server", "claude", "enable", "access"]) {
+                NSApp.sendAction(Selector(("toggleAgentAccess:")), to: nil, from: nil)
+            },
+            PaletteCommand(title: "Convert Sketches Automatically", shortcut: nil, systemImage: "wand.and.rays", keywords: ["live", "recognition", "auto", "snap", "toggle"]) { [weak self] in
+                self?.toggleLiveRecognition(nil)
             },
         ]
     }
@@ -1225,20 +1265,14 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             state: toolbarState,
             onSelectTool: { [weak self] in self?.toolbarAction { $0.activateSelectTool(nil) } },
             onDrawTool: { [weak self] in self?.toolbarAction { $0.activateDrawTool(nil) } },
-            onAddBlock: { [weak self] in self?.toolbarAction { $0.addBlock(nil) } },
-            onStructurize: { [weak self] in
-                guard let self else { return }
-                self.structurize(nil)
-                self.view.window?.makeFirstResponder(self.canvasView)
-            },
             onLayers: { [weak self] in
                 guard let self else { return }
                 self.toggleLayersPanel(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
             },
-            onLibrary: { [weak self] in
+            onFlows: { [weak self] in
                 guard let self else { return }
-                self.toggleLibraryPanel(nil)
+                self.toggleFlowsPanel(nil)
                 self.view.window?.makeFirstResponder(self.canvasView)
             },
             onSimulate: { [weak self] in
@@ -1260,10 +1294,6 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             onCommandPalette: { [weak self] in
                 self?.toggleCommandPalette(nil)
-            },
-            onAddTypedBlock: { [weak self] entry in
-                // No focus hand-back: addBlock opens the label editor.
-                self?.canvasView.addBlock(kind: entry.kind, shape: entry.shape, orientation: entry.orientation)
             }
         )
         let host = NSHostingView(rootView: toolbar)

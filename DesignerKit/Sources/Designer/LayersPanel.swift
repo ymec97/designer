@@ -236,7 +236,8 @@ private struct EditableLayerName: View {
 
     var body: some View {
         if editing {
-            TextField("", text: $draft)
+            TextField("", text: $draft, axis: .vertical)
+                .lineLimit(1...2)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11.5))
                 .focused($focused)
@@ -248,7 +249,9 @@ private struct EditableLayerName: View {
         } else {
             Text(name)
                 .font(.system(size: 11.5, weight: isActive ? .semibold : .regular))
-                .lineLimit(1)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .onTapGesture(count: 2) {
                     draft = name
                     editing = true

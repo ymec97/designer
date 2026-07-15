@@ -16,6 +16,11 @@ public final class CanvasView: NSView {
 
     public var board = Board(title: "") {
         didSet {
+            // Undo/redo can delete the element being renamed (a snapped
+            // shape reverting to ink) — the floating text box goes with it.
+            if let editing = editingElementID, !isLabelEditable(board.elements[editing]) {
+                dismissLabelEditorWithoutCommit()
+            }
             renderer.sketchy = board.isSketchy
             parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
             anchorSpreadCache = EdgeGeometry.anchorSpread(in: board)
@@ -931,6 +936,17 @@ public final class CanvasView: NSView {
         needsDisplay = true
     }
 
+    /// Recording must not lead the user to blocks the layer settings hide —
+    /// clicking one looked like the canvas "generating new nodes".
+    private func isRecordable(_ candidate: FlowRecorder.Candidate) -> Bool {
+        let hidden = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        func visible(_ id: ElementID) -> Bool {
+            guard let element = board.elements[id] else { return false }
+            return element.layerIDs.contains { !hidden.contains($0) }
+        }
+        return visible(candidate.edge) && visible(candidate.to)
+    }
+
     /// A click while recording. The primary gesture is clicking the NEXT
     /// BLOCK the traffic visits: one connector to it records immediately;
     /// several (parallels) open a chooser listing them. Clicking a connector
@@ -943,14 +959,14 @@ public final class CanvasView: NSView {
         if let target = recorder.candidateTargets(in: board).first(where: { id in
             board.elements[id]?.node?.frame.contains(world) == true
         }) {
-            resolveFlowChoices(recorder.candidates(to: target, in: board), event: event)
+            resolveFlowChoices(recorder.candidates(to: target, in: board).filter(isRecordable), event: event)
             return
         }
 
         // 2. Fallback: a click near a candidate connector.
         let tolerance = 14 / viewport.scale
         var hits: [(candidate: FlowRecorder.Candidate, distance: Double)] = []
-        for candidate in recorder.candidates(in: board) {
+        for candidate in recorder.candidates(in: board) where isRecordable(candidate) {
             guard let route = routeCache[candidate.edge] else { continue }
             let distance = route.distance(to: world)
             if distance < Double(tolerance) { hits.append((candidate, distance)) }
@@ -1035,8 +1051,9 @@ public final class CanvasView: NSView {
         }
 
         // Connectors that could carry the next hop: their regular rendering,
-        // lifted above the scrim (arrowheads and labels intact).
-        for candidate in recorder.candidates(in: board) {
+        // lifted above the scrim (arrowheads and labels intact). Hidden
+        // layers stay hidden — recording never reveals them.
+        for candidate in recorder.candidates(in: board) where isRecordable(candidate) {
             guard let element = board.elements[candidate.edge], let edge = element.edge,
                   let route = routeCache[candidate.edge] else { continue }
             renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false,
@@ -1051,7 +1068,8 @@ public final class CanvasView: NSView {
             renderer.draw(element, in: context, viewport: viewport, isSelected: false)
             renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 0.8)
         }
-        for nodeID in recorder.candidateTargets(in: board) where !recorder.reachedNodes.contains(nodeID) {
+        let recordableTargets = Set(recorder.candidates(in: board).filter(isRecordable).map(\.to))
+        for nodeID in recordableTargets where !recorder.reachedNodes.contains(nodeID) {
             guard let element = board.elements[nodeID], let node = element.node else { continue }
             renderer.draw(element, in: context, viewport: viewport, isSelected: false)
             renderer.drawProposalAddedOutline(viewport.toView(node.frame), in: context, viewport: viewport)
@@ -1107,9 +1125,13 @@ public final class CanvasView: NSView {
     // MARK: Navigation input
 
     public override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            // ⌘-scroll zooms toward the cursor.
-            let factor = pow(1.0015, Double(event.scrollingDeltaY))
+        // A mouse WHEEL zooms toward the cursor (there is no other fluid way
+        // to zoom with a mouse); trackpad scrolling pans as before, with
+        // ⌘-scroll forcing zoom on either device.
+        let wheelZoom = !event.hasPreciseScrollingDeltas
+        if wheelZoom || event.modifierFlags.contains(.command) {
+            let exponent = event.hasPreciseScrollingDeltas ? 1.0015 : 1.06
+            let factor = pow(exponent, Double(event.scrollingDeltaY))
             viewport.zoom(by: factor, at: convert(event.locationInWindow, from: nil))
         } else {
             viewport.pan(viewDeltaX: event.scrollingDeltaX, viewDeltaY: event.scrollingDeltaY)
@@ -1840,6 +1862,23 @@ public final class CanvasView: NSView {
 
     @objc private func labelEditorDidCommit(_ sender: NSTextField) {
         commitLabelEditor()
+    }
+
+    private func isLabelEditable(_ element: Element?) -> Bool {
+        switch element?.content {
+        case .node, .note, .boundary: return true
+        default: return false
+        }
+    }
+
+    /// Tears the label editor down WITHOUT committing text — for when the
+    /// element it was editing no longer exists (undo storms).
+    private func dismissLabelEditorWithoutCommit() {
+        labelEditor?.removeFromSuperview()
+        labelEditor = nil
+        editingElementID = nil
+        needsDisplay = true
+        window?.makeFirstResponder(self)
     }
 
     public func commitLabelEditor() {

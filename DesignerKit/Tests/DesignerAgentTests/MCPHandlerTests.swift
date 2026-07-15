@@ -60,11 +60,18 @@ final class MCPHandlerTests: XCTestCase {
         XCTAssertNil(handler.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)))
     }
 
-    func testToolsListHasFiveTools() {
+    func testToolsListHasSixTools() {
         let r = call(#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
         let tools = (r["result"] as! [String: Any])["tools"] as! [[String: Any]]
         XCTAssertEqual(Set(tools.map { $0["name"] as! String }),
-                       ["get_guide", "describe_board", "get_board", "search_board", "propose_board"])
+                       ["get_guide", "describe_board", "get_board", "search_board",
+                        "propose_board", "set_layer_visibility"])
+    }
+
+    func testSetLayerVisibilityUnknownLayerErrors() {
+        let r = call(#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"set_layer_visibility","arguments":{"layer":"Nope","visible":false}}}"#)
+        let result = r["result"] as! [String: Any]
+        XCTAssertEqual(result["isError"] as? Bool, true)
     }
 
     func testDescribeBoard() {

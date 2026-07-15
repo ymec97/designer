@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.0 — 2026-07-16
+
+Feedback round from the work Mac: input polish, flows ergonomics, and
+agent layer-visibility control.
+
+- Mouse scroll wheel now zooms (trackpad two-finger scroll still pans;
+  ⌘-scroll zooms on both).
+- NEW: `set_layer_visibility` MCP tool — agent proposals now ALWAYS arrive
+  with their layers visible; staged walkthrough reveals are an explicit
+  follow-up call instead of boards that open half-invisible.
+- FIX: flow recording no longer lets you click blocks hidden by an
+  invisible layer (it looked like recording was "generating new nodes").
+- FIX: undoing a shape snap no longer leaves an orphaned label editor
+  floating over the canvas.
+- Flows panel: per-flow playback speed badge (1x → 1.5x → 2x → ½x), wider
+  panel, and 1x is meaningfully slower than before so flows are readable.
+  Flow and layer names wrap instead of truncating.
+- Toolbar: Flows button (⌘J); Add Block / Structurize / Library buttons
+  removed (Library lives in the command palette; drawing is freehand-first
+  and auto-snaps, so ⌘R/⌘B are gone). Typed-block palette removed.
+- New canvases default to the hand-drawn (Excalidraw-like) render style.
+- Command palette: synonym keywords (e.g. "show layers" finds Toggle
+  Layers Panel) and missing commands added (zoom, imports, agent access,
+  auto-convert sketches).
+- FIX: layer tint dots on ellipse blocks are anchored inside the ellipse
+  instead of floating at the bounding-box corner.
+- Agent guide: "nodes are entities, connectors are actions" rule — verbs
+  become connector labels, prose moves to props/notes, never block names.
+
 ## v0.3.1 — 2026-07-15
 
 - FIX: oversized block names rendered centered on their FULL width, spilling

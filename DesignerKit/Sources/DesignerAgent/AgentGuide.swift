@@ -24,6 +24,11 @@ public enum AgentGuide {
     afterwards to see what they decided before proposing again.
 
     ## Composition — build diagrams the way a human reads them
+    - NODES ARE ENTITIES, CONNECTORS ARE ACTIONS. A block is a thing that \
+    exists (service, store, person, system); anything that HAPPENS — "run \
+    collection", "fetch plans", "normalize" — is a connector label between \
+    the entities it involves, never a block of its own. Keep prose out of \
+    node labels; details live in `props` or notes.
     - A diagram has a NARRATIVE: entry points (clients, collectors, triggers) \
     on the left, traffic progressing left→right toward stores and outputs. \
     A reader should find where a request enters without hunting.
@@ -68,8 +73,12 @@ public enum AgentGuide {
     visible/hidden — that is their power: a board that starts as a simple \
     overview and reveals depth layer by layer, perfect for walking someone \
     through a system.
-    - Declare `layers: [{name, tint?, hidden?}]` at the top level; the FIRST \
-    layer is the base. Give each element `layers: ["…"]` (names; omitted = \
+    - Declare layers at the top level (name + optional tint); the FIRST \
+    layer is the base. Layers from a proposal always arrive VISIBLE — the \
+    user must see everything they accept. To stage a progressive reveal, \
+    call set_layer_visibility AFTERWARDS (it applies immediately and is \
+    undoable) — hide the detail layers, then show them one by one as you \
+    walk the user through. Give each element `layers: ["…"]` (names; omitted = \
     base layer only). An element may be on several layers.
     - Recommended structure: a base "Overview" layer with the core components \
     and happy-path connections everyone must understand; then one layer per \

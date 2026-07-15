@@ -282,7 +282,17 @@ final class BoardRenderer {
         if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
             let r = 3.4 * viewport.scale
             let inset = 13 * viewport.scale
-            let anchor = CGPoint(x: rect.minX + inset, y: rect.minY + inset)
+            // A rect's top-left inset sits OUTSIDE an ellipse — anchor the
+            // dot along the ellipse's -135° radius instead.
+            let anchor: CGPoint
+            if node.shape == .ellipse {
+                anchor = CGPoint(
+                    x: rect.midX - (rect.width / 2 - inset) * 0.7071,
+                    y: rect.midY - (rect.height / 2 - inset) * 0.7071
+                )
+            } else {
+                anchor = CGPoint(x: rect.minX + inset, y: rect.minY + inset)
+            }
             context.setFillColor(Palette.kindDot(for: node.semantic.kind).cgColor)
             context.fillEllipse(in: CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2))
         }

@@ -39,5 +39,12 @@ final class RelayoutVisualCheck: XCTestCase {
         let tiff = try XCTUnwrap(image.tiffRepresentation)
         let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
         try png.write(to: URL(fileURLWithPath: outPath))
+
+        // Optionally save the re-laid board as a package (RELAYOUT_OUT).
+        if let savePath = env["RELAYOUT_OUT"] {
+            var fixed = relaid
+            fixed.title = original.title
+            try BoardPackage.write(fixed, to: URL(fileURLWithPath: savePath))
+        }
     }
 }

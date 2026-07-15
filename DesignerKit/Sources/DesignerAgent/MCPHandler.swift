@@ -75,6 +75,11 @@ public final class MCPHandler {
                 text: arguments["board"] as? String ?? "",
                 note: arguments["note"] as? String
             ))
+        case "set_layer_visibility":
+            return toolResult(id: id, setLayerVisibility(
+                layer: arguments["layer"] as? String ?? "",
+                visible: arguments["visible"] as? Bool ?? true
+            ))
         default:
             return errorResponse(id: id, code: -32602, message: "Unknown tool: \(name)")
         }
@@ -166,6 +171,15 @@ public final class MCPHandler {
         lines.append("")
         lines.append("The user will Accept or Reject this in the app; it has not been applied yet. Call get_board afterwards to see what they decided before proposing further changes.")
         return .text(lines.joined(separator: "\n"))
+    }
+
+    private func setLayerVisibility(layer: String, visible: Bool) -> ToolOutcome {
+        guard let bridge else { return .error(Self.noBoardMessage) }
+        guard !layer.isEmpty else { return .error("Provide the layer name.") }
+        if let error = bridge.setLayerVisibility(layerName: layer, visible: visible) {
+            return .error(error)
+        }
+        return .text("Layer '\(layer)' is now \(visible ? "visible" : "hidden"). (Applied immediately — this changes what the user sees, not the content.)")
     }
 
     private static let noBoardMessage = "No board is open in Designer right now."
@@ -274,6 +288,18 @@ public final class MCPHandler {
                 "type": "object",
                 "properties": ["query": ["type": "string", "description": "Text to search for."]],
                 "required": ["query"],
+            ],
+        ],
+        [
+            "name": "set_layer_visibility",
+            "description": "Show or hide one layer by name — applied immediately (an undoable view change, not a content edit). Layers from your proposals always arrive VISIBLE; use this afterwards to stage a progressive walkthrough (hide detail layers, reveal them one by one while narrating).",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "layer": ["type": "string", "description": "The layer's name (see describe_board)."],
+                    "visible": ["type": "boolean", "description": "true to show, false to hide."],
+                ],
+                "required": ["layer", "visible"],
             ],
         ],
         [
