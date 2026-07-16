@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.0 — 2026-07-16
+
+draw.io/Excalidraw import now preserves the original diagram EXACTLY —
+positions, routes, colors — instead of producing a scrambled board.
+
+- draw.io import fidelity: authored waypoint routes become connector
+  waypoints (orthogonal polylines), entry/exit connection points pin the
+  connector to the same node side, edges with a floating end import as
+  dangling connectors instead of being dropped, fill/stroke colors are
+  kept, and cells inside groups get correct absolute positions (groups
+  become boundaries).
+- New node shapes: cylinder and cloud (draw.io cylinder3/cloud map to
+  them; they round-trip on export).
+- Images: draw.io `image=` data URIs and Excalidraw image files render
+  inside the block (PNG/JPEG/SVG, cached) and survive export both ways.
+- AWS/stencil icons (mxgraph.aws4.*) keep their fill and map to a node
+  kind (S3 → database, MQ → queue, …); draw.io-library images that are
+  not embedded in the file are reported in the import notes.
+- Node labels wrap onto up to 3 lines when the block is too narrow
+  (imported diagrams keep their small frames); text on custom fills
+  picks black/white by luminance so it stays readable.
+- Excalidraw: arrow mid-points import/export as waypoints, shape
+  background/stroke colors round-trip.
+
 ## v0.4.0 — 2026-07-16
 
 Feedback round from the work Mac: input polish, flows ergonomics, and

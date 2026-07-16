@@ -4,8 +4,11 @@ import DesignerModel
 /// Excalidraw interchange (`.excalidraw` JSON, file format v2).
 ///
 /// Mapping (import ⇄ export):
-///   rectangle/ellipse/diamond ⇄ blocks (bound text = the block's name)
-///   arrow with bindings       ⇄ connectors (bound text = label)
+///   rectangle/ellipse/diamond ⇄ blocks (bound text = the block's name,
+///                               background/stroke colors preserved)
+///   arrow with bindings       ⇄ connectors (bound text = label, mid points
+///                               = waypoints, so routes survive round trips)
+///   image + files entry       ⇄ blocks with an embedded image (data URL)
 ///   freedraw                  ⇄ ink strokes
 ///   standalone text           ⇄ notes
 ///   triangle blocks           → closed 3-point line (Excalidraw has none)
@@ -36,6 +39,7 @@ public enum ExcalidrawFormat {
         let layer = board.layers[0].id
         var warnings: [String] = []
         var elementForExcalidrawID: [String: ElementID] = [:]
+        let files = (root["files"] as? [String: [String: Any]]) ?? [:]
 
         func double(_ value: Any?) -> Double? {
             (value as? Double) ?? (value as? Int).map(Double.init) ?? (value as? NSNumber)?.doubleValue
@@ -61,6 +65,13 @@ public enum ExcalidrawFormat {
             let width = double(raw["width"]) ?? 0
             let height = double(raw["height"]) ?? 0
 
+            func importedStyle() -> Style {
+                var style = Style()
+                if let fill = raw["backgroundColor"] as? String, fill.hasPrefix("#") { style.fill = fill }
+                if let stroke = raw["strokeColor"] as? String, stroke.hasPrefix("#") { style.stroke = stroke }
+                return style
+            }
+
             switch type {
             case "rectangle", "ellipse", "diamond":
                 let shape: NodeShape = type == "ellipse" ? .ellipse
@@ -72,7 +83,29 @@ public enum ExcalidrawFormat {
                     content: .node(Node(
                         semantic: NodeSemantic(name: name),
                         frame: Rect(x: x, y: y, width: max(width, 24), height: max(height, 24)),
-                        shape: shape
+                        shape: shape,
+                        style: importedStyle()
+                    ))
+                )
+                elementForExcalidrawID[id] = element.id
+                insert(element)
+
+            case "image":
+                let dataURL = (raw["fileId"] as? String)
+                    .flatMap { files[$0] }
+                    .flatMap { $0["dataURL"] as? String }
+                guard let dataURL, dataURL.hasPrefix("data:") else {
+                    warnings.append("image element '\(id)' has no embedded file data — skipped")
+                    continue
+                }
+                var style = Style()
+                style.image = dataURL
+                let element = Element(
+                    layerIDs: [layer], sortKey: board.topSortKey,
+                    content: .node(Node(
+                        semantic: NodeSemantic(name: ""),
+                        frame: Rect(x: x, y: y, width: max(width, 24), height: max(height, 24)),
+                        style: style
                     ))
                 )
                 elementForExcalidrawID[id] = element.id
@@ -131,11 +164,18 @@ public enum ExcalidrawFormat {
                 }
                 continue
             }
+            // Intermediate points are the authored route — keep it.
+            let waypoints = points.dropFirst().dropLast().compactMap { pair -> Point? in
+                guard pair.count >= 2, let px = double(pair[0]), let py = double(pair[1]) else { return nil }
+                return Point(x: x + px, y: y + py)
+            }
             let label = containerText[id]
             insert(Element(layerIDs: [layer], sortKey: board.topSortKey,
                            content: .edge(Edge(
                                semantic: EdgeSemantic(label: label),
-                               from: from, to: to))))
+                               from: from, to: to,
+                               routing: waypoints.isEmpty ? .straight : .orthogonal,
+                               waypoints: waypoints))))
         }
 
         if board.elements.isEmpty {
@@ -185,6 +225,7 @@ public enum ExcalidrawFormat {
         }
 
         var excalidrawID: [ElementID: String] = [:]
+        var files: [String: Any] = [:]
 
         // Blocks (+ bound name text).
         for element in board.elementsInZOrder {
@@ -192,6 +233,29 @@ public enum ExcalidrawFormat {
             let id = nextID("node")
             excalidrawID[element.id] = id
             let f = node.frame
+
+            // Embedded images become Excalidraw image elements + a files
+            // entry carrying the data URL.
+            if let image = node.style.image {
+                let fileID = "designer-file-\(counter)"
+                var imageElement = base("image", id: id, x: f.x, y: f.y, w: f.width, h: f.height)
+                imageElement["fileId"] = fileID
+                imageElement["status"] = "saved"
+                imageElement["scale"] = [1, 1]
+                let mime = image.dropFirst("data:".count).prefix { $0 != ";" && $0 != "," }
+                files[fileID] = [
+                    "mimeType": mime.isEmpty ? "image/png" : String(mime),
+                    "id": fileID, "dataURL": image, "created": 1,
+                ]
+                elements.append(imageElement)
+                if !node.semantic.name.isEmpty {
+                    elements.append(textElement(node.semantic.name, containerID: nil,
+                                                frame: Rect(x: f.x, y: f.maxY + 10, width: f.width, height: 18),
+                                                fontSize: 12))
+                }
+                continue
+            }
+
             switch node.shape {
             case .triangle:
                 // No triangle in Excalidraw: a closed 3-point line.
@@ -200,9 +264,11 @@ public enum ExcalidrawFormat {
                 tri["polygon"] = true
                 elements.append(tri)
             default:
-                let type = node.shape == .ellipse ? "ellipse"
+                let type = node.shape == .ellipse || node.shape == .cloud ? "ellipse"
                     : node.shape == .diamond ? "diamond" : "rectangle"
                 var shape = base(type, id: id, x: f.x, y: f.y, w: f.width, h: f.height)
+                if let fill = node.style.fill { shape["backgroundColor"] = fill }
+                if let stroke = node.style.stroke { shape["strokeColor"] = stroke }
                 if !node.semantic.name.isEmpty {
                     let text = textElement(node.semantic.name, containerID: id, frame: f)
                     shape["boundElements"] = [["type": "text", "id": text["id"] as? String ?? ""]]
@@ -223,7 +289,9 @@ public enum ExcalidrawFormat {
             let start = route.start, end = route.end
             var arrow = base("arrow", id: id, x: start.x, y: start.y,
                              w: abs(end.x - start.x), h: abs(end.y - start.y))
-            arrow["points"] = [[0.0, 0.0], [end.x - start.x, end.y - start.y]]
+            arrow["points"] = [[0.0, 0.0]]
+                + edge.waypoints.map { [$0.x - start.x, $0.y - start.y] }
+                + [[end.x - start.x, end.y - start.y]]
             arrow["startArrowhead"] = (edge.semantic.direction == .backward || edge.semantic.direction == .both) ? "arrow" : NSNull()
             arrow["endArrowhead"] = (edge.semantic.direction == .forward || edge.semantic.direction == .both) ? "arrow" : NSNull()
             if let fromID = edge.from.elementID, let bound = excalidrawID[fromID] {
@@ -270,7 +338,7 @@ public enum ExcalidrawFormat {
             "source": "designer",
             "elements": elements,
             "appState": ["viewBackgroundColor": "#ffffff", "gridSize": NSNull()],
-            "files": [:],
+            "files": files,
         ]
         return try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
     }
