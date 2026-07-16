@@ -117,6 +117,59 @@ final class FlowTests: XCTestCase {
         XCTAssertEqual(steps[1].edges, [e2])
     }
 
+    /// The user-reported case: with B→C, B→A, A→C, clicking B, A, C must
+    /// record B→A then A→C (the walk follows the clicks) — not a second
+    /// departure from B.
+    func testWalkFollowsTheCursorNotTheOldestOrigin() {
+        let bc = connect("b", "c"), ba = connect("b", "a"), ac = connect("a", "c")
+        var recorder = FlowRecorder(source: node("b"))
+        XCTAssertEqual(recorder.cursor, node("b"))
+
+        // Click A: only B delivers there.
+        let toA = recorder.preferredCandidates(to: node("a"), in: board)
+        XCTAssertEqual(toA.map(\.edge), [ba])
+        recorder.record(toA[0], in: board)
+        XCTAssertEqual(recorder.cursor, node("a"), "the walk stands on the clicked block")
+
+        // Click C: both B→C and A→C are live candidates, but the hop from
+        // the cursor (A) wins.
+        XCTAssertEqual(Set(recorder.candidates(to: node("c"), in: board).map(\.edge)), [bc, ac])
+        let toC = recorder.preferredCandidates(to: node("c"), in: board)
+        XCTAssertEqual(toC.map(\.edge), [ac])
+        recorder.record(toC[0], in: board)
+
+        // Steps: b→a then a→c, two sequential movements.
+        let steps = recorder.steps
+        XCTAssertEqual(steps.count, 2)
+        XCTAssertEqual(steps[0].edges, [ba])
+        XCTAssertEqual(steps[1].edges, [ac])
+    }
+
+    func testCursorMovesBackForFanOutAndFollowsUndo() {
+        let ba = connect("b", "a"), bc = connect("b", "c")
+        _ = connect("a", "d")
+        var recorder = FlowRecorder(source: node("b"))
+        recorder.record(recorder.preferredCandidates(to: node("a"), in: board)[0], in: board)
+        XCTAssertEqual(recorder.cursor, node("a"))
+
+        // Fan out: move the cursor back to B (reached), then record B→C.
+        XCTAssertTrue(recorder.moveCursor(to: node("b")))
+        XCTAssertEqual(recorder.cursor, node("b"))
+        XCTAssertFalse(recorder.moveCursor(to: node("c")), "unreached blocks can't take the cursor")
+        let toC = recorder.preferredCandidates(to: node("c"), in: board)
+        XCTAssertEqual(toC.map(\.edge), [bc])
+        recorder.record(toC[0], in: board)
+        XCTAssertEqual(recorder.cursor, node("c"))
+
+        // Undo puts the walk back where the previous hop arrived.
+        recorder.undoLast()
+        XCTAssertEqual(recorder.cursor, node("a"), "cursor follows the journal on undo")
+        recorder.undoLast()
+        XCTAssertEqual(recorder.cursor, node("b"), "empty journal → back at the source")
+        XCTAssertEqual(recorder.recordedEdges, [], "journal empty")
+        _ = ba
+    }
+
     func testParallelEdgesAreDistinctCandidates() {
         // Yarden's example: gRPC and HTTP both connect a→b; the flow picks one.
         let grpc = connect("a", "b", label: "gRPC")

@@ -9,6 +9,11 @@ import Foundation
 ///   already reached (honoring edge direction; `both` edges are traversable
 ///   either way; `none` edges never carry flow). Any recipient may emit later
 ///   — after a fan-out to A and B, you can record A's hop and then B's.
+/// - The CURSOR is the node the walk currently stands on (the last clicked
+///   one). When several reached nodes could deliver to the clicked block,
+///   the hop departing from the cursor wins: click B, A, C records B→A
+///   then A→C — never a surprise second departure from B. Clicking an
+///   already-reached node moves the cursor there (that's how you fan out).
 /// - Each connector fires at most once per flow.
 /// - Recording a connector appends a step delivering to its far endpoint;
 ///   consecutive recordings departing from the *same node* merge into one
@@ -29,12 +34,17 @@ public struct FlowRecorder {
     }
 
     public private(set) var source: ElementID
+    /// Where the walk stands right now: the last recorded arrival (or a
+    /// reached node the user clicked to fan out from). Hops departing from
+    /// here win over other reached origins when a click is ambiguous.
+    public private(set) var cursor: ElementID
     /// Recorded connectors in click order; steps are derived from this, so
     /// undo is simply dropping the last entry.
     private var journal: [Candidate] = []
 
     public init(source: ElementID) {
         self.source = source
+        self.cursor = source
     }
 
     /// Steps derived from the journal: consecutive same-departure recordings
@@ -103,17 +113,37 @@ public struct FlowRecorder {
         candidates(in: board).filter { $0.to == target }
     }
 
+    /// Candidates to a target, preferring hops that depart from the cursor:
+    /// the walk continues from where the user last clicked. Only when the
+    /// cursor can't reach the target do other reached origins qualify.
+    public func preferredCandidates(to target: ElementID, in board: Board) -> [Candidate] {
+        let all = candidates(to: target, in: board)
+        let fromCursor = all.filter { $0.from == cursor }
+        return fromCursor.isEmpty ? all : fromCursor
+    }
+
+    /// Puts the walk back on an already-reached node so the next hop departs
+    /// from there (fan-out). Returns false for unreached nodes.
+    @discardableResult
+    public mutating func moveCursor(to node: ElementID) -> Bool {
+        guard reachedNodes.contains(node) else { return false }
+        cursor = node
+        return true
+    }
+
     /// Records a candidate. Returns false if it isn't currently recordable.
     @discardableResult
     public mutating func record(_ candidate: Candidate, in board: Board) -> Bool {
         guard candidates(in: board).contains(candidate) else { return false }
         journal.append(candidate)
+        cursor = candidate.to
         return true
     }
 
     /// Removes the most recently recorded connector.
     public mutating func undoLast() {
         _ = journal.popLast()
+        cursor = journal.last?.to ?? source
     }
 
     /// Finalizes the recording into a Flow (caller supplies name and color).

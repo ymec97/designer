@@ -189,6 +189,11 @@ final class ForeignFormatTests: XCTestCase {
                   <mxPoint x="180" y="210" as="targetPoint"/>
                 </mxGeometry>
               </mxCell>
+              <mxCell id="e3" value="looks-attached" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n2">
+                <mxGeometry relative="1" as="geometry">
+                  <mxPoint x="-440" y="260" as="targetPoint"/>
+                </mxGeometry>
+              </mxCell>
             </root></mxGraphModel>
           </diagram>
         </mxfile>
@@ -234,6 +239,15 @@ final class ForeignFormatTests: XCTestCase {
         let dangling = try XCTUnwrap(edges.first { $0.semantic.label == "dangling" })
         XCTAssertEqual(dangling.to, .free(Point(x: 180, y: 210)),
                        "floating endpoints import as free anchors instead of being dropped")
+
+        // draw.io stores unbound endpoints that visually END on a node as a
+        // bare point on its border — those must import ATTACHED.
+        let collectorID = try XCTUnwrap(board.elements.values.first {
+            $0.node?.semantic.name == "collector"
+        }?.id)
+        let looksAttached = try XCTUnwrap(edges.first { $0.semantic.label == "looks-attached" })
+        XCTAssertEqual(looksAttached.to.elementID, collectorID,
+                       "a free endpoint on a block's border snaps to the block")
     }
 
     func testDrawioRoundTripKeepsRouteAndColors() throws {

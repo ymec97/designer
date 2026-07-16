@@ -948,19 +948,34 @@ public final class CanvasView: NSView {
     }
 
     /// A click while recording. The primary gesture is clicking the NEXT
-    /// BLOCK the traffic visits: one connector to it records immediately;
-    /// several (parallels) open a chooser listing them. Clicking a connector
-    /// directly still works as a fallback.
+    /// BLOCK the traffic visits — the walk continues from the CURSOR (the
+    /// last clicked block): B, A, C records B→A then A→C, never a second
+    /// departure from B. Clicking a reached block moves the cursor there
+    /// (fan-out); clicking a connector directly still works as a fallback.
     private func handleFlowRecordingClick(at point: CGPoint, event: NSEvent) {
         guard let recorder = flowRecorder else { return }
         let world = viewport.toWorld(point)
 
-        // 1. Did the click land on a candidate next block?
-        if let target = recorder.candidateTargets(in: board).first(where: { id in
-            board.elements[id]?.node?.frame.contains(world) == true
-        }) {
-            resolveFlowChoices(recorder.candidates(to: target, in: board).filter(isRecordable), event: event)
-            return
+        // 1. Did the click land on a block?
+        if let nodeID = board.elementsInZOrder.reversed().first(where: { element in
+            element.node?.frame.contains(world) == true
+        })?.id {
+            let choices = recorder.preferredCandidates(to: nodeID, in: board).filter(isRecordable)
+            let continuesFromCursor = choices.first?.from == recorder.cursor
+            // A reached block is a cursor move (fan-out) — unless the cursor
+            // itself delivers here, which is an intentional cycle hop.
+            if recorder.reachedNodes.contains(nodeID), !continuesFromCursor {
+                var moved = recorder
+                if moved.moveCursor(to: nodeID) {
+                    flowRecorder = moved
+                    needsDisplay = true
+                }
+                return
+            }
+            if !choices.isEmpty {
+                resolveFlowChoices(choices, event: event)
+                return
+            }
         }
 
         // 2. Fallback: a click near a candidate connector.
@@ -1060,13 +1075,17 @@ public final class CanvasView: NSView {
                               captionFraction: anchorSpreadCache[candidate.edge]?.captionT ?? 0.5)
         }
 
-        // Reached blocks: solid glow. Candidate next blocks: normal render +
-        // dashed accent ring = "click me".
+        // Reached blocks: soft glow, with the CURSOR (where the walk stands,
+        // where the next hop departs from) glowing strongest. Candidate next
+        // blocks: normal render + dashed accent ring = "click me".
         for nodeID in recorder.reachedNodes {
             guard let element = board.elements[nodeID], let node = element.node else { continue }
             let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
             renderer.draw(element, in: context, viewport: viewport, isSelected: false)
-            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 0.8)
+            renderer.drawSimulationNodeGlow(
+                path, in: context, viewport: viewport,
+                intensity: nodeID == recorder.cursor ? 1.0 : 0.45
+            )
         }
         let recordableTargets = Set(recorder.candidates(in: board).filter(isRecordable).map(\.to))
         for nodeID in recordableTargets where !recorder.reachedNodes.contains(nodeID) {
