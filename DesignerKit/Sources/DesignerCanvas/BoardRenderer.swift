@@ -213,6 +213,10 @@ final class BoardRenderer {
             triangle.addLine(to: base.1)
             triangle.closeSubpath()
             path = triangle
+        case .cylinder:
+            path = Self.cylinderPath(in: rect)
+        case .cloud:
+            path = Self.cloudPath(in: rect)
         default:
             let cornerRadius = min(8 * viewport.scale, rect.width / 4, rect.height / 4)
             path = CGPath(
@@ -255,7 +259,7 @@ final class BoardRenderer {
             context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.0) * viewport.scale)
             let corners: [CGPoint]
             switch node.shape {
-            case .ellipse:
+            case .ellipse, .cloud:
                 corners = Sketch.ellipsePolygon(
                     in: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
                 ).map { CGPoint(x: $0.x, y: $0.y) }
@@ -297,6 +301,31 @@ final class BoardRenderer {
             context.fillEllipse(in: CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2))
         }
 
+        // Embedded image (imported diagrams): aspect-fit inside the frame,
+        // leaving a strip at the bottom for the name when there is one.
+        var textRect = rect
+        if let dataURI = node.style.image, let image = Self.decodedImage(dataURI) {
+            let labelStrip: CGFloat = node.semantic.name.isEmpty ? 0 : min(20 * viewport.scale, rect.height * 0.3)
+            let box = CGRect(x: rect.minX, y: rect.minY,
+                             width: rect.width, height: rect.height - labelStrip)
+                .insetBy(dx: 4 * viewport.scale, dy: 4 * viewport.scale)
+            if box.width > 2, box.height > 2 {
+                let scale = min(box.width / image.size.width, box.height / image.size.height)
+                let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                let drawRect = CGRect(
+                    x: box.midX - drawSize.width / 2, y: box.midY - drawSize.height / 2,
+                    width: drawSize.width, height: drawSize.height
+                )
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+                image.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1,
+                           respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
+                NSGraphicsContext.restoreGraphicsState()
+                textRect = CGRect(x: rect.minX, y: rect.maxY - max(labelStrip, 1),
+                                  width: rect.width, height: max(labelStrip, 1))
+            }
+        }
+
         if isSelected {
             strokeSelection(path: path, in: context, viewport: viewport)
         }
@@ -305,11 +334,89 @@ final class BoardRenderer {
             drawText(
                 node.semantic.name,
                 fontSize: 13 * viewport.scale,
-                color: Palette.nodeText,
-                centeredIn: rect,
+                color: Self.textColor(onFill: node.style.fill),
+                centeredIn: textRect,
                 context: context
             )
         }
+    }
+
+    // MARK: - Imported-diagram support (shapes, images, contrast)
+
+    /// Database drum: elliptical lid, straight walls, elliptical foot.
+    static func cylinderPath(in rect: CGRect) -> CGPath {
+        let lid = min(rect.height * 0.16, rect.width * 0.4)
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + lid))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + lid),
+                          control: CGPoint(x: rect.midX, y: rect.minY - lid * 0.6))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - lid))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - lid),
+                          control: CGPoint(x: rect.midX, y: rect.maxY + lid * 0.6))
+        path.closeSubpath()
+        // The lid's visible front rim.
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + lid))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + lid),
+                          control: CGPoint(x: rect.midX, y: rect.minY + lid * 2.2))
+        return path
+    }
+
+    /// Cloud blob: four overlapping arcs over a flat-ish base.
+    static func cloudPath(in rect: CGRect) -> CGPath {
+        let w = rect.width, h = rect.height
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + w * 0.18, y: rect.minY + h * 0.82))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.10, y: rect.minY + h * 0.44),
+                      control1: CGPoint(x: rect.minX - w * 0.06, y: rect.minY + h * 0.78),
+                      control2: CGPoint(x: rect.minX - w * 0.04, y: rect.minY + h * 0.48))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.38, y: rect.minY + h * 0.20),
+                      control1: CGPoint(x: rect.minX + w * 0.14, y: rect.minY + h * 0.14),
+                      control2: CGPoint(x: rect.minX + w * 0.28, y: rect.minY + h * 0.10))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.70, y: rect.minY + h * 0.22),
+                      control1: CGPoint(x: rect.minX + w * 0.48, y: rect.minY + h * 0.02),
+                      control2: CGPoint(x: rect.minX + w * 0.64, y: rect.minY + h * 0.04))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.90, y: rect.minY + h * 0.50),
+                      control1: CGPoint(x: rect.minX + w * 0.84, y: rect.minY + h * 0.14),
+                      control2: CGPoint(x: rect.minX + w * 1.00, y: rect.minY + h * 0.30))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.82, y: rect.minY + h * 0.82),
+                      control1: CGPoint(x: rect.minX + w * 1.06, y: rect.minY + h * 0.56),
+                      control2: CGPoint(x: rect.minX + w * 1.02, y: rect.minY + h * 0.80))
+        path.addCurve(to: CGPoint(x: rect.minX + w * 0.18, y: rect.minY + h * 0.82),
+                      control1: CGPoint(x: rect.minX + w * 0.66, y: rect.minY + h * 0.96),
+                      control2: CGPoint(x: rect.minX + w * 0.32, y: rect.minY + h * 0.96))
+        path.closeSubpath()
+        return path
+    }
+
+    /// Custom fills come from imports and can be any brightness — pick ink
+    /// that stays readable instead of the theme text color.
+    static func textColor(onFill hex: String?) -> NSColor {
+        guard let hex, let fill = NSColor(hexString: hex),
+              let rgb = fill.usingColorSpace(.sRGB) else { return Palette.nodeText }
+        let luminance = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
+        return luminance > 0.55
+            ? NSColor(calibratedWhite: 0.13, alpha: 1)
+            : NSColor(calibratedWhite: 0.96, alpha: 1)
+    }
+
+    /// data: URI → NSImage, cached (boards redraw every frame; decoding SVG
+    /// or PNG each time would wreck the budget).
+    private static let imageCache = NSCache<NSString, NSImage>()
+    static func decodedImage(_ dataURI: String) -> NSImage? {
+        let key = dataURI as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let comma = dataURI.firstIndex(of: ",") else { return nil }
+        let header = dataURI[..<comma]
+        let payload = String(dataURI[dataURI.index(after: comma)...])
+        let data: Data?
+        if header.contains("base64") {
+            data = Data(base64Encoded: payload)
+        } else {
+            data = payload.removingPercentEncoding.map { Data($0.utf8) }
+        }
+        guard let data, let image = NSImage(data: data), image.size.width > 0 else { return nil }
+        imageCache.setObject(image, forKey: key)
+        return image
     }
 
 
@@ -986,11 +1093,43 @@ final class BoardRenderer {
     ) {
         let attributed = attributedString(text, fontSize: fontSize, color: color)
         let size = attributed.size()
+        let maxWidth = max(rect.width - 8, 10)
+
+        // Names wider than the block wrap onto extra lines while the frame
+        // has room (draw.io/Excalidraw imports keep their small frames);
+        // only when even wrapping can't fit does truncation kick in.
+        if size.width > maxWidth, rect.height > size.height * 2.2 {
+            let wrapped = NSMutableAttributedString(attributedString: attributed)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            paragraph.lineBreakMode = .byWordWrapping
+            wrapped.addAttribute(
+                .paragraphStyle, value: paragraph,
+                range: NSRange(location: 0, length: wrapped.length)
+            )
+            let maxLines = min(3, Int((rect.height - 6) / max(size.height, 1)))
+            let bounds = wrapped.boundingRect(
+                with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin]
+            )
+            let height = min(bounds.height, CGFloat(maxLines) * size.height)
+            if height > size.height, maxLines >= 2 {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+                wrapped.draw(
+                    with: CGRect(x: rect.minX + 4, y: rect.midY - height / 2,
+                                 width: maxWidth, height: height),
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+                )
+                NSGraphicsContext.restoreGraphicsState()
+                return
+            }
+        }
+
         // Center the VISIBLE (possibly truncated) width — centering the full
         // text width made oversized names start left of their own block and
         // spill over neighbors.
-        let maxWidth = rect.width - 8
-        let visibleWidth = min(size.width, max(maxWidth, 10))
+        let visibleWidth = min(size.width, maxWidth)
         let origin = CGPoint(
             x: rect.midX - visibleWidth / 2,
             y: rect.midY - size.height / 2

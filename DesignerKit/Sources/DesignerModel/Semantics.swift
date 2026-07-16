@@ -51,8 +51,12 @@ public struct NodeShape: RawRepresentable, Hashable, Codable, Sendable, Expressi
     public static let ellipse: NodeShape = "ellipse"
     public static let diamond: NodeShape = "diamond"
     public static let triangle: NodeShape = "triangle"
+    public static let cylinder: NodeShape = "cylinder"
+    public static let cloud: NodeShape = "cloud"
 
-    public static let allBuiltIn: [NodeShape] = [.rectangle, .ellipse, .diamond, .triangle]
+    public static let allBuiltIn: [NodeShape] = [
+        .rectangle, .ellipse, .diamond, .triangle, .cylinder, .cloud,
+    ]
 }
 
 /// Orientation for shapes that have one (triangles): which way the apex
