@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.1 — 2026-07-16
+
+- FIX: flow recording now follows your clicks. With B→C, B→A, A→C,
+  clicking B, A, C records B→A then A→C — the walk continues from the
+  block you last clicked (the "cursor", shown with the strongest glow)
+  instead of firing a parallel second departure from B. Clicking an
+  already-visited block moves the cursor back there, which is how you
+  record an intentional fan-out; undo moves the cursor back too.
+- FIX: draw.io edges that visually end ON a block but aren't bound to it
+  in the file (draw.io stores just a point on the block's border) now
+  import attached to that block instead of dangling — this was the
+  disconnected proxy-gateway ↔ agent edges after import.
+
 ## v0.5.0 — 2026-07-16
 
 draw.io/Excalidraw import now preserves the original diagram EXACTLY —

@@ -62,6 +62,7 @@ public enum DrawioFormat {
         var warnings: [String] = []
         var elementForCellID: [String: ElementID] = [:]
         var edgeElementForCellID: [String: ElementID] = [:]
+        var importedNodeFrames: [(id: ElementID, frame: Rect)] = []
 
         struct Cell {
             var id: String
@@ -286,7 +287,24 @@ public enum DrawioFormat {
                 ))
             )
             elementForCellID[cell.id] = element.id
+            importedNodeFrames.append((element.id, frame))
             try? board.apply(.insertElement(element))
+        }
+
+        // draw.io lets an edge END on a node without binding to it — the file
+        // stores only a point that happens to lie on the node's border. Those
+        // edges LOOK attached in draw.io, so import them attached: a floating
+        // endpoint on (or within a hair of) a block snaps to that block.
+        func snappedAnchor(forFreePoint point: Point) -> Anchor {
+            let tolerance = 4.0
+            let hit = importedNodeFrames
+                .filter { _, frame in
+                    point.x >= frame.x - tolerance && point.x <= frame.maxX + tolerance
+                        && point.y >= frame.y - tolerance && point.y <= frame.maxY + tolerance
+                }
+                .min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+            guard let hit else { return .free(point) }
+            return .element(hit.id, side: nil, offset: nil)
         }
 
         // draw.io fixed connection points: exitX/exitY (source side),
@@ -320,7 +338,7 @@ public enum DrawioFormat {
             if let sourceID = cell.source.flatMap({ elementForCellID[$0] }) {
                 from = pinnedAnchor(cell, xKey: "exitX", yKey: "exitY", elementID: sourceID)
             } else if let point = cell.sourcePoint {
-                from = .free(translated(point))
+                from = snappedAnchor(forFreePoint: translated(point))
             } else {
                 warnings.append("edge '\(cell.id)' has no source — skipped")
                 continue
@@ -329,7 +347,7 @@ public enum DrawioFormat {
             if let targetID = cell.target.flatMap({ elementForCellID[$0] }) {
                 to = pinnedAnchor(cell, xKey: "entryX", yKey: "entryY", elementID: targetID)
             } else if let point = cell.targetPoint {
-                to = .free(translated(point))
+                to = snappedAnchor(forFreePoint: translated(point))
             } else {
                 warnings.append("edge '\(cell.id)' has no target — skipped")
                 continue
