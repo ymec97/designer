@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.2 — 2026-07-17
+
+- NEW: connector endpoints are draggable. A lone selected connector shows
+  grips at both ends (plus the midpoint bend dot); drag a grip onto a
+  block to reattach the connector there, drop it on empty canvas to
+  detach it. This is also how you re-home an imported orange (dangling)
+  connector. While a connector is selected its grips own the spot they
+  sit on — click empty canvas first if you want to drag a NEW connection
+  from that exact border point.
+- Import: unbound endpoints now snap to the NEAREST block within 10pt
+  (was: only points inside a slightly expanded frame), so more draw.io
+  edges arrive connected.
+- Import: a draw.io text cell with connectors attached now imports as a
+  block (keeping its colors) instead of a note — its connectors stay
+  attached instead of dangling orange.
+
 ## v0.5.1 — 2026-07-16
 
 - FIX: flow recording now follows your clicks. With B→C, B→A, A→C,

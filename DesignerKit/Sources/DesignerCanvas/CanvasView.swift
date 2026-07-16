@@ -274,15 +274,22 @@ public final class CanvasView: NSView {
         case draw(points: [StrokePoint], startedAt: TimeInterval)
         /// Dragging an already-selected connector bends it (P5).
         case bendEdge(id: ElementID, start: CGPoint)
+        /// Dragging a selected connector BY AN ENDPOINT moves that endpoint:
+        /// drop on a block to reattach, drop on canvas to detach (dangling).
+        case moveEndpoint(id: ElementID, end: EdgeEndpoint, target: ElementID?)
         /// Space-bar held: drag anywhere to pan (mouse-friendly navigation).
         case spacePan(last: CGPoint)
     }
+
+    enum EdgeEndpoint { case from, to }
 
     /// True while the space bar is held — the next drag pans the canvas.
     private var isSpacePanHeld = false
 
     /// Live bend during a `.bendEdge` drag; committed as one operation on up.
     private var transientBend: (id: ElementID, point: Point)?
+    /// Live endpoint position during a `.moveEndpoint` drag.
+    private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point)?
 
     /// World-space width of the border band that starts a connection drag
     /// instead of a move (in view pixels, so it feels constant at any zoom).
@@ -361,15 +368,24 @@ public final class CanvasView: NSView {
             }
         }
         if let bend = transientBend { dragAffectedEdges.insert(bend.id) }
+        if let endpoint = transientEndpoint { dragAffectedEdges.insert(endpoint.id) }
         let overrideFrames = transientFrames.isEmpty
             ? nil
             : board.frameProvider(overrides: transientFrames)
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
-        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache, transientBend, board] element in
+        let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache, transientBend, transientEndpoint, board] element in
             if let transientBend, transientBend.id == element.id, var edge = element.edge {
                 edge.waypoints = [transientBend.point]
+                return EdgeGeometry.route(
+                    for: edge, frames: overrideFrames ?? board.frameProvider())
+            }
+            if let transientEndpoint, transientEndpoint.id == element.id, var edge = element.edge {
+                switch transientEndpoint.end {
+                case .from: edge.from = .free(transientEndpoint.point)
+                case .to: edge.to = .free(transientEndpoint.point)
+                }
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames ?? board.frameProvider())
             }
@@ -534,12 +550,15 @@ public final class CanvasView: NSView {
             renderer.drawResizeHandles(around: handleBox, in: context)
         }
 
-        // Bend handle on a lone selected connector (P5): grab anywhere on the
-        // line to bow it; the dot marks the spot most people reach for.
+        // Handles on a lone selected connector: the midpoint dot bends the
+        // curve (P5); the two END grips move that endpoint — drop on a block
+        // to reattach, drop on canvas to detach.
         if selection.count == 1, let id = selection.first,
            board.elements[id]?.edge != nil,
            let element = board.elements[id], let route = routeFor(element) {
             renderer.drawBendHandle(at: viewport.toView(route.midpoint), in: context)
+            renderer.drawBendHandle(at: viewport.toView(route.start), in: context)
+            renderer.drawBendHandle(at: viewport.toView(route.end), in: context)
         }
 
         for guide in snapGuides {
@@ -1136,6 +1155,11 @@ public final class CanvasView: NSView {
                 renderer.highlightConnectTarget(viewport.toView(targetFrame), in: context)
             }
 
+        case .moveEndpoint(_, _, let target):
+            if let target, let frame = board.frameProvider(overrides: transientFrames)(target) {
+                renderer.highlightConnectTarget(viewport.toView(frame), in: context)
+            }
+
         default:
             break
         }
@@ -1241,6 +1265,27 @@ public final class CanvasView: NSView {
             return
         }
 
+        // The END GRIPS of a lone selected connector win over everything —
+        // they sit ON node borders, where the connect band would otherwise
+        // swallow the drag. Grabbing one moves that endpoint: drop on a
+        // block to reattach, drop on canvas to detach.
+        if selection.count == 1, let selectedID = selection.first,
+           board.elements[selectedID]?.edge != nil,
+           !event.modifierFlags.contains(.shift),
+           let route = routeCache[selectedID] {
+            let grabRadius: CGFloat = 12
+            let startView = viewport.toView(route.start)
+            let endView = viewport.toView(route.end)
+            if hypot(point.x - startView.x, point.y - startView.y) < grabRadius {
+                gesture = .moveEndpoint(id: selectedID, end: .from, target: nil)
+                return
+            }
+            if hypot(point.x - endView.x, point.y - endView.y) < grabRadius {
+                gesture = .moveEndpoint(id: selectedID, end: .to, target: nil)
+                return
+            }
+        }
+
         let hit = editableElement(at: point)
 
         // Starting a drag from a node's border band creates a connection.
@@ -1292,6 +1337,17 @@ public final class CanvasView: NSView {
             let distance = hypot(point.x - start.x, point.y - start.y)
             guard distance > 3 || transientBend != nil else { return }
             transientBend = (id, viewport.toWorld(point))
+            needsDisplay = true
+
+        case .moveEndpoint(let id, let end, _):
+            let world = viewport.toWorld(point)
+            transientEndpoint = (id, end, world)
+            // Highlight the block the endpoint would attach to — anywhere on
+            // the other end's block means "cancel", not a self-loop.
+            let otherEnd = board.elements[id]?.edge.map { end == .from ? $0.to : $0.from }
+            let candidate = editableNode(at: point)?.id
+            let targetID = candidate == otherEnd?.elementID ? nil : candidate
+            gesture = .moveEndpoint(id: id, end: end, target: targetID)
             needsDisplay = true
 
         case .mouseDown(let start, let hitID, _):
@@ -1446,6 +1502,29 @@ public final class CanvasView: NSView {
                 )
                 delegate?.canvasView(self, perform: .insertElement(element), actionName: "Draw")
                 strokeFinished?(element.id)
+            }
+            needsDisplay = true
+
+        case .moveEndpoint(let id, let end, let targetID):
+            defer { transientEndpoint = nil }
+            if let dragged = transientEndpoint, var element = board.elements[id], var edge = element.edge {
+                let otherEnd = end == .from ? edge.to : edge.from
+                // Dropping on the other end's own block is a cancel (a
+                // self-loop connector would be meaningless), as is a drop
+                // that never moved.
+                if targetID != otherEnd.elementID {
+                    let anchor: DesignerModel.Anchor
+                    if let targetID {
+                        anchor = .element(targetID, side: nil, offset: nil)
+                    } else {
+                        anchor = .free(dragged.point)
+                    }
+                    if end == .from { edge.from = anchor } else { edge.to = anchor }
+                    element.content = .edge(edge)
+                    delegate?.canvasView(
+                        self, perform: .replaceElement(element),
+                        actionName: targetID != nil ? "Reconnect Connector" : "Detach Connector")
+                }
             }
             needsDisplay = true
 

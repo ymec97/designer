@@ -60,9 +60,10 @@ final class UITestDriver {
         step21VersionHistory()
         step22BendConnector()
         step23RepeatConnectionCreatesParallel()
+        step24DragEndpointToReattach()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach verified")
             exit(0)
         } else {
             for failure in failures {
@@ -737,6 +738,81 @@ final class UITestDriver {
         document.undoManager?.undo() // test graph
     }
 
+    /// Dragging a selected connector's END GRIP moves that endpoint: dropping
+    /// it on another block reattaches, dropping on empty canvas detaches.
+    private func step24DragEndpointToReattach() {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double, _ y: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: y, width: 120, height: 60))))
+        }
+        let a = node("re-a", 0, 3600), b = node("re-b", 420, 3600), c = node("re-c", 420, 3800)
+        let edgeElement = Element(
+            layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.batch([
+            .insertElement(a), .insertElement(b), .insertElement(c), .insertElement(edgeElement),
+        ]), actionName: "Reattach Test Graph")
+        canvasView.reveal(worldRect: Rect(x: -50, y: 3500, width: 700, height: 500))
+        canvasView.select([edgeElement.id])
+        pumpRunLoop()
+
+        func currentEdge() -> Edge? { document.board.elements[edgeElement.id]?.edge }
+        guard let route = EdgeGeometry.route(
+            for: edgeElement.edge!, frames: document.board.frameProvider()) else {
+            expect(false, "no route for reattach edge")
+            return
+        }
+
+        // Drag the arrival end (at b) onto c.
+        let endView = canvasView.viewport.toView(route.end)
+        let cCenter = canvasView.viewport.toView(Point(x: 480, y: 3830))
+        send(.leftMouseDown, at: endView, clickCount: 1)
+        for step in 1...5 {
+            let t = CGFloat(step) / 5
+            send(.leftMouseDragged, at: CGPoint(
+                x: endView.x + (cCenter.x - endView.x) * t,
+                y: endView.y + (cCenter.y - endView.y) * t
+            ), clickCount: 1)
+        }
+        send(.leftMouseUp, at: cCenter, clickCount: 1)
+        pumpRunLoop()
+        expect(currentEdge()?.to.elementID == c.id,
+               "dropping the end grip on another block reattaches the connector")
+
+        // Drag it off to empty canvas — the connector detaches (dangles).
+        canvasView.select([edgeElement.id])
+        pumpRunLoop()
+        guard let rerouted = EdgeGeometry.route(
+            for: currentEdge()!, frames: document.board.frameProvider()) else {
+            expect(false, "no rerouted route")
+            return
+        }
+        let endView2 = canvasView.viewport.toView(rerouted.end)
+        let empty = canvasView.viewport.toView(Point(x: 250, y: 3980))
+        send(.leftMouseDown, at: endView2, clickCount: 1)
+        for step in 1...5 {
+            let t = CGFloat(step) / 5
+            send(.leftMouseDragged, at: CGPoint(
+                x: endView2.x + (empty.x - endView2.x) * t,
+                y: endView2.y + (empty.y - endView2.y) * t
+            ), clickCount: 1)
+        }
+        send(.leftMouseUp, at: empty, clickCount: 1)
+        pumpRunLoop()
+        if case .free = currentEdge()?.to {
+            expect(true, "")
+        } else {
+            expect(false, "dropping the end grip on canvas should detach the connector")
+        }
+
+        document.undoManager?.undo() // detach
+        document.undoManager?.undo() // reattach
+        document.undoManager?.undo() // test graph
+    }
+
     /// Connecting an already-connected pair again creates a PARALLEL
     /// connector — never a silent absorb or bidirectional merge.
     private func step23RepeatConnectionCreatesParallel() {
@@ -773,6 +849,12 @@ final class UITestDriver {
             send(.leftMouseUp, at: end, clickCount: 1)
             pumpRunLoop()
             key(53) // escape dismisses the edge editor popover
+            pumpRunLoop()
+            // Deselect the fresh connector (a real user's dismiss-click does
+            // this) — while it stays selected its END GRIPS own the border
+            // spot, and the next drag would move an endpoint instead of
+            // creating the parallel.
+            click(at: canvasView.viewport.toView(Point(x: 210, y: 3920)), clickCount: 1)
             pumpRunLoop()
         }
 
