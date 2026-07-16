@@ -191,8 +191,14 @@ final class ForeignFormatTests: XCTestCase {
               </mxCell>
               <mxCell id="e3" value="looks-attached" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="n2">
                 <mxGeometry relative="1" as="geometry">
-                  <mxPoint x="-440" y="260" as="targetPoint"/>
+                  <mxPoint x="-434" y="260" as="targetPoint"/>
                 </mxGeometry>
+              </mxCell>
+              <mxCell id="t1" value="manual trigger" style="text;strokeColor=#d79b00;fillColor=#ffe6cc;" vertex="1" parent="1">
+                <mxGeometry x="600" y="600" width="130" height="30" as="geometry"/>
+              </mxCell>
+              <mxCell id="e4" value="fires" style="edgeStyle=none;" edge="1" parent="1" source="t1" target="n2">
+                <mxGeometry relative="1" as="geometry"/>
               </mxCell>
             </root></mxGraphModel>
           </diagram>
@@ -241,13 +247,21 @@ final class ForeignFormatTests: XCTestCase {
                        "floating endpoints import as free anchors instead of being dropped")
 
         // draw.io stores unbound endpoints that visually END on a node as a
-        // bare point on its border — those must import ATTACHED.
+        // bare point on or near its border — those must import ATTACHED.
         let collectorID = try XCTUnwrap(board.elements.values.first {
             $0.node?.semantic.name == "collector"
         }?.id)
         let looksAttached = try XCTUnwrap(edges.first { $0.semantic.label == "looks-attached" })
         XCTAssertEqual(looksAttached.to.elementID, collectorID,
-                       "a free endpoint on a block's border snaps to the block")
+                       "a free endpoint near a block's border snaps to the block")
+
+        // A text cell with arrows attached is semantically a block — it must
+        // import as one so its edges bind (a note can't anchor a connector).
+        let trigger = try XCTUnwrap(nodes.first { $0.semantic.name == "manual trigger" })
+        XCTAssertEqual(trigger.style.fill, "#ffe6cc")
+        let fires = try XCTUnwrap(edges.first { $0.semantic.label == "fires" })
+        XCTAssertNotNil(fires.from.elementID,
+                        "edges bound to text cells stay attached (text becomes a block)")
     }
 
     func testDrawioRoundTripKeepsRouteAndColors() throws {

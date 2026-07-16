@@ -259,17 +259,24 @@ public enum DrawioFormat {
             cell.styleTokens.contains("edgeLabel") || cell.style["edgeLabel"] != nil
         }
 
+        // Cells that edges attach to must become BLOCKS — an edge can't
+        // anchor to a note, and a text box with arrows is semantically a
+        // block anyway (event triggers, annotations that feed a node…).
+        let edgeEndpointCellIDs: Set<String> = Set(cells.filter(\.isEdge)
+            .flatMap { [$0.source, $0.target].compactMap { $0 } })
+
         // Vertices: containers become boundaries, text-style cells notes,
         // the rest blocks. Frames are kept EXACTLY as drawn.
         for cell in cells where cell.isVertex && !isEdgeLabel(cell) && !cell.relative {
             guard let frame = absoluteFrame(of: cell), frame.width > 0, frame.height > 0 else { continue }
-            if isContainer(cell) {
+            let isEdgeEndpoint = edgeEndpointCellIDs.contains(cell.id)
+            if isContainer(cell), !isEdgeEndpoint {
                 let element = Element(layerIDs: [layer], sortKey: board.topSortKey,
                                       content: .boundary(Note(text: cell.value, frame: frame)))
                 try? board.apply(.insertElement(element))
                 continue
             }
-            if isTextCell(cell) {
+            if isTextCell(cell), !isEdgeEndpoint {
                 guard !cell.value.isEmpty else { continue }
                 let element = Element(layerIDs: [layer], sortKey: board.topSortKey,
                                       content: .note(Note(text: cell.value, frame: frame,
@@ -292,17 +299,20 @@ public enum DrawioFormat {
         }
 
         // draw.io lets an edge END on a node without binding to it — the file
-        // stores only a point that happens to lie on the node's border. Those
-        // edges LOOK attached in draw.io, so import them attached: a floating
-        // endpoint on (or within a hair of) a block snaps to that block.
+        // stores only a point at (or near) the node's border. Those edges
+        // LOOK attached in draw.io, so import them attached: a floating
+        // endpoint within reach of a block snaps to the nearest one.
         func snappedAnchor(forFreePoint point: Point) -> Anchor {
-            let tolerance = 4.0
+            let tolerance = 10.0
+            func distance(to frame: Rect) -> Double {
+                let dx = max(frame.x - point.x, 0, point.x - frame.maxX)
+                let dy = max(frame.y - point.y, 0, point.y - frame.maxY)
+                return (dx * dx + dy * dy).squareRoot()
+            }
             let hit = importedNodeFrames
-                .filter { _, frame in
-                    point.x >= frame.x - tolerance && point.x <= frame.maxX + tolerance
-                        && point.y >= frame.y - tolerance && point.y <= frame.maxY + tolerance
-                }
-                .min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+                .map { (id: $0.id, gap: distance(to: $0.frame), area: $0.frame.width * $0.frame.height) }
+                .filter { $0.gap <= tolerance }
+                .min { ($0.gap, $0.area) < ($1.gap, $1.area) }
             guard let hit else { return .free(point) }
             return .element(hit.id, side: nil, offset: nil)
         }
