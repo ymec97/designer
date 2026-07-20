@@ -91,10 +91,18 @@ public enum LLMInterchange {
     /// Parses pasted text (which may contain surrounding prose or ``` fences)
     /// into a board. Tolerant of missing positions and unknown edge endpoints.
     public static func parse(_ text: String) throws -> ParseResult {
+        try parse(text, anchoredTo: nil)
+    }
+
+    /// Parse for PROPOSALS: nodes matching a block on `current` (by wire id
+    /// or slugged name) that omit positions inherit that block's frame, so
+    /// an agent edit lands ON the existing graph instead of rebuilding it
+    /// far away; only genuinely new nodes are auto-placed.
+    public static func parse(_ text: String, anchoredTo current: Board?) throws -> ParseResult {
         guard let jsonString = extractJSONObject(from: text) else {
             throw ImportError.noJSONObject
         }
-        let wire: WireBoard
+        var wire: WireBoard
         do {
             wire = try decoder.decode(WireBoard.self, from: Data(jsonString.utf8))
         } catch let error as DecodingError {
@@ -104,6 +112,9 @@ public enum LLMInterchange {
         }
         guard wire.format == nil || wire.format == formatName else {
             throw ImportError.wrongFormat("format is '\(wire.format ?? "")'")
+        }
+        if let current {
+            wire.anchorPositions(to: current)
         }
         return wire.toBoard()
     }

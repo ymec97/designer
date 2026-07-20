@@ -190,6 +190,37 @@ extension WireBoard {
 // MARK: - Wire → Board
 
 extension WireBoard {
+    /// Proposals must REUSE the current graph, not rebuild it elsewhere: any
+    /// proposed node that matches a current block (by wire id or slugged
+    /// name) and omits `at`/`size` inherits the block's CURRENT frame. The
+    /// review ghost then reads as an overlay on the existing diagram —
+    /// unchanged blocks stay put, only genuinely new ones get auto-placed
+    /// (beside their strongest-connected anchor). An explicit `at` still
+    /// wins — that is a deliberate move by the agent.
+    mutating func anchorPositions(to current: Board) {
+        var frameForKey: [String: Rect] = [:]
+        for element in current.elementsInZOrder {
+            guard let node = element.node else { continue }
+            let key = Self.slug(node.semantic.name.isEmpty
+                                ? node.semantic.kind.rawValue : node.semantic.name)
+            if !key.isEmpty, frameForKey[key] == nil {
+                frameForKey[key] = node.frame
+            }
+        }
+        guard !frameForKey.isEmpty else { return }
+
+        for index in nodes.indices {
+            let hasAt = nodes[index].at?.count == 2
+            let hasSize = nodes[index].size?.count == 2
+            if hasAt, hasSize { continue }
+            let nameKey = Self.slug(nodes[index].name ?? "")
+            let idKey = Self.slug(nodes[index].id)
+            guard let frame = frameForKey[nameKey] ?? frameForKey[idKey] else { continue }
+            if !hasAt { nodes[index].at = [frame.x, frame.y] }
+            if !hasSize { nodes[index].size = [frame.width, frame.height] }
+        }
+    }
+
     func toBoard() -> LLMInterchange.ParseResult {
         var board = Board(title: title ?? "Imported")
         var warnings: [String] = []

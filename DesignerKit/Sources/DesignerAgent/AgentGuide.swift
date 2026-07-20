@@ -16,9 +16,13 @@ public enum AgentGuide {
     ## Editing the board (the only write path)
     1. Call get_board — the full board as JSON with stable, name-based ids.
     2. Edit that JSON. Send the COMPLETE board back via propose_board: anything \
-    you omit is DELETED. Keep existing nodes' `at`/`size` untouched unless asked \
-    to rearrange; omit `at`/`size` only for NEW nodes (they auto-arrange \
-    left-to-right in data-flow order).
+    you omit is DELETED. REUSE the existing blocks: keep their ids and names \
+    EXACTLY as get_board returned them — matched blocks stay at their current \
+    position, so the user reviews your change as green additions and red \
+    deletions overlaid on the diagram they already know. Renaming a block \
+    breaks the match (it reviews as delete + add somewhere else). Keep \
+    existing `at`/`size` untouched unless asked to rearrange; omit `at`/`size` \
+    only for NEW nodes (they auto-place beside the blocks they connect to).
     3. The user sees your proposal as ghosts on the canvas plus a diff, and \
     Accepts or Rejects. Nothing applies until they accept. Call get_board \
     afterwards to see what they decided before proposing again.

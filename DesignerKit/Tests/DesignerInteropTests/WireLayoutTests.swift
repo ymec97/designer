@@ -140,6 +140,55 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(node.semantic.kind, .cache)
     }
 
+    /// Proposals REUSE the current graph: matched blocks (by name) inherit
+    /// their current frame when the wire omits positions, so an agent edit
+    /// overlays the existing diagram instead of rebuilding it far away.
+    func testAnchoredParseInheritsMatchedFrames() throws {
+        var current = Board(title: "Current")
+        let layer = current.layers[0].id
+        func place(_ name: String, _ x: Double, _ y: Double) {
+            try! current.apply(.insertElement(Element(
+                layerIDs: [layer], sortKey: current.topSortKey,
+                content: .node(Node(semantic: NodeSemantic(name: name),
+                                    frame: Rect(x: x, y: y, width: 150, height: 70))))))
+        }
+        place("Web App", 2000, 3000)
+        place("Orders DB", 2400, 3000)
+
+        // Agent resends both blocks WITHOUT positions + one new block.
+        let proposal = """
+        # designer-board
+
+        {"nodes":[{"id":"web-app","name":"Web App"},
+                  {"id":"orders-db","name":"Orders DB"},
+                  {"id":"cache","name":"Hot Cache","kind":"cache"}],
+         "edges":[{"from":"web-app","to":"cache","label":"reads"}]}
+        """
+        let anchored = try LLMInterchange.parse(proposal, anchoredTo: current).board
+
+        XCTAssertEqual(frame(anchored, "Web App"), Rect(x: 2000, y: 3000, width: 150, height: 70),
+                       "matched block keeps its exact current frame")
+        XCTAssertEqual(frame(anchored, "Orders DB").x, 2400)
+        let cache = frame(anchored, "Hot Cache")
+        XCTAssertGreaterThan(cache.x, 2000, "the NEW block lands beside the existing graph, not at the origin")
+        XCTAssertGreaterThan(cache.y, 1000, "…vertically near the graph too")
+
+        // An explicit `at` from the agent still wins over inheritance.
+        let movedProposal = """
+        # designer-board
+
+        {"nodes":[{"id":"web-app","name":"Web App","at":[5000,5000],"size":[150,70]},
+                  {"id":"orders-db","name":"Orders DB"}],"edges":[]}
+        """
+        let moved = try LLMInterchange.parse(movedProposal, anchoredTo: current).board
+        XCTAssertEqual(frame(moved, "Web App").x, 5000, "explicit at is a deliberate move")
+        XCTAssertEqual(frame(moved, "Orders DB").x, 2400, "unmoved match still inherits")
+
+        // Un-anchored parse (plain import) is unchanged: auto-layout from scratch.
+        let plain = try LLMInterchange.parse(proposal).board
+        XCTAssertLessThan(frame(plain, "Web App").x, 1000, "plain parse still lays out fresh")
+    }
+
     func testNoEdgesStacksCompactly() {
         // No edges = no flow: one tidy column (spilling sideways past 10).
         let b = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)
