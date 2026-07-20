@@ -130,7 +130,10 @@ public final class MCPHandler {
         guard let bridge, let current = bridge.currentBoard() else { return .error(Self.noBoardMessage) }
         let parsed: LLMInterchange.ParseResult
         do {
-            parsed = try LLMInterchange.parse(text)
+            // Anchored parse: blocks the proposal REUSES (matched by name)
+            // keep their current position, so the review overlays the
+            // existing graph instead of rebuilding it somewhere far away.
+            parsed = try LLMInterchange.parse(text, anchoredTo: current)
         } catch {
             return .error("Couldn't parse the proposed board: \((error as? LocalizedError)?.errorDescription ?? "\(error)")")
         }

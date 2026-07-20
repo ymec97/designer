@@ -109,6 +109,40 @@ final class MCPHandlerTests: XCTestCase {
         XCTAssertTrue(text.contains("not been applied"), "must tell the agent it's pending approval")
     }
 
+    /// The user-reported case: a proposal that resends existing blocks
+    /// WITHOUT positions must keep them where they are (reuse, not rebuild),
+    /// so the review ghost overlays the current graph.
+    func testProposeWithoutPositionsReusesCurrentLayout() {
+        // Give the current blocks distinctive positions far from the origin.
+        var current = bridge.board!
+        for id in current.elements.keys {
+            guard var element = current.elements[id], var node = element.node else { continue }
+            node.frame = Rect(x: node.semantic.name == "web" ? 3000 : 3400, y: 2500,
+                              width: 160, height: 80)
+            element.content = .node(node)
+            try! current.apply(.replaceElement(element))
+        }
+        bridge.board = current
+
+        // Agent resends the same blocks with NO at/size + one new block.
+        let proposed = #"{"nodes":[{"id":"web","name":"web","kind":"client"},{"id":"api","name":"api","kind":"gateway"},{"id":"db","name":"db","kind":"database"}],"edges":[{"from":"web","to":"api"},{"from":"api","to":"db"}]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        _ = handler.handle(data)
+
+        let staged = bridge.stagedProposal!
+        func frame(_ name: String) -> Rect {
+            staged.elements.values.first { $0.node?.semantic.name == name }!.node!.frame
+        }
+        XCTAssertEqual(frame("web").x, 3000, "matched block stays put")
+        XCTAssertEqual(frame("api").x, 3400, "matched block stays put")
+        XCTAssertGreaterThan(frame("db").x, 3000,
+                             "the new block lands beside the graph, not at the layout origin")
+    }
+
     func testProposeInvalidBoardIsError() {
         let request: [String: Any] = [
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",

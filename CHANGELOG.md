@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.0 — 2026-07-20
+
+Agent proposals now REUSE the existing graph instead of rebuilding it
+somewhere far away.
+
+- propose_board parses anchored to the current board: proposed blocks
+  matching an existing block (by wire id or name) that omit `at`/`size`
+  inherit the block's CURRENT position, so the review ghost reads as an
+  overlay on the diagram you already know — green new blocks/arrows, red
+  deletions, unchanged blocks exactly where they were. Only genuinely
+  new blocks are auto-placed, and they land beside the blocks they
+  connect to rather than at the layout origin.
+- An explicit `at` from the agent still wins (that's a deliberate move);
+  plain imports (paste/LLM text) still lay out from scratch.
+- Agent guide teaches the contract: keep ids/names exactly as get_board
+  returned them — renaming a block breaks the match and reviews as
+  delete + add.
+
 ## v0.6.1 — 2026-07-20
 
 - FIX: the database cylinder drew a dark hole over the top of its label
