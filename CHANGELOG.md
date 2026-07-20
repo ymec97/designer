@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.1 — 2026-07-20
+
+- FIX: the database cylinder drew a dark hole over the top of its label
+  (the lid rim was part of the FILL path, and its winding punched through
+  the drum — visible on the imported RDS Postgres block). The rim is
+  stroke-only now, and cylinder labels center in the drum below the lid.
+
 ## v0.6.0 — 2026-07-17
 
 - NEW: multi-joint connectors. A connector can carry any number of bend
