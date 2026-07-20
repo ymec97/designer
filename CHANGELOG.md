@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0 — 2026-07-17
+
+- NEW: multi-joint connectors. A connector can carry any number of bend
+  joints, each with its own grip: grab a segment of a selected connector
+  to grow a new joint there, drag any joint to move just that joint, and
+  drop a joint back onto the line between its neighbors to remove it
+  (dropping the last one straightens the connector, as before). Imported
+  draw.io routes — which arrive with several waypoints — are now fully
+  editable joint by joint.
+
 ## v0.5.2 — 2026-07-17
 
 - NEW: connector endpoints are draggable. A lone selected connector shows
