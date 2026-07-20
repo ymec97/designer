@@ -712,30 +712,55 @@ final class UITestDriver {
         pumpRunLoop()
         expect(currentWaypoints().count == 1, "drag should bend the connector (one waypoint)")
 
-        // Straighten: drag the bend back onto the straight line.
-        guard let bentRoute = EdgeGeometry.route(
-            for: document.board.elements[edgeElement.id]!.edge!,
-            frames: document.board.frameProvider()) else {
-            expect(false, "no bent route")
-            return
+        func drag(from: CGPoint, to: CGPoint) {
+            send(.leftMouseDown, at: from, clickCount: 1)
+            for step in 1...5 {
+                let t = CGFloat(step) / 5
+                send(.leftMouseDragged, at: CGPoint(
+                    x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t
+                ), clickCount: 1)
+            }
+            send(.leftMouseUp, at: to, clickCount: 1)
+            pumpRunLoop()
         }
+        func route() -> EdgeGeometry.Route? {
+            EdgeGeometry.route(for: document.board.elements[edgeElement.id]!.edge!,
+                               frames: document.board.frameProvider())
+        }
+
+        // SECOND joint: grab the segment between the first joint and the end
+        // and pull it downward — connectors hold any number of joints.
         canvasView.select([edgeElement.id])
-        let bendView = canvasView.viewport.toView(bentRoute.point(atFraction: 0.5))
-        send(.leftMouseDown, at: bendView, clickCount: 1)
-        for step in 1...5 {
-            let t = CGFloat(step) / 5
-            send(.leftMouseDragged, at: CGPoint(
-                x: bendView.x + (midView.x - bendView.x) * t,
-                y: bendView.y + (midView.y - bendView.y) * t
-            ), clickCount: 1)
-        }
-        send(.leftMouseUp, at: midView, clickCount: 1)
-        pumpRunLoop()
+        guard let bentRoute = route() else { expect(false, "no bent route"); return }
+        let farView = canvasView.viewport.toView(bentRoute.point(atFraction: 0.78))
+        drag(from: farView, to: CGPoint(x: farView.x + 10, y: farView.y + 70))
+        expect(currentWaypoints().count == 2, "grabbing a segment grows a second joint")
+
+        // Move the FIRST joint on its own — the other joint must not move.
+        let secondBefore = currentWaypoints().count == 2 ? currentWaypoints()[1] : Point.zero
+        canvasView.select([edgeElement.id])
+        let firstView = canvasView.viewport.toView(currentWaypoints()[0])
+        drag(from: firstView, to: CGPoint(x: firstView.x - 24, y: firstView.y - 24))
+        expect(currentWaypoints().count == 2, "moving a joint keeps the others")
+        expect(currentWaypoints()[1] == secondBefore, "the untouched joint stays put")
+
+        // Remove the second joint: drop it on the line between its neighbors.
+        canvasView.select([edgeElement.id])
+        guard let multiRoute = route() else { expect(false, "no multi route"); return }
+        let joints = currentWaypoints()
+        let neighborMid = Point(x: (joints[0].x + multiRoute.end.x) / 2,
+                                y: (joints[0].y + multiRoute.end.y) / 2)
+        drag(from: canvasView.viewport.toView(joints[1]),
+             to: canvasView.viewport.toView(neighborMid))
+        expect(currentWaypoints().count == 1, "dropping a joint on the line removes it")
+
+        // Straighten: drag the remaining joint back onto the straight line.
+        canvasView.select([edgeElement.id])
+        let bendView = canvasView.viewport.toView(currentWaypoints()[0])
+        drag(from: bendView, to: midView)
         expect(currentWaypoints().isEmpty, "dropping on the line should straighten")
 
-        document.undoManager?.undo() // straighten
-        document.undoManager?.undo() // bend
-        document.undoManager?.undo() // test graph
+        for _ in 0..<5 { document.undoManager?.undo() } // 4 joint edits + graph
     }
 
     /// Dragging a selected connector's END GRIP moves that endpoint: dropping

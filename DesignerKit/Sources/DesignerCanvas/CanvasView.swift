@@ -272,8 +272,11 @@ public final class CanvasView: NSView {
         case rubberBand(start: CGPoint, current: CGPoint)
         case connect(from: ElementID, current: CGPoint, target: ElementID?)
         case draw(points: [StrokePoint], startedAt: TimeInterval)
-        /// Dragging an already-selected connector bends it (P5).
-        case bendEdge(id: ElementID, start: CGPoint)
+        /// Dragging an already-selected connector bends it (P5). `index` is
+        /// the JOINT being dragged: an existing waypoint, or (`inserting`)
+        /// a new one born on the grabbed segment — connectors carry any
+        /// number of joints, each movable on its own.
+        case bendEdge(id: ElementID, index: Int, inserting: Bool, start: CGPoint)
         /// Dragging a selected connector BY AN ENDPOINT moves that endpoint:
         /// drop on a block to reattach, drop on canvas to detach (dangling).
         case moveEndpoint(id: ElementID, end: EdgeEndpoint, target: ElementID?)
@@ -286,8 +289,8 @@ public final class CanvasView: NSView {
     /// True while the space bar is held — the next drag pans the canvas.
     private var isSpacePanHeld = false
 
-    /// Live bend during a `.bendEdge` drag; committed as one operation on up.
-    private var transientBend: (id: ElementID, point: Point)?
+    /// Live waypoint list during a `.bendEdge` drag; committed on up.
+    private var transientBend: (id: ElementID, waypoints: [Point])?
     /// Live endpoint position during a `.moveEndpoint` drag.
     private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point)?
 
@@ -377,7 +380,7 @@ public final class CanvasView: NSView {
         // was the difference between 45ms and 16ms frames at fit zoom.
         let routeFor: (Element) -> EdgeGeometry.Route? = { [routeCache, parallelOffsetCache, anchorSpreadCache, transientBend, transientEndpoint, board] element in
             if let transientBend, transientBend.id == element.id, var edge = element.edge {
-                edge.waypoints = [transientBend.point]
+                edge.waypoints = transientBend.waypoints
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames ?? board.frameProvider())
             }
@@ -550,13 +553,21 @@ public final class CanvasView: NSView {
             renderer.drawResizeHandles(around: handleBox, in: context)
         }
 
-        // Handles on a lone selected connector: the midpoint dot bends the
-        // curve (P5); the two END grips move that endpoint — drop on a block
-        // to reattach, drop on canvas to detach.
+        // Handles on a lone selected connector: one dot per JOINT (drag to
+        // move it, drop on the line to remove it), the midpoint dot when the
+        // line is still straight (drag to grow the first joint), and the two
+        // END grips (drop on a block to reattach, on canvas to detach).
         if selection.count == 1, let id = selection.first,
-           board.elements[id]?.edge != nil,
-           let element = board.elements[id], let route = routeFor(element) {
-            renderer.drawBendHandle(at: viewport.toView(route.midpoint), in: context)
+           let element = board.elements[id], let edge = element.edge,
+           let route = routeFor(element) {
+            let joints = transientBend?.id == id ? transientBend!.waypoints : edge.waypoints
+            if joints.isEmpty {
+                renderer.drawBendHandle(at: viewport.toView(route.midpoint), in: context)
+            } else {
+                for joint in joints {
+                    renderer.drawBendHandle(at: viewport.toView(joint), in: context)
+                }
+            }
             renderer.drawBendHandle(at: viewport.toView(route.start), in: context)
             renderer.drawBendHandle(at: viewport.toView(route.end), in: context)
         }
@@ -1284,6 +1295,16 @@ public final class CanvasView: NSView {
                 gesture = .moveEndpoint(id: selectedID, end: .to, target: nil)
                 return
             }
+            // An existing JOINT under the cursor drags on its own — grips
+            // beat everything, wherever the joint happens to sit.
+            if let edge = board.elements[selectedID]?.edge,
+               let jointIndex = edge.waypoints.firstIndex(where: { waypoint in
+                   let view = viewport.toView(waypoint)
+                   return hypot(point.x - view.x, point.y - view.y) < grabRadius
+               }) {
+                gesture = .bendEdge(id: selectedID, index: jointIndex, inserting: false, start: point)
+                return
+            }
         }
 
         let hit = editableElement(at: point)
@@ -1300,11 +1321,24 @@ public final class CanvasView: NSView {
         }
 
         // Dragging a connector that is already the (sole) selection bends it:
-        // the curve follows the mouse, dropping near the straight line
-        // straightens it back (P5).
-        if let hit, hit.edge != nil, selection == [hit.id],
+        // grabbing a segment grows a NEW joint there and drags it; dropping
+        // a joint back on the line between its neighbors removes it (P5).
+        if let hit, let edge = hit.edge, selection == [hit.id],
            !event.modifierFlags.contains(.shift) {
-            gesture = .bendEdge(id: hit.id, start: point)
+            let world = viewport.toWorld(point)
+            var insertAt = edge.waypoints.count
+            if let route = routeCache[hit.id], !edge.waypoints.isEmpty {
+                // Which segment of start → joints → end was grabbed?
+                let vertices = [route.start] + edge.waypoints + [route.end]
+                var best = Double.greatestFiniteMagnitude
+                for i in 0..<(vertices.count - 1) {
+                    let d = EdgeGeometry.Route.segmentDistance(world, vertices[i], vertices[i + 1])
+                    if d < best { best = d; insertAt = i }
+                }
+            } else {
+                insertAt = 0
+            }
+            gesture = .bendEdge(id: hit.id, index: insertAt, inserting: true, start: point)
             return
         }
 
@@ -1333,10 +1367,18 @@ public final class CanvasView: NSView {
             viewport.pan(viewDeltaX: point.x - last.x, viewDeltaY: point.y - last.y)
             gesture = .spacePan(last: point)
 
-        case .bendEdge(let id, let start):
+        case .bendEdge(let id, let index, let inserting, let start):
             let distance = hypot(point.x - start.x, point.y - start.y)
             guard distance > 3 || transientBend != nil else { return }
-            transientBend = (id, viewport.toWorld(point))
+            // Rebuild from the (unchanged) board each event: idempotent.
+            var waypoints = board.elements[id]?.edge?.waypoints ?? []
+            let world = viewport.toWorld(point)
+            if inserting {
+                waypoints.insert(world, at: min(index, waypoints.count))
+            } else if waypoints.indices.contains(index) {
+                waypoints[index] = world
+            }
+            transientBend = (id, waypoints)
             needsDisplay = true
 
         case .moveEndpoint(let id, let end, _):
@@ -1528,24 +1570,39 @@ public final class CanvasView: NSView {
             }
             needsDisplay = true
 
-        case .bendEdge(let id, _):
+        case .bendEdge(let id, let index, let inserting, _):
             defer { transientBend = nil }
             if let bend = transientBend, var element = board.elements[id], var edge = element.edge {
-                // Dropping near the straight line straightens the connector.
-                var straight = edge
-                straight.waypoints = []
-                let tolerance = Double(8 / viewport.scale)
-                if let route = EdgeGeometry.route(for: straight, frames: board.frameProvider()),
-                   let last = route.points.last,
-                   EdgeGeometry.Route.segmentDistance(bend.point, route.start, last) < tolerance {
-                    edge.waypoints = []
-                } else {
-                    edge.waypoints = [bend.point]
+                var waypoints = bend.waypoints
+                let dragged = inserting ? min(index, max(waypoints.count - 1, 0)) : index
+
+                // Dropping a joint back onto the line between its NEIGHBORS
+                // removes it — the generalized straighten.
+                if waypoints.indices.contains(dragged) {
+                    var neighborEdge = edge
+                    var without = waypoints
+                    without.remove(at: dragged)
+                    neighborEdge.waypoints = without
+                    let tolerance = Double(8 / viewport.scale)
+                    if let route = EdgeGeometry.route(for: neighborEdge, frames: board.frameProvider()) {
+                        let vertices = [route.start] + without + [route.end]
+                        let previous = vertices[dragged]
+                        let next = vertices[dragged + 1]
+                        if EdgeGeometry.Route.segmentDistance(waypoints[dragged], previous, next) < tolerance {
+                            waypoints = without
+                        }
+                    }
                 }
+
+                edge.waypoints = waypoints
                 element.content = .edge(edge)
-                delegate?.canvasView(
-                    self, perform: .replaceElement(element),
-                    actionName: edge.waypoints.isEmpty ? "Straighten Connector" : "Bend Connector")
+                let actionName: String
+                if waypoints.count < bend.waypoints.count {
+                    actionName = waypoints.isEmpty ? "Straighten Connector" : "Remove Joint"
+                } else {
+                    actionName = inserting ? "Bend Connector" : "Move Joint"
+                }
+                delegate?.canvasView(self, perform: .replaceElement(element), actionName: actionName)
             }
 
         case .spacePan:
