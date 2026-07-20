@@ -277,6 +277,12 @@ final class BoardRenderer {
         } else {
             context.addPath(path)
             context.strokePath()
+            // The cylinder's lid rim is stroke-only decoration — putting it
+            // in the fill path punched a winding hole over the label.
+            if node.shape == .cylinder {
+                context.addPath(Self.cylinderRimPath(in: rect))
+                context.strokePath()
+            }
         }
 
         // The kind dot — one saturated spot of colour, top-left inside the
@@ -331,6 +337,12 @@ final class BoardRenderer {
         }
 
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !node.semantic.name.isEmpty {
+            // A cylinder's label lives in the drum, below the lid rim.
+            if node.shape == .cylinder, textRect == rect {
+                let lid = Self.cylinderLid(for: rect) * 1.6
+                textRect = CGRect(x: rect.minX, y: rect.minY + lid,
+                                  width: rect.width, height: rect.height - lid)
+            }
             drawText(
                 node.semantic.name,
                 fontSize: 13 * viewport.scale,
@@ -343,9 +355,12 @@ final class BoardRenderer {
 
     // MARK: - Imported-diagram support (shapes, images, contrast)
 
-    /// Database drum: elliptical lid, straight walls, elliptical foot.
+    /// Database drum BODY: elliptical lid, straight walls, elliptical foot.
+    /// Fill-safe — the visible front rim lives in `cylinderRimPath` and is
+    /// only ever stroked (inside the fill path its winding cut a hole that
+    /// blacked out the top of the label).
     static func cylinderPath(in rect: CGRect) -> CGPath {
-        let lid = min(rect.height * 0.16, rect.width * 0.4)
+        let lid = Self.cylinderLid(for: rect)
         let path = CGMutablePath()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY + lid))
         path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + lid),
@@ -354,11 +369,21 @@ final class BoardRenderer {
         path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - lid),
                           control: CGPoint(x: rect.midX, y: rect.maxY + lid * 0.6))
         path.closeSubpath()
-        // The lid's visible front rim.
+        return path
+    }
+
+    /// The lid's visible front rim — stroke only, never fill.
+    static func cylinderRimPath(in rect: CGRect) -> CGPath {
+        let lid = Self.cylinderLid(for: rect)
+        let path = CGMutablePath()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY + lid))
         path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + lid),
                           control: CGPoint(x: rect.midX, y: rect.minY + lid * 2.2))
         return path
+    }
+
+    private static func cylinderLid(for rect: CGRect) -> CGFloat {
+        min(rect.height * 0.16, rect.width * 0.4)
     }
 
     /// Cloud blob: four overlapping arcs over a flat-ish base.
