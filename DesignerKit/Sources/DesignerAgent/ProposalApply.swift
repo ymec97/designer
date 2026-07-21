@@ -64,12 +64,17 @@ public enum ProposalApply {
 }
 
 private extension Element {
-    /// True for the element kinds the LLM text format round-trips (blocks,
-    /// connectors, notes). Ink is not representable there and is preserved
-    /// across an agent proposal.
+    /// True for the elements the LLM text format round-trips (blocks,
+    /// connectors, notes). Ink and boundaries are not representable there and
+    /// are preserved across an agent proposal. A dangling connector (free
+    /// endpoint) is likewise invisible to the agent - the wire export only
+    /// emits edges whose both endpoints resolve to nodes - so it must survive
+    /// too, or every proposal would silently delete it.
     var isWireRepresentable: Bool {
         switch content {
-        case .node, .edge, .note: return true
+        case .node, .note: return true
+        case .edge(let edge):
+            return edge.from.elementID != nil && edge.to.elementID != nil
         case .ink, .boundary: return false // preserved across agent proposals
         }
     }
