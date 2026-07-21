@@ -29,12 +29,17 @@ final class BoardDiffTests: XCTestCase {
         XCTAssertEqual(diff.changedNodes.first?.id, "db")
     }
 
-    func testMoveIsNotAChange() {
-        // Same everything except position — should not register as changed.
+    func testMoveRegistersAsRepositionOnly() {
+        // Same everything except position — not a structural change, but it
+        // must not read as "no changes" either: a relayout needs review, and
+        // the proposing agent needs to hear that something happened.
         let current = board(wrap(#"{"nodes":[{"id":"a","name":"a","at":[0,0],"size":[100,50]}],"edges":[]}"#))
         let proposed = board(wrap(#"{"nodes":[{"id":"a","name":"a","at":[500,500],"size":[100,50]}],"edges":[]}"#))
         let diff = LLMInterchange.diff(current: current, proposed: proposed)
-        XCTAssertTrue(diff.isEmpty, "a pure move should not be a structural change")
+        XCTAssertTrue(diff.changedNodes.isEmpty, "a pure move is not a structural change")
+        XCTAssertEqual(diff.movedNodes.map(\.id), ["a"])
+        XCTAssertFalse(diff.isEmpty, "a relayout must not be dropped as a no-op")
+        XCTAssertEqual(diff.summaryLine, "~1 block repositioned")
     }
 
     func testAddedAndRemovedEdges() {

@@ -143,6 +143,40 @@ final class MCPHandlerTests: XCTestCase {
                              "the new block lands beside the graph, not at the layout origin")
     }
 
+    /// A proposal whose ONLY change is node positions (a relayout, or one
+    /// block nudged) must stage and report the moves — not tell the agent
+    /// the board is identical while the user sees a pending proposal.
+    func testProposePositionOnlyChangeReportsRepositioning() {
+        var current = bridge.board!
+        for id in current.elements.keys {
+            guard var element = current.elements[id], var node = element.node else { continue }
+            node.frame = Rect(x: node.semantic.name == "web" ? 100 : 400, y: 100,
+                              width: 160, height: 80)
+            element.content = .node(node)
+            try! current.apply(.replaceElement(element))
+        }
+        bridge.board = current
+
+        // Same blocks and connector, new explicit positions — nothing else.
+        let proposed = #"{"nodes":[{"id":"web","name":"web","kind":"client","at":[100,600],"size":[160,80]},{"id":"api","name":"api","kind":"gateway","at":[400,600],"size":[160,80]}],"edges":[{"from":"web","to":"api","protocol":"HTTPS"}]}"#
+        let request: [String: Any] = [
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+            "params": ["name": "propose_board", "arguments": ["board": proposed]],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: request)
+        let r = try! JSONSerialization.jsonObject(with: handler.handle(data)!) as! [String: Any]
+        let text = toolText(r)
+
+        XCTAssertFalse(text.contains("identical"), "a relayout is not a no-op: \(text)")
+        XCTAssertTrue(text.contains("~2 blocks repositioned"), "summary must count the moves: \(text)")
+        XCTAssertTrue(text.contains("(100, 100) 160×80 → (100, 600)"),
+                      "detail should show old → new footprints: \(text)")
+        XCTAssertTrue(text.contains("not been applied"), "still pending user approval")
+        let webFrame = bridge.stagedProposal!.elements.values
+            .first { $0.node?.semantic.name == "web" }!.node!.frame
+        XCTAssertEqual(webFrame.y, 600, "explicit positions must win over anchoring")
+    }
+
     func testProposeInvalidBoardIsError() {
         let request: [String: Any] = [
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
