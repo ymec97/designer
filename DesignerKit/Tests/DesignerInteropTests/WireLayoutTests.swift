@@ -189,6 +189,32 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertLessThan(frame(plain, "Web App").x, 1000, "plain parse still lays out fresh")
     }
 
+    /// The wire format carries no styling — matched blocks must inherit the
+    /// current board's Style so accepting a proposal never strips a shape's
+    /// colors/opacity.
+    func testAnchoredParseInheritsStyles() throws {
+        var current = Board(title: "Styled")
+        let layer = current.layers[0].id
+        let grouping = Style(fill: Style.noFill, stroke: "#D95757", strokeWidth: 2.5, opacity: 0.3)
+        try current.apply(.insertElement(Element(
+            layerIDs: [layer], sortKey: current.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "Group Box"),
+                                frame: Rect(x: 0, y: 0, width: 400, height: 300),
+                                style: grouping)))))
+
+        let proposal = """
+        # designer-board
+
+        {"nodes":[{"id":"group-box","name":"Group Box"},
+                  {"id":"newbie","name":"Newbie"}],"edges":[]}
+        """
+        let anchored = try LLMInterchange.parse(proposal, anchoredTo: current).board
+        let matched = anchored.elements.values.first { $0.node?.semantic.name == "Group Box" }!.node!
+        XCTAssertEqual(matched.style, grouping, "matched block keeps its style through the wire")
+        let newbie = anchored.elements.values.first { $0.node?.semantic.name == "Newbie" }!.node!
+        XCTAssertEqual(newbie.style, Style(), "new blocks arrive unstyled")
+    }
+
     func testNoEdgesStacksCompactly() {
         // No edges = no flow: one tidy column (spilling sideways past 10).
         let b = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)

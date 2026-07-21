@@ -225,30 +225,43 @@ final class BoardRenderer {
             )
         }
 
+        // Whole-element opacity: fill, stroke, and label fade as ONE via a
+        // transparency layer (bare setAlpha would double-composite where the
+        // stroke overlaps the fill edge).
+        let opacity = node.style.effectiveOpacity
+        if opacity < 1 {
+            context.saveGState()
+            context.setAlpha(CGFloat(opacity))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+
         // Soft elevation (Studio Graphite): a quiet drop shadow lifts the node
         // off the graphite ground. Skipped on dense boards (elevateNodes) to
-        // protect the frame budget.
-        let fillColor: CGColor
-        if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
-            fillColor = parsed.cgColor
-        } else {
-            fillColor = resolvedNodeFill(for: node.semantic.kind)
-        }
-        if elevateNodes {
-            context.saveGState()
-            context.setShadow(
-                offset: CGSize(width: 0, height: 1.5),
-                blur: 5 * viewport.scale,
-                color: Graphite.shadowColor.cgColor
-            )
-            context.setFillColor(fillColor)
-            context.addPath(path)
-            context.fillPath()
-            context.restoreGState()
-        } else {
-            context.setFillColor(fillColor)
-            context.addPath(path)
-            context.fillPath()
+        // protect the frame budget. `fill: "none"` shapes (grouping outlines)
+        // paint no background and cast no shadow.
+        if node.style.hasFill {
+            let fillColor: CGColor
+            if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
+                fillColor = parsed.cgColor
+            } else {
+                fillColor = resolvedNodeFill(for: node.semantic.kind)
+            }
+            if elevateNodes {
+                context.saveGState()
+                context.setShadow(
+                    offset: CGSize(width: 0, height: 1.5),
+                    blur: 5 * viewport.scale,
+                    color: Graphite.shadowColor.cgColor
+                )
+                context.setFillColor(fillColor)
+                context.addPath(path)
+                context.fillPath()
+                context.restoreGState()
+            } else {
+                context.setFillColor(fillColor)
+                context.addPath(path)
+                context.fillPath()
+            }
         }
 
         context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
@@ -287,8 +300,9 @@ final class BoardRenderer {
 
         // The kind dot — one saturated spot of colour, top-left inside the
         // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
-        // or triangle's corners crowd it).
-        let dottable = node.shape == .rectangle || node.shape == .ellipse
+        // or triangle's corners crowd it). Hollow (no-fill) shapes are
+        // decoration — a saturated dot on them reads as noise.
+        let dottable = (node.shape == .rectangle || node.shape == .ellipse) && node.style.hasFill
         if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
             let r = 3.4 * viewport.scale
             let inset = 13 * viewport.scale
@@ -332,10 +346,6 @@ final class BoardRenderer {
             }
         }
 
-        if isSelected {
-            strokeSelection(path: path, in: context, viewport: viewport)
-        }
-
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !node.semantic.name.isEmpty {
             // A cylinder's label lives in the drum, below the lid rim.
             if node.shape == .cylinder, textRect == rect {
@@ -346,10 +356,21 @@ final class BoardRenderer {
             drawText(
                 node.semantic.name,
                 fontSize: 13 * viewport.scale,
-                color: Self.textColor(onFill: node.style.fill),
+                color: node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText,
                 centeredIn: textRect,
                 context: context
             )
+        }
+
+        if opacity < 1 {
+            context.endTransparencyLayer()
+            context.restoreGState()
+        }
+
+        // Selection stays crisp OUTSIDE the opacity fade — a ghosted
+        // selection ring would look broken.
+        if isSelected {
+            strokeSelection(path: path, in: context, viewport: viewport)
         }
     }
 
@@ -476,6 +497,15 @@ final class BoardRenderer {
         context.setLineCap(.round)
         context.setLineJoin(.round)
 
+        // Stroke opacity via a transparency layer — the per-segment strokes
+        // overlap at joints and would double-darken under bare setAlpha.
+        let opacity = ink.style.effectiveOpacity
+        if opacity < 1 {
+            context.saveGState()
+            context.setAlpha(CGFloat(opacity))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+
         // Pressure-varying width: stroke per segment, width interpolated from
         // the endpoint pressures (0.5 = neutral for non-pressure devices).
         // Ink counts are small; per-segment stroking is fine.
@@ -488,6 +518,10 @@ final class BoardRenderer {
             context.addLine(to: viewport.toView(Point(x: point.x, y: point.y)))
             context.strokePath()
             previous = point
+        }
+        if opacity < 1 {
+            context.endTransparencyLayer()
+            context.restoreGState()
         }
 
         if isSelected, let bounds = SpatialIndex.boundingRect(of: Element(

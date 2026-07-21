@@ -195,10 +195,13 @@ public final class CanvasView: NSView {
         }
     }
 
-    /// Active interaction tool. Select is the default; Draw captures ink.
-    public enum Tool {
+    /// Active interaction tool. Select is the default; Draw captures ink;
+    /// Shape drags out a block of the given outline (`lockAspect` = the
+    /// square/circle picker entries; ⇧ constrains the free ones too).
+    public enum Tool: Equatable {
         case select
         case draw
+        case shape(NodeShape, lockAspect: Bool)
     }
 
     public var tool: Tool = .select {
@@ -215,6 +218,15 @@ public final class CanvasView: NSView {
 
     /// Observers (toolbar) are told when the tool changes, however it changes.
     public var toolChanged: ((Tool) -> Void)?
+
+    /// Style applied to the NEXT dragged shape (set by the style panel).
+    /// The default is the grouping-outline look the feature exists for:
+    /// no background, default stroke.
+    public var pendingShapeStyle = Style(fill: Style.noFill)
+    /// Style applied to NEW ink strokes (pencil settings in the style panel).
+    public var pendingInkStyle = Style(strokeWidth: 2)
+    /// The shape the shape tool returns to when re-activated via key/palette.
+    private var lastShapeChoice: (shape: NodeShape, lockAspect: Bool) = (.rectangle, false)
 
     /// Where new elements land (D9). Nil falls back to the first visible,
     /// unlocked layer. Set by the layers panel.
@@ -272,6 +284,8 @@ public final class CanvasView: NSView {
         case rubberBand(start: CGPoint, current: CGPoint)
         case connect(from: ElementID, current: CGPoint, target: ElementID?)
         case draw(points: [StrokePoint], startedAt: TimeInterval)
+        /// Shape tool: dragging out the new shape's frame.
+        case shapeDraw(start: CGPoint, current: CGPoint)
         /// Dragging an already-selected connector bends it (P5). `index` is
         /// the JOINT being dragged: an existing waypoint, or (`inserting`)
         /// a new one born on the grabbed segment — connectors carry any
@@ -1146,7 +1160,7 @@ public final class CanvasView: NSView {
 
         case .draw(let points, _) where points.count > 1:
             renderer.drawInk(
-                Ink(points: points, style: Style(strokeWidth: 2)),
+                Ink(points: points, style: pendingInkStyle),
                 in: context, viewport: viewport, isSelected: false
             )
 
@@ -1169,6 +1183,28 @@ public final class CanvasView: NSView {
         case .moveEndpoint(_, _, let target):
             if let target, let frame = board.frameProvider(overrides: transientFrames)(target) {
                 renderer.highlightConnectTarget(viewport.toView(frame), in: context)
+            }
+
+        case .shapeDraw(let start, let current):
+            if case .shape(let shape, _) = tool {
+                let band = rectFrom(start, current)
+                guard band.width >= 2 || band.height >= 2 else { break }
+                let world = Rect(
+                    x: viewport.toWorld(band.origin).x,
+                    y: viewport.toWorld(band.origin).y,
+                    width: Double(band.width) / viewport.scale,
+                    height: Double(band.height) / viewport.scale
+                )
+                // Live preview: the actual node render at reduced alpha, so
+                // what you drop is exactly what you saw.
+                var preview = pendingShapeStyle
+                preview.opacity = (preview.opacity ?? 1) * 0.65
+                let ghost = Element(
+                    layerIDs: [board.layers[0].id], sortKey: board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: ""),
+                                        frame: world, shape: shape, style: preview))
+                )
+                renderer.draw(ghost, in: context, viewport: viewport, isSelected: false)
             }
 
         default:
@@ -1252,6 +1288,11 @@ public final class CanvasView: NSView {
                 points: [strokePoint(from: event, at: point, since: event.timestamp)],
                 startedAt: event.timestamp
             )
+            return
+        }
+
+        if case .shape = tool {
+            gesture = .shapeDraw(start: point, current: point)
             return
         }
 
@@ -1445,6 +1486,13 @@ public final class CanvasView: NSView {
             gesture = .rubberBand(start: start, current: point)
             needsDisplay = true
 
+        case .shapeDraw(let start, _):
+            gesture = .shapeDraw(
+                start: start,
+                current: constrainedShapePoint(from: start, to: point, shiftHeld: event.modifierFlags.contains(.shift))
+            )
+            needsDisplay = true
+
         case .connect(let fromID, _, _):
             let target = editableElement(at: point)
             let targetID = (target?.node != nil && target?.id != fromID) ? target?.id : nil
@@ -1501,6 +1549,28 @@ public final class CanvasView: NSView {
             }
             needsDisplay = true
 
+        case .shapeDraw(let start, let current):
+            guard case .shape(let shape, _) = tool else { break }
+            let band = rectFrom(start, current)
+            let world: Rect
+            if band.width < 4, band.height < 4 {
+                // A bare click drops a default-size shape centered there,
+                // zoom-normalized like block insertion.
+                let scaled = 160.0 * creationScaleFactor()
+                let height = (shape == .rectangle ? 80.0 : 120.0) * creationScaleFactor()
+                let center = viewport.toWorld(start)
+                world = Rect(x: center.x - scaled / 2, y: center.y - height / 2,
+                             width: scaled, height: height)
+            } else {
+                world = Rect(
+                    x: viewport.toWorld(band.origin).x,
+                    y: viewport.toWorld(band.origin).y,
+                    width: Double(band.width) / viewport.scale,
+                    height: Double(band.height) / viewport.scale
+                )
+            }
+            insertShape(worldRect: world, shape: shape, style: pendingShapeStyle)
+
         case .connect(let fromID, let dropPoint, let targetID):
             if let targetID {
                 // Every connection drag creates a connector — including a
@@ -1540,7 +1610,7 @@ public final class CanvasView: NSView {
                 let element = Element(
                     layerIDs: activeLayerIDs().isEmpty ? [board.layers[0].id] : activeLayerIDs(),
                     sortKey: board.topSortKey,
-                    content: .ink(Ink(points: points, style: Style(strokeWidth: 2)))
+                    content: .ink(Ink(points: points, style: pendingInkStyle))
                 )
                 delegate?.canvasView(self, perform: .insertElement(element), actionName: "Draw")
                 strokeFinished?(element.id)
@@ -1676,6 +1746,7 @@ public final class CanvasView: NSView {
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "v": return activateSelectTool(nil)
             case "d": return activateDrawTool(nil)
+            case "s": return activateShapeTool(nil)
             default: break
             }
         }
@@ -1701,7 +1772,12 @@ public final class CanvasView: NSView {
             if case .draw = gesture {
                 gesture = .idle // cancel the in-flight stroke
                 needsDisplay = true
+            } else if case .shapeDraw = gesture {
+                gesture = .idle // cancel the in-flight shape
+                needsDisplay = true
             } else if tool == .draw {
+                tool = .select
+            } else if case .shape = tool {
                 tool = .select
             } else {
                 selection = []
@@ -1888,6 +1964,17 @@ public final class CanvasView: NSView {
         tool = .draw
     }
 
+    /// Shape tool via key/palette: returns to the last picked shape.
+    @objc public func activateShapeTool(_ sender: Any?) {
+        tool = .shape(lastShapeChoice.shape, lockAspect: lastShapeChoice.lockAspect)
+    }
+
+    /// Shape tool via the picker: remembers the choice for the "S" key.
+    public func activateShapeTool(shape: NodeShape, lockAspect: Bool) {
+        lastShapeChoice = (shape, lockAspect)
+        tool = .shape(shape, lockAspect: lockAspect)
+    }
+
     private func nudgeSelection(dx: Double, dy: Double) {
         let operations = selection.compactMap { id -> BoardOperation? in
             guard var element = board.elements[id],
@@ -1959,6 +2046,67 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+    }
+
+    /// Shape-tool commit: a node at EXACTLY the dragged frame, unlabeled
+    /// (grouping shapes start nameless — double-click labels later), styled
+    /// by the pending style. The tool reverts to Select, Excalidraw-style.
+    private func insertShape(worldRect: Rect, shape: NodeShape, style: Style) {
+        let layerIDs = activeLayerIDs()
+        let element = Element(
+            layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+            sortKey: board.topSortKey,
+            content: .node(Node(
+                semantic: NodeSemantic(kind: .generic, name: ""),
+                frame: worldRect,
+                shape: shape,
+                style: style
+            ))
+        )
+        delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Shape")
+        selection = [element.id]
+        tool = .select
+    }
+
+    /// Shift (or a square/circle picker entry) constrains the drag to equal
+    /// width and height, keeping the dragged corner's direction.
+    private func constrainedShapePoint(from start: CGPoint, to point: CGPoint, shiftHeld: Bool) -> CGPoint {
+        guard case .shape(_, let lockAspect) = tool, lockAspect || shiftHeld else { return point }
+        let dx = point.x - start.x
+        let dy = point.y - start.y
+        let side = max(abs(dx), abs(dy))
+        return CGPoint(x: start.x + (dx < 0 ? -side : side),
+                       y: start.y + (dy < 0 ? -side : side))
+    }
+
+    /// Z-order controls: one undoable sortKey change per element. A grouping
+    /// shape drawn over existing blocks gets tucked BEHIND them with
+    /// sendToBack; bringToFront is the inverse.
+    public func bringSelectionToFront() {
+        reorderSelection(toFront: true)
+    }
+
+    public func sendSelectionToBack() {
+        reorderSelection(toFront: false)
+    }
+
+    private func reorderSelection(toFront: Bool) {
+        guard !selection.isEmpty else { return }
+        var operations: [BoardOperation] = []
+        for id in selection.sorted() {
+            guard var element = board.elements[id] else { continue }
+            if toFront {
+                element.sortKey = board.topSortKey
+            } else {
+                let bottom = board.elements.values.map(\.sortKey).min()
+                element.sortKey = SortKey.between(nil, bottom)
+            }
+            operations.append(.replaceElement(element))
+        }
+        guard !operations.isEmpty else { return }
+        delegate?.canvasView(self, perform: .batch(operations),
+                             actionName: toFront ? "Bring to Front" : "Send to Back")
+        needsDisplay = true
     }
 
     /// The layer new elements land on: the explicit active layer when it is

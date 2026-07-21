@@ -116,7 +116,47 @@ public enum LLMInterchange {
         if let current {
             wire.anchorPositions(to: current)
         }
-        return wire.toBoard()
+        var result = wire.toBoard()
+        if let current {
+            // The wire format carries no styling, so a matched block would
+            // come back stripped of its colors/opacity — inherit the CURRENT
+            // style, the same way positions survive.
+            result = ParseResult(
+                board: inheritingStyles(result.board, from: current),
+                warnings: result.warnings,
+                providedTitle: result.providedTitle
+            )
+        }
+        return result
+    }
+
+    /// Blocks matching a current block by slugged name keep the current
+    /// block's Style (fill/stroke/opacity/image) — agents can't see styles,
+    /// so they must not be able to wipe them.
+    private static func inheritingStyles(_ board: Board, from current: Board) -> Board {
+        var styleForSlug: [String: Style] = [:]
+        for element in current.elementsInZOrder {
+            guard let node = element.node else { continue }
+            let key = WireBoard.slug(node.semantic.name.isEmpty
+                                     ? node.semantic.kind.rawValue : node.semantic.name)
+            if !key.isEmpty, styleForSlug[key] == nil {
+                styleForSlug[key] = node.style
+            }
+        }
+        guard !styleForSlug.isEmpty else { return board }
+
+        var updated = board
+        for element in board.elements.values {
+            guard var node = element.node else { continue }
+            let key = WireBoard.slug(node.semantic.name.isEmpty
+                                     ? node.semantic.kind.rawValue : node.semantic.name)
+            guard let inherited = styleForSlug[key], inherited != Style() else { continue }
+            node.style = inherited
+            var replaced = element
+            replaced.content = .node(node)
+            try? updated.apply(.replaceElement(replaced))
+        }
+        return updated
     }
 
     /// Finds the outermost balanced `{ … }` (ignoring braces inside strings),

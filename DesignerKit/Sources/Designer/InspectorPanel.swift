@@ -132,6 +132,13 @@ struct InspectorPanel: View {
                 .labelsHidden()
             }
         }
+        Divider().padding(.vertical, 2)
+        InspectorStyleSection(style: node.style, isInk: false) { style in
+            var updated = element
+            var value = node; value.style = style
+            updated.content = .node(value)
+            actions.apply(updated)
+        }
     }
 
     // MARK: Edge
