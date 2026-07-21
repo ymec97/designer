@@ -47,6 +47,36 @@ final class ProposalApplyTests: XCTestCase {
         XCTAssertEqual(applied.elements.values.filter { $0.node != nil }.count, 2)
     }
 
+    func testDanglingEdgeIsPreservedAcrossProposal() {
+        // A connector with a free endpoint is dropped by the wire export, so
+        // the agent round-trips a board without it. Applying that proposal
+        // must not delete the dangling edge (same principle as ink).
+        var current = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[{"from":"a","to":"b"}]}"#)
+        let nodeA = current.elements.values.first { $0.node?.semantic.name == "a" }!
+        let danglingID = ElementID()
+        try! current.apply(.insertElement(Element(
+            id: danglingID, layerIDs: [current.layers[0].id], sortKey: current.topSortKey,
+            content: .edge(Edge(from: .element(nodeA.id, side: nil, offset: nil),
+                                to: .free(Point(x: 400, y: 300)))))))
+        XCTAssertEqual(current.elements.values.filter { $0.edge != nil }.count, 2)
+
+        // Round-trip through the wire format, as the agent does: the dangling
+        // edge is absent from the export.
+        let proposed = try! LLMInterchange.parse(
+            LLMInterchange.export(current), anchoredTo: current).board
+        XCTAssertEqual(proposed.elements.values.filter { $0.edge != nil }.count, 1,
+                       "wire export drops the dangling edge")
+
+        var applied = current
+        _ = try! applied.apply(ProposalApply.replaceOperation(
+            current: current, proposed: proposed))
+
+        XCTAssertNotNil(applied.elements[danglingID],
+                        "dangling connector must survive an agent proposal")
+        XCTAssertEqual(applied.elements.values.filter { $0.edge != nil }.count, 2,
+                       "attached edge round-trips; dangling edge is preserved")
+    }
+
     func testProposalCreatesLayersAndFlows() {
         var current = board(#"{"nodes":[{"id":"a","name":"a"}],"edges":[]}"#)
         let proposed = board("""
