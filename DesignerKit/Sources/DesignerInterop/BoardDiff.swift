@@ -17,6 +17,10 @@ public struct BoardDiff: Equatable, Sendable {
     public var addedNodes: [String] = []       // display names / ids
     public var removedNodes: [String] = []
     public var changedNodes: [FieldChange] = []
+    /// Blocks whose frame (position or size) changed but that are otherwise
+    /// the same block. Kept apart from `changedNodes` so a relayout reads as
+    /// "N blocks repositioned", not as N structural edits.
+    public var movedNodes: [FieldChange] = []
     public var addedEdges: [String] = []       // "from → to (label)"
     public var removedEdges: [String] = []
     public var changedEdges: [FieldChange] = []
@@ -31,6 +35,7 @@ public struct BoardDiff: Equatable, Sendable {
 
     public var isEmpty: Bool {
         addedNodes.isEmpty && removedNodes.isEmpty && changedNodes.isEmpty
+            && movedNodes.isEmpty
             && addedEdges.isEmpty && removedEdges.isEmpty && changedEdges.isEmpty
             && titleChange == nil
     }
@@ -46,6 +51,7 @@ public struct BoardDiff: Equatable, Sendable {
         add(addedNodes.count, "block", "blocks", sign: "+")
         add(removedNodes.count, "block", "blocks", sign: "−")
         add(changedNodes.count, "block changed", "blocks changed", sign: "~")
+        add(movedNodes.count, "block repositioned", "blocks repositioned", sign: "~")
         add(addedEdges.count, "connector", "connectors", sign: "+")
         add(removedEdges.count, "connector", "connectors", sign: "−")
         add(changedEdges.count, "connector changed", "connectors changed", sign: "~")
@@ -62,6 +68,7 @@ public struct BoardDiff: Equatable, Sendable {
         for n in addedNodes { lines.append("+ block  \(n)") }
         for n in removedNodes { lines.append("− block  \(n)") }
         for c in changedNodes { lines.append("~ block  \(c.id): \(c.before) → \(c.after)") }
+        for m in movedNodes { lines.append("~ moved  \(m.id): \(m.before) → \(m.after)") }
         for e in addedEdges { lines.append("+ edge   \(e)") }
         for e in removedEdges { lines.append("− edge   \(e)") }
         for c in changedEdges { lines.append("~ edge   \(c.id): \(c.before) → \(c.after)") }
@@ -129,6 +136,10 @@ extension LLMInterchange {
                 before: aNodes[old]!.wire.displayName,
                 after: bNodes[new]!.wire.displayName
             ))
+            let oldWire = aNodes[old]!.wire, newWire = bNodes[new]!.wire
+            if oldWire.at != newWire.at || oldWire.size != newWire.size {
+                diff.movedNodes.append(.init(id: new, before: oldWire.footprint, after: newWire.footprint))
+            }
         }
 
         for id in addedSlugs {
@@ -140,9 +151,12 @@ extension LLMInterchange {
             diff.removedElementIDs.insert(aNodes[id]!.element)
         }
         for id in aNodes.keys where bNodes[id] != nil {
-            let before = aNodes[id]!.wire.signature, after = bNodes[id]!.wire.signature
-            if before != after {
-                diff.changedNodes.append(.init(id: id, before: before, after: after))
+            let beforeWire = aNodes[id]!.wire, afterWire = bNodes[id]!.wire
+            if beforeWire.signature != afterWire.signature {
+                diff.changedNodes.append(.init(id: id, before: beforeWire.signature, after: afterWire.signature))
+            }
+            if beforeWire.at != afterWire.at || beforeWire.size != afterWire.size {
+                diff.movedNodes.append(.init(id: id, before: beforeWire.footprint, after: afterWire.footprint))
             }
         }
 
@@ -179,6 +193,7 @@ extension LLMInterchange {
         diff.addedNodes.sort(); diff.removedNodes.sort()
         diff.addedEdges.sort(); diff.removedEdges.sort()
         diff.changedNodes.sort { $0.id < $1.id }; diff.changedEdges.sort { $0.id < $1.id }
+        diff.movedNodes.sort { $0.id < $1.id }
         return diff
     }
 }
@@ -195,10 +210,22 @@ private func similarNames(_ a: String, _ b: String) -> Bool {
 private extension WireBoard.WireNode {
     var displayName: String { name ?? id }
     /// Fields that, when changed, count as a modified node (position excluded —
-    /// a move alone isn't a structural change worth flagging).
+    /// frame changes are tracked separately as `movedNodes`).
     var signature: String {
         "\(name ?? "")|\(kind ?? "generic")|\(shape ?? "rectangle")|\(orientation ?? "up")"
     }
+    /// "(x, y) w×h" for the moved-block diff lines.
+    var footprint: String {
+        guard let at, at.count == 2 else { return "auto" }
+        let position = "(\(compact(at[0])), \(compact(at[1])))"
+        guard let size, size.count == 2 else { return position }
+        return "\(position) \(compact(size[0]))×\(compact(size[1]))"
+    }
+}
+
+/// Render whole coordinates without the ".0" noise.
+private func compact(_ value: Double) -> String {
+    value == value.rounded() && abs(value) < 1e15 ? String(Int(value)) : String(value)
 }
 
 private extension WireBoard.WireEdge {
