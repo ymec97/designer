@@ -683,7 +683,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.proposalGhost = CanvasView.ProposalGhost(
             proposedBoard: stored,
             addedElements: diff.addedElementIDs,
-            removedElements: diff.removedElementIDs
+            removedElements: diff.removedElementIDs,
+            changedElements: diff.changedElementIDs
         )
     }
 
@@ -953,7 +954,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.proposalGhost = CanvasView.ProposalGhost(
             proposedBoard: proposed,
             addedElements: diff.addedElementIDs,
-            removedElements: diff.removedElementIDs
+            removedElements: diff.removedElementIDs,
+            changedElements: diff.changedElementIDs
         )
         if let ghostBounds = canvasView.proposalGhostBounds() {
             canvasView.reveal(worldRect: ghostBounds)
@@ -1285,8 +1287,19 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.activeLayerID = id
     }
 
+    private var layersPanelHost: NSView?
+
+    /// Test hook: whether the Layers panel host is currently shown.
+    var layersPanelIsOpenForTesting: Bool { !(layersPanelHost?.isHidden ?? true) }
+
     @objc func toggleLayersPanel(_ sender: Any?) {
         layersModel.isVisible.toggle()
+        // Drive the AppKit host's isHidden too (not just the SwiftUI `if`):
+        // in an NSStackView with detachesHiddenViews, a perpetually-attached
+        // zero-size host could fail to reclaim space after a long session, so
+        // the panel "opened" but rendered at zero. isHidden makes re-show
+        // deterministic — consistent with Flows/Versions/Chat.
+        layersPanelHost?.isHidden = !layersModel.isVisible
         toolbarState.layersPanelVisible = layersModel.isVisible
     }
 
@@ -1359,7 +1372,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LayersPanelContainer(document: document, model: layersModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
         rightPanelStack.addArrangedSubview(host)
+        layersPanelHost = host
     }
 
     private func updateLayer(_ id: LayerID, _ mutate: (inout Layer) -> Void) {
@@ -1402,6 +1417,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             onAssistant: { [weak self] in
                 self?.toggleChatPanel(nil)
+                // Restore first responder like every other toolbar action —
+                // otherwise focus stranded in a label editor keeps swallowing
+                // input after the panel toggles.
+                self?.view.window?.makeFirstResponder(self?.canvasView)
             },
             onCommandPalette: { [weak self] in
                 self?.toggleCommandPalette(nil)
@@ -1504,8 +1523,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("DesignerLibrary")
     )
 
+    private var libraryPanelHost: NSView?
+
     @objc func toggleLibraryPanel(_ sender: Any?) {
         libraryModel.isVisible.toggle()
+        libraryPanelHost?.isHidden = !libraryModel.isVisible
         toolbarState.libraryPanelVisible = libraryModel.isVisible
         if libraryModel.isVisible { reloadLibrary() }
     }
@@ -1594,7 +1616,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LibraryPanelContainer(model: libraryModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
         rightPanelStack.addArrangedSubview(host)
+        libraryPanelHost = host
     }
 
     private func reloadLibrary() {

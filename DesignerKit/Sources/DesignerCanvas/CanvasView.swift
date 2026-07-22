@@ -314,6 +314,9 @@ public final class CanvasView: NSView {
 
     private var gesture: GestureState = .idle
     private var labelEditor: NSTextField?
+    /// Test hook: the on-screen frame of the open label editor (nil = none).
+    /// Used by --ui-test to prove the field never blankets the toolbar.
+    public var labelEditorFrameForTesting: CGRect? { labelEditor?.frame }
     private var editingElementID: ElementID?
     /// Typing undo stays local to the editing session; only the committed
     /// rename lands on the document's undo stack (as one operation).
@@ -808,11 +811,17 @@ public final class CanvasView: NSView {
         public let proposedBoard: Board
         public let addedElements: Set<ElementID>
         public let removedElements: Set<ElementID>
+        /// Proposed-side ids of elements modified in place (recolor, relabel,
+        /// kind/shape/style change) — rendered so an edit is visible in
+        /// review, not just adds/removes.
+        public let changedElements: Set<ElementID>
 
-        public init(proposedBoard: Board, addedElements: Set<ElementID>, removedElements: Set<ElementID>) {
+        public init(proposedBoard: Board, addedElements: Set<ElementID>,
+                    removedElements: Set<ElementID>, changedElements: Set<ElementID> = []) {
             self.proposedBoard = proposedBoard
             self.addedElements = addedElements
             self.removedElements = removedElements
+            self.changedElements = changedElements
         }
     }
 
@@ -923,11 +932,33 @@ public final class CanvasView: NSView {
         }
         context.endTransparencyLayer()
         context.restoreGState()
-        // Badges above the translucency so they read at full strength.
+
+        // Modifications: render the element's PROPOSED appearance in place
+        // (so a recolor/relabel/restyle is visible in review, not just
+        // adds/removes) under an amber "changed" ring.
+        for element in ghost.proposedBoard.elementsInZOrder where ghost.changedElements.contains(element.id) {
+            if let edge = element.edge {
+                if let route = EdgeGeometry.route(for: edge, frames: ghostFrames, obstacles: ghostObstacles) {
+                    let pts = route.points.map { viewport.toView($0) }
+                    renderer.drawEdge(edge, route: route, in: context, viewport: viewport, isSelected: false)
+                    renderer.drawProposalChangedRoute(pts, in: context, viewport: viewport)
+                }
+            } else if let node = element.node {
+                renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+                renderer.drawProposalChangedOutline(viewport.toView(node.frame), in: context, viewport: viewport)
+            }
+        }
+
+        // Badges above everything so they read at full strength.
         for id in ghost.addedElements {
             guard let node = ghost.proposedBoard.elements[id]?.node else { continue }
             let rect = viewport.toView(node.frame)
             renderer.drawGhostBadge(kind: .added, at: CGPoint(x: rect.minX, y: rect.minY), in: context, viewport: viewport)
+        }
+        for id in ghost.changedElements {
+            guard let node = ghost.proposedBoard.elements[id]?.node else { continue }
+            let rect = viewport.toView(node.frame)
+            renderer.drawGhostBadge(kind: .changed, at: CGPoint(x: rect.minX, y: rect.minY), in: context, viewport: viewport)
         }
     }
 
@@ -2140,18 +2171,21 @@ public final class CanvasView: NSView {
         field.drawsBackground = true
         field.backgroundColor = .textBackgroundColor
         field.alignment = .center
-        // B1: the field must scale WITH the zoomed node — a fixed 24px height
-        // clipped the scaled font invisible at high zoom.
-        let fontSize = max(13 * viewport.scale, 9)
+        // B1: the field scales WITH the zoomed node so the font stays legible
+        // — but CLAMPED: at high zoom an unbounded field ballooned to
+        // thousands of points and blanketed the toolbar, swallowing every
+        // click (Layers/Assistant appeared dead). Cap size and keep it below
+        // the toolbar band and inside the view.
+        let fontSize = min(max(13 * viewport.scale, 11), 26)
         field.font = .systemFont(ofSize: fontSize, weight: .medium)
-        let fieldHeight = max(24, fontSize + 12)
+        let fieldHeight = fontSize + 12
         let viewRect = viewport.toView(frame)
-        field.frame = CGRect(
-            x: viewRect.minX + 4,
-            y: viewRect.midY - fieldHeight / 2,
-            width: max(viewRect.width - 8, 40),
-            height: fieldHeight
-        )
+        let width = min(max(viewRect.width - 8, 40), 340)
+        let toolbarBand: CGFloat = 66 // toolbar sits in the top band; stay clear
+        let x = min(max(viewRect.midX - width / 2, 4), bounds.width - width - 4)
+        let y = min(max(viewRect.midY - fieldHeight / 2, toolbarBand),
+                    bounds.height - fieldHeight - 4)
+        field.frame = CGRect(x: x, y: y, width: width, height: fieldHeight)
         field.target = self
         field.action = #selector(labelEditorDidCommit(_:))
         field.delegate = self

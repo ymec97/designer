@@ -62,9 +62,11 @@ final class UITestDriver {
         step23RepeatConnectionCreatesParallel()
         step24DragEndpointToReattach()
         step25ShapeToolAndStyles()
+        step26LabelEditorNeverBlanketsToolbar()
+        step27SnapOverlapDragByMouse()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag verified")
             exit(0)
         } else {
             for failure in failures {
@@ -984,6 +986,104 @@ final class UITestDriver {
         for _ in 0..<4 { document.undoManager?.undo() }
         canvasView.pendingInkStyle = Style(strokeWidth: 2)
         canvasView.pendingShapeStyle = Style(fill: Style.noFill)
+    }
+
+    /// Regression: at high zoom the auto-opened label editor used to balloon
+    /// (sized from the zoomed rect) and blanket the toolbar, swallowing clicks
+    /// to Layers/Assistant. The field must stay clamped + clear of the toolbar
+    /// band, and the panels must still open.
+    private func step26LabelEditorNeverBlanketsToolbar() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no controller for editor-clamp test"); return
+        }
+        let savedViewport = canvasView.viewport
+        canvasView.viewport = CanvasViewport(origin: Point(x: -20, y: 4900), scale: 13)
+        pumpRunLoop()
+
+        // Create a block near the TOP of the view (double-click) — opens the
+        // label editor; a naive field would cover the toolbar.
+        let topPoint = CGPoint(x: canvasView.bounds.midX, y: 96)
+        click(at: topPoint, clickCount: 1)
+        click(at: topPoint, clickCount: 2)
+        pumpRunLoop()
+
+        if let field = canvasView.labelEditorFrameForTesting {
+            expect(field.width <= 341, "label editor width is clamped (got \(field.width))")
+            expect(field.height <= 42, "label editor height is clamped (got \(field.height))")
+            expect(field.minY >= 60, "label editor stays below the toolbar band (minY=\(field.minY))")
+            expect(field.maxY <= canvasView.bounds.height + 1, "label editor stays in view")
+        } else {
+            expect(false, "expected an open label editor after creating a block at high zoom")
+        }
+
+        // Commit the editor (click empty canvas), then the Layers panel must
+        // still open on demand.
+        canvasView.viewport = savedViewport
+        pumpRunLoop()
+        canvasView.commitLabelEditor()
+        pumpRunLoop()
+        controller.toggleLayersPanel(nil)
+        pumpRunLoop()
+        expect(controller.layersPanelIsOpenForTesting, "Layers panel opens after high-zoom editing")
+        controller.toggleLayersPanel(nil)
+        pumpRunLoop()
+        document.undoManager?.undo() // remove the test block
+        pumpRunLoop()
+    }
+
+    /// Real synthesized mouse movement (not model inserts): dragging a shape
+    /// MOVES it, a drag next to another shape SNAPS into edge alignment, and
+    /// dragging one onto another produces an OVERLAP. (Connector-vs-shape
+    /// recognition by real stroke is covered by steps 10/11.)
+    private func step27SnapOverlapDragByMouse() {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double, _ y: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: y, width: 120, height: 60))))
+        }
+        // Two isolated, non-overlapping subjects in a clear region.
+        let c = node("mm-c", 0, 5460), d = node("mm-d", 320, 5460)
+        document.perform(.batch([.insertElement(c), .insertElement(d)]), actionName: "Mouse Drag Subjects")
+        // Explicit 1x viewport with the subjects mid-screen, clear of the
+        // toolbar band (reveal would zoom far out on the cluttered board).
+        canvasView.viewport = CanvasViewport(origin: Point(x: -40, y: 5300), scale: 1)
+        canvasView.select([])
+        pumpRunLoop()
+
+        func frame(_ id: ElementID) -> Rect { document.board.elements[id]!.node!.frame }
+        func drag(fromWorld: Point, toWorld: Point, steps: Int = 8) {
+            let from = canvasView.viewport.toView(fromWorld)
+            let to = canvasView.viewport.toView(toWorld)
+            send(.leftMouseDown, at: from, clickCount: 1)
+            for step in 1...steps {
+                let t = CGFloat(step) / CGFloat(steps)
+                send(.leftMouseDragged, at: CGPoint(
+                    x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t), clickCount: 1)
+            }
+            send(.leftMouseUp, at: to, clickCount: 1)
+            pumpRunLoop()
+        }
+
+        // (1) Drag D so its left edge lands a few units off C's left edge
+        // (x=0): the node MOVES, and SnapEngine pulls the edges into exact
+        // alignment. Target center = 4 (left edge) + 60 (half-width).
+        let dBefore = frame(d.id)
+        drag(fromWorld: Point(x: frame(d.id).midX, y: frame(d.id).midY),
+             toWorld: Point(x: 64, y: 5620))
+        expect(frame(d.id) != dBefore, "dragging a shape moves it")
+        expect(abs(frame(d.id).x - frame(c.id).x) < 1.5,
+               "dragging D beside C snaps their left edges into alignment (dx=\(frame(d.id).x - frame(c.id).x))")
+
+        // (2) Drag D fully onto C -> the frames OVERLAP.
+        canvasView.select([])
+        pumpRunLoop()
+        drag(fromWorld: Point(x: frame(d.id).midX, y: frame(d.id).midY),
+             toWorld: Point(x: frame(c.id).midX, y: frame(c.id).midY))
+        expect(frame(c.id).intersects(frame(d.id)), "shapes dragged together overlap")
+
+        for _ in 0..<3 { document.undoManager?.undo() } // 2 drags + insert
+        pumpRunLoop()
     }
 
     // MARK: Event synthesis

@@ -59,6 +59,37 @@ final class EdgeGeometryTests: XCTestCase {
         XCTAssertEqual(route.start.y, 0, accuracy: 0.001, "exits a's top side")
     }
 
+    /// Regression (the "Postgres" screenshot): connectors into a WIDE, SHORT
+    /// node from sources below it must arrive on the bottom border facing the
+    /// sources — a detour must not re-anchor them to the TOP edge (arrowhead
+    /// poking into the node from above, lines crossing).
+    func testWideNodeArrivalStaysOnTheFacingSide() throws {
+        // Wide short target up top; two narrow sources below-left; an
+        // obstacle between each source and the target forces a detour.
+        let postgres = addNode("Postgres", frame: Rect(x: 0, y: 0, width: 1040, height: 48))
+        let cloud = addNode("Cloud Collector", frame: Rect(x: 80, y: 400, width: 110, height: 60))
+        let gateway = addNode("Gateway Collector", frame: Rect(x: 80, y: 560, width: 110, height: 90))
+        _ = addNode("wall1", frame: Rect(x: 280, y: 180, width: 90, height: 90))
+        _ = addNode("wall2", frame: Rect(x: 300, y: 300, width: 90, height: 90))
+        let e1 = connect(cloud, postgres)
+        let e2 = connect(gateway, postgres)
+
+        let obstacles = SpatialIndex.nodeObstacleQuery(for: board)
+        let frame = Rect(x: 0, y: 0, width: 1040, height: 48)
+        for edge in [e1, e2] {
+            let route = try XCTUnwrap(EdgeGeometry.route(
+                for: edge.edge!, frames: board.frameProvider(), obstacles: obstacles))
+            XCTAssertGreaterThan(route.points.count, 2, "a detour must actually fire (exercises re-anchor)")
+            // Arrives on the BOTTOM edge (facing the sources), never the top.
+            XCTAssertEqual(route.end.y, frame.maxY, accuracy: 1.0,
+                           "arrival is on the bottom border, not the top (got \(route.end))")
+            // And the last segment approaches from BELOW/outside — no poke.
+            let prev = route.points[route.points.count - 2]
+            XCTAssertGreaterThan(prev.y, route.end.y - 1,
+                                 "final segment approaches the border from outside the node")
+        }
+    }
+
     func testStraightRouteDetoursAroundBlockingNode() throws {
         let a = addNode("a", frame: Rect(x: 0, y: 0, width: 80, height: 40))
         let b = addNode("b", frame: Rect(x: 500, y: 0, width: 80, height: 40))

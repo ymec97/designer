@@ -41,6 +41,14 @@ struct WireBoard: Codable {
         var orientation: String?
         var at: [Double]?
         var size: [Double]?
+        /// Explicit appearance the agent can set: `fill`/`stroke` are hex
+        /// ("#RRGGBB[AA]") or "none" for a transparent background; `opacity`
+        /// is 0…1. This lets an agent recolor a block WITHOUT hijacking
+        /// `kind` (which also drives the kind-dot). Omitted = keep the current
+        /// style (see LLMInterchange style inheritance).
+        var fill: String?
+        var stroke: String?
+        var opacity: Double?
         /// Layer names this node appears on (multi-membership). Omitted =
         /// the base layer.
         var layers: [String]?
@@ -129,6 +137,9 @@ extension WireBoard {
                 orientation: (node.shape == .triangle && node.orientation != .up) ? node.orientation.rawValue : nil,
                 at: [Self.round(node.frame.x), Self.round(node.frame.y)],
                 size: [Self.round(node.frame.width), Self.round(node.frame.height)],
+                fill: node.style.fill,
+                stroke: node.style.stroke,
+                opacity: node.style.opacity,
                 layers: membership(of: element)
             ))
         }
@@ -285,6 +296,10 @@ extension WireBoard {
             // A missing name falls back to the id slug — an agent that only
             // sets `id` must still produce labeled, recognizable blocks.
             let name = (wireNode.name?.isEmpty == false) ? wireNode.name! : wireNode.id
+            // Explicit style from the wire (agent recolor). A node that omits
+            // all three keeps an empty Style — style inheritance then restores
+            // the current look for matched nodes.
+            let style = Style(fill: wireNode.fill, stroke: wireNode.stroke, opacity: wireNode.opacity)
             let element = Element(
                 layerIDs: resolveLayers(wireNode.layers),
                 sortKey: board.topSortKey,
@@ -295,7 +310,8 @@ extension WireBoard {
                     ),
                     frame: frame,
                     shape: wireNode.shape.map(NodeShape.init(rawValue:)) ?? .rectangle,
-                    orientation: wireNode.orientation.map(ShapeOrientation.init(rawValue:)) ?? .up
+                    orientation: wireNode.orientation.map(ShapeOrientation.init(rawValue:)) ?? .up,
+                    style: style
                 ))
             )
             if elementForSlug[wireNode.id] != nil {

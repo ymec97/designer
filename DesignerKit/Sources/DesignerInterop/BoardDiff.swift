@@ -28,6 +28,10 @@ public struct BoardDiff: Equatable, Sendable {
     public var addedElementIDs: Set<ElementID> = []
     /// Current-side element ids of removals — ghost-marked on the canvas.
     public var removedElementIDs: Set<ElementID> = []
+    /// Proposed-side element ids of MODIFIED elements (recolor, relabel,
+    /// kind/shape/style/direction change) — so the review ghost shows an
+    /// in-place edit, not just adds/removes.
+    public var changedElementIDs: Set<ElementID> = []
 
     public var isEmpty: Bool {
         addedNodes.isEmpty && removedNodes.isEmpty && changedNodes.isEmpty
@@ -129,6 +133,7 @@ extension LLMInterchange {
                 before: aNodes[old]!.wire.displayName,
                 after: bNodes[new]!.wire.displayName
             ))
+            diff.changedElementIDs.insert(bNodes[new]!.element)
         }
 
         for id in addedSlugs {
@@ -143,6 +148,7 @@ extension LLMInterchange {
             let before = aNodes[id]!.wire.signature, after = bNodes[id]!.wire.signature
             if before != after {
                 diff.changedNodes.append(.init(id: id, before: before, after: after))
+                diff.changedElementIDs.insert(bNodes[id]!.element)
             }
         }
 
@@ -173,6 +179,7 @@ extension LLMInterchange {
             let before = aEdges[key]!.wire.signature, after = bEdges[key]!.wire.signature
             if before != after {
                 diff.changedEdges.append(.init(id: key, before: before, after: after))
+                diff.changedElementIDs.insert(bEdges[key]!.element)
             }
         }
 
@@ -195,9 +202,11 @@ private func similarNames(_ a: String, _ b: String) -> Bool {
 private extension WireBoard.WireNode {
     var displayName: String { name ?? id }
     /// Fields that, when changed, count as a modified node (position excluded —
-    /// a move alone isn't a structural change worth flagging).
+    /// a move alone isn't a structural change worth flagging). Style is
+    /// included so a recolor is a visible, reviewable change.
     var signature: String {
         "\(name ?? "")|\(kind ?? "generic")|\(shape ?? "rectangle")|\(orientation ?? "up")"
+            + "|\(fill ?? "")|\(stroke ?? "")|\(opacity.map { String($0) } ?? "")"
     }
 }
 

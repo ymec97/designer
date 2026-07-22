@@ -57,7 +57,13 @@ public enum AgentGuide {
     ## Authoring conventions (make boards read well)
     - EVERY node needs a human-readable `name` (e.g. "orders-svc", "Postgres") \
     and a `kind`: service | database | queue | cache | gateway | client | \
-    external | generic. Kind drives the block's tint and badge.
+    external | generic. Kind drives the block's default tint and badge.
+    - To RECOLOR a block, set its `fill` (and optionally `stroke`) to a hex \
+    color ("#RRGGBB" or "#RRGGBBAA"), or "none" for a transparent background; \
+    `opacity` is 0–1. Change color THIS way — do NOT change `kind` just to get \
+    a color (that also changes the block's meaning and its kind-badge). Omit \
+    these keys to keep the block's current look; the fields you set are shown \
+    as a highlighted change in the user's review.
     - Choose `shape` deliberately: "ellipse" for databases/data stores, \
     "diamond" for decision/routing points, "triangle" for alerts/warnings \
     (set `orientation` up|down|left|right), rectangle (default) for services \

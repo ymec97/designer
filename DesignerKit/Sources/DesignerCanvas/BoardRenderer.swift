@@ -1043,15 +1043,20 @@ final class BoardRenderer {
     }
 
     enum GhostBadgeKind {
-        case added, removed
+        case added, removed, changed
     }
 
-    /// A small +/− chip at a ghosted block's corner — legible even where
+    /// A small +/−/~ chip at a ghosted block's corner — legible even where
     /// dashes and tints blend into a busy board.
     func drawGhostBadge(kind: GhostBadgeKind, at corner: CGPoint, in context: CGContext, viewport: CanvasViewport) {
         let radius = max(7 * viewport.scale, 5)
         let center = CGPoint(x: corner.x, y: corner.y)
-        let color = kind == .added ? Graphite.proposalAdd : Graphite.proposalRemove
+        let color: NSColor
+        switch kind {
+        case .added: color = Graphite.proposalAdd
+        case .removed: color = Graphite.proposalRemove
+        case .changed: color = Graphite.proposalChange
+        }
         context.saveGState()
         context.setFillColor(color.cgColor)
         context.fillEllipse(in: CGRect(
@@ -1060,13 +1065,47 @@ final class BoardRenderer {
         context.setLineWidth(max(1.6 * viewport.scale, 1.2))
         context.setLineCap(.round)
         let arm = radius * 0.48
-        context.move(to: CGPoint(x: center.x - arm, y: center.y))
-        context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
-        if kind == .added {
+        switch kind {
+        case .added:
+            context.move(to: CGPoint(x: center.x - arm, y: center.y))
+            context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
             context.move(to: CGPoint(x: center.x, y: center.y - arm))
             context.addLine(to: CGPoint(x: center.x, y: center.y + arm))
+        case .removed:
+            context.move(to: CGPoint(x: center.x - arm, y: center.y))
+            context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
+        case .changed:
+            // A small tilde-ish squiggle for "modified".
+            context.move(to: CGPoint(x: center.x - arm, y: center.y + arm * 0.35))
+            context.addCurve(
+                to: CGPoint(x: center.x + arm, y: center.y - arm * 0.35),
+                control1: CGPoint(x: center.x - arm * 0.2, y: center.y - arm * 0.8),
+                control2: CGPoint(x: center.x + arm * 0.2, y: center.y + arm * 0.8))
         }
         context.strokePath()
+        context.restoreGState()
+    }
+
+    /// Amber dashed ring marking an element modified in place (recolor,
+    /// relabel, restyle) in a proposal review.
+    func drawProposalChangedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalChange.withAlphaComponent(0.95).cgColor)
+        context.setLineWidth(max(1.8 * viewport.scale, 1.4))
+        context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
+        let inset = rect.insetBy(dx: -3, dy: -3)
+        context.stroke(inset)
+        context.restoreGState()
+    }
+
+    func drawProposalChangedRoute(_ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport) {
+        guard viewPoints.count >= 2 else { return }
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalChange.withAlphaComponent(0.9).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 4 * viewport.scale])
+        strokePolyline(viewPoints, in: context)
         context.restoreGState()
     }
 
