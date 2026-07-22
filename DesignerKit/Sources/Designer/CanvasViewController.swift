@@ -106,6 +106,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             self?.toolbarState.tool = tool
             self?.refreshStylePanel()
         }
+        canvasView.shapePickerRequested = { [weak self] in
+            self?.toolbarState.shapePickerVisible.toggle()
+        }
         installToolbar()
         installStylePanel()
         installLayersPanel()
@@ -173,7 +176,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             actions: StylePanelActions(
                 styleChanged: { [weak self] style in self?.stylePanelEdited(style) },
                 bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront() },
-                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() }
+                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() },
+                close: { [weak self] in
+                    self?.stylePanelModel.isVisible = false
+                    self?.view.window?.makeFirstResponder(self?.canvasView)
+                }
             )
         )
         let host = NSHostingView(rootView: panel)
@@ -190,7 +197,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             canvasView.pendingInkStyle = style
         case .shape:
             canvasView.pendingShapeStyle = style
-        case .selection:
+        case .selection, .connector:
             let operations = canvasView.selection.compactMap { id -> BoardOperation? in
                 guard var element = document.board.elements[id] else { return nil }
                 switch element.content {
@@ -203,6 +210,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 case .note(var note):
                     note.style = style
                     element.content = .note(note)
+                case .edge(var edge):
+                    // Connectors are lines: fill never applies.
+                    var lineStyle = style
+                    lineStyle.fill = nil
+                    edge.style = lineStyle
+                    element.content = .edge(edge)
                 default:
                     return nil
                 }
@@ -225,19 +238,29 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             stylePanelModel.seed(from: canvasView.pendingShapeStyle, mode: .shape)
             stylePanelModel.isVisible = true
         case .select:
+            var connectorStyle: Style?
             let styleable = canvasView.selection.compactMap { id -> Style? in
                 switch document.board.elements[id]?.content {
                 case .node(let node): return node.style
                 case .ink(let ink): return ink.style
                 case .note(let note): return note.style
+                case .edge(let edge):
+                    connectorStyle = edge.style
+                    return nil
                 default: return nil
                 }
             }
             if let first = styleable.first {
                 stylePanelModel.seed(from: first, mode: .selection)
                 stylePanelModel.isVisible = true
-            } else {
-                stylePanelModel.isVisible = false
+            } else if let connectorStyle {
+                stylePanelModel.seed(from: connectorStyle, mode: .connector)
+                stylePanelModel.isVisible = true
+            } else if stylePanelModel.isVisible {
+                // An empty selection (deselect click, or ⌘Z removing the
+                // shape you just drew) does NOT slam the panel shut — it
+                // falls back to pending-shape mode. The header ✕ closes it.
+                stylePanelModel.seed(from: canvasView.pendingShapeStyle, mode: .shape)
             }
         }
     }
@@ -1291,6 +1314,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     /// Test hook: whether the Layers panel host is currently shown.
     var layersPanelIsOpenForTesting: Bool { !(layersPanelHost?.isHidden ?? true) }
+
+    /// Test hook: whether the shape picker popover is requested-visible.
+    var shapePickerVisibleForTesting: Bool { toolbarState.shapePickerVisible }
 
     @objc func toggleLayersPanel(_ sender: Any?) {
         layersModel.isVisible.toggle()

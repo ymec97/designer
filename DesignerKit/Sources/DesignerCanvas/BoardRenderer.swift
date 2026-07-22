@@ -545,6 +545,39 @@ final class BoardRenderer {
         captionFraction: Double = 0.5,
         captionObstacles: ((Rect) -> [Rect])? = nil
     ) {
+        // Connector opacity: fade the whole edge (line, arrowheads, caption)
+        // as one; the body has early returns, so wrap it here. Selection
+        // stays full-strength so a faded edge is still findable.
+        let opacity = edge.style.effectiveOpacity
+        if opacity < 1, !isSelected {
+            context.saveGState()
+            context.setAlpha(CGFloat(opacity))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            drawEdgeContent(edge, route: route, in: context, viewport: viewport,
+                            isSelected: isSelected, isDangling: isDangling,
+                            simplified: simplified, captionFraction: captionFraction,
+                            captionObstacles: captionObstacles)
+            context.endTransparencyLayer()
+            context.restoreGState()
+        } else {
+            drawEdgeContent(edge, route: route, in: context, viewport: viewport,
+                            isSelected: isSelected, isDangling: isDangling,
+                            simplified: simplified, captionFraction: captionFraction,
+                            captionObstacles: captionObstacles)
+        }
+    }
+
+    private func drawEdgeContent(
+        _ edge: Edge,
+        route: EdgeGeometry.Route,
+        in context: CGContext,
+        viewport: CanvasViewport,
+        isSelected: Bool,
+        isDangling: Bool,
+        simplified: Bool,
+        captionFraction: Double,
+        captionObstacles: ((Rect) -> [Rect])?
+    ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
 
