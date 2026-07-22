@@ -7,6 +7,9 @@ struct CatalogEntry: Identifiable, Hashable {
     let url: URL
     let title: String
     let modified: Date
+    /// The board's stable identity (from board.json) — how node→board links
+    /// survive file moves/renames.
+    let boardID: BoardID?
     var id: URL { url }
 }
 
@@ -56,11 +59,19 @@ enum BoardCatalog {
         var title = url.deletingPathExtension().lastPathComponent
         var modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
             ?? Date.distantPast
+        var boardID: BoardID?
         if let board = try? BoardSerialization.board(from: try Data(contentsOf: boardURL)) {
             if !board.title.isEmpty { title = board.title }
             modified = board.modifiedAt
+            boardID = board.id
         }
-        return CatalogEntry(url: url, title: title, modified: modified)
+        return CatalogEntry(url: url, title: title, modified: modified, boardID: boardID)
+    }
+
+    /// Resolves a linked board's stable id to its current file URL by
+    /// scanning the catalog (folder + recents). Nil when the board is gone.
+    static func url(forBoardID id: BoardID) -> URL? {
+        entries().first { $0.boardID == id }?.url
     }
 
     /// Moves a board package to the Trash (recoverable — never a hard

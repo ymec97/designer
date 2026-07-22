@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 final class CanvasViewController: NSViewController, CanvasViewDelegate {
     private static let liveRecognitionDefaultsKey = "LiveSketchRecognition"
 
-    private unowned let document: BoardDocument
+    unowned let document: BoardDocument
     private var boardSubscription: AnyCancellable?
 
     let canvasView = CanvasView()
@@ -88,6 +88,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         super.viewDidLoad()
         boardSubscription = document.$board.sink { [weak self] board in
             guard let self else { return }
+            // While a linked board is on screen the document keeps its own
+            // truth but must not repaint the canvas; Back re-syncs.
+            guard self.linkedBoardStack.isEmpty else { return }
             self.canvasView.board = board
             // Keep the active layer valid across undo/board changes.
             if let active = self.layersModel.activeLayerID,
@@ -122,6 +125,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         installVersionsPanel()
         refreshVersionsPanel()
         installZoomHUD()
+        installLinkedBoards()
     }
 
     // MARK: Inspector (feature 2)
@@ -169,6 +173,13 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     let stylePanelModel = StylePanelModel()
     private var stylePanelHost: NSView?
+
+    // MARK: Linked boards state (navigation methods in LinkedBoards.swift)
+
+    var linkedBoardStack: [LinkedBoardFrame] = []
+    let linkedViewModel = LinkedViewModel()
+    var linkPickerWindow: NSWindow?
+    var linkedBoardSwoosh: NSSound?
 
     private func installStylePanel() {
         let panel = StylePanelContainer(
@@ -230,6 +241,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// armed, selection when styleable elements are selected — hidden
     /// otherwise.
     func refreshStylePanel() {
+        if canvasView.isReadOnly {
+            stylePanelModel.isVisible = false
+            return
+        }
         switch canvasView.tool {
         case .draw:
             stylePanelModel.seed(from: canvasView.pendingInkStyle, mode: .pencil)
@@ -1901,6 +1916,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     // MARK: CanvasViewDelegate
 
     func canvasView(_ view: CanvasView, perform operation: BoardOperation, actionName: String) {
+        // Linked-board view is READ-ONLY: no mutation may reach the document
+        // (which isn't even the board on screen).
+        guard !canvasView.isReadOnly else {
+            NSSound.beep()
+            return
+        }
         // Any newly placed block also snaps nearby dangling connector
         // endpoints onto itself, inside the same undo step.
         document.perform(

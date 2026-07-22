@@ -2,6 +2,7 @@ import AppKit
 import DesignerCanvas
 import DesignerInterop
 import DesignerModel
+import DesignerPersistence
 
 /// In-process UI test: synthesizes mouse/keyboard events and dispatches them
 /// through NSWindow.sendEvent — the real hit-testing and responder chain —
@@ -65,9 +66,10 @@ final class UITestDriver {
         step26LabelEditorNeverBlanketsToolbar()
         step27SnapOverlapDragByMouse()
         step28StylePanelPolish()
+        step29LinkedBoards()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish, linked-boards verified")
             exit(0)
         } else {
             for failure in failures {
@@ -1162,6 +1164,115 @@ final class UITestDriver {
         pumpRunLoop()
         canvasView.select([])
         controller.stylePanelModel.isVisible = false
+        pumpRunLoop()
+    }
+
+    /// Linked boards: link a node to another board, dive in via the badge
+    /// (double-click), verify the read-only nested view + banner, verify
+    /// Back restores the EXACT camera, and that nesting depth works.
+    private func step29LinkedBoards() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no controller for linked boards"); return
+        }
+
+        // A target board saved into the managed catalog folder.
+        var target = Board(title: "UI-Test Linked Target")
+        try? target.apply(.insertElement(Element(
+            layerIDs: [target.layers[0].id], sortKey: target.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "inner-block"),
+                                frame: Rect(x: 100, y: 100, width: 160, height: 80))))))
+        let folder = BoardCatalog.boardsFolder()
+        let targetURL = folder.appendingPathComponent("ui-test-linked-\(UUID().uuidString.prefix(6)).designerboard")
+        defer { try? FileManager.default.trashItem(at: targetURL, resultingItemURL: nil) }
+        do { try BoardPackage.write(target, to: targetURL) } catch {
+            expect(false, "couldn't write linked target board"); return
+        }
+
+        // A linked node on the working board.
+        let layer = document.board.layers[0].id
+        var semantic = NodeSemantic(name: "drill-me")
+        semantic.linkedBoardID = target.id
+        let node = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                           content: .node(Node(semantic: semantic,
+                                               frame: Rect(x: 100, y: 6600, width: 140, height: 70))))
+        document.perform(.insertElement(node), actionName: "Linked Node")
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 6450), scale: 1)
+        canvasView.select([])
+        pumpRunLoop()
+
+        // The badge is hit-testable at its rect (outside the node frame).
+        let badge = canvasView.linkBadgeRect(forNodeFrame: Rect(x: 100, y: 6600, width: 140, height: 70))
+        expect(canvasView.linkBadgeHit(at: CGPoint(x: badge.midX, y: badge.midY)) == node.id,
+               "the top-right badge hit-tests to the linked node")
+
+        // Dive in via double-click on the badge; wait out the animation.
+        let savedViewport = canvasView.viewport
+        let rootElementCount = document.board.elements.count
+        click(at: CGPoint(x: badge.midX, y: badge.midY), clickCount: 1)
+        click(at: CGPoint(x: badge.midX, y: badge.midY), clickCount: 2)
+        var waited = 0.0
+        while canvasView.board.id != target.id, waited < 3 {
+            pumpRunLoop(); waited += 0.05
+        }
+        expect(canvasView.board.id == target.id, "double-clicking the badge enters the linked board")
+        expect(canvasView.isReadOnly, "the linked view is read-only")
+        expect(controller.linkedViewModel.isActive, "the linked-view banner is active")
+        expect(controller.linkedViewModel.title == "UI-Test Linked Target", "banner shows the linked title")
+
+        // Edits must not land: a double-click that would create a block does
+        // nothing to either board.
+        let innerCount = canvasView.board.elements.count
+        click(at: CGPoint(x: 700, y: 400), clickCount: 2)
+        pumpRunLoop()
+        expect(canvasView.board.elements.count == innerCount, "read-only view blocks creation")
+        expect(document.board.elements.count == rootElementCount, "the DOCUMENT board is untouched")
+
+        // Back restores the exact camera.
+        controller.exitLinkedBoard()
+        waited = 0
+        while canvasView.viewport != savedViewport, waited < 3 {
+            pumpRunLoop(); waited += 0.05
+        }
+        expect(canvasView.board.id == document.board.id, "Back returns to the document board")
+        expect(!canvasView.isReadOnly, "editing is re-enabled after Back")
+        expect(canvasView.viewport == savedViewport,
+               "Back restores the EXACT prior camera (got \(canvasView.viewport) want \(savedViewport))")
+        expect(!controller.linkedViewModel.isActive, "banner dismissed at root")
+
+        // Depth 2: enter, then enter again through a linked node INSIDE the
+        // target (link it to the document board is disallowed—link to a third).
+        var third = Board(title: "UI-Test Third Level")
+        let thirdURL = folder.appendingPathComponent("ui-test-third-\(UUID().uuidString.prefix(6)).designerboard")
+        defer { try? FileManager.default.trashItem(at: thirdURL, resultingItemURL: nil) }
+        try? BoardPackage.write(third, to: thirdURL)
+        var innerSemantic = NodeSemantic(name: "deeper")
+        innerSemantic.linkedBoardID = third.id
+        try? target.apply(.insertElement(Element(
+            layerIDs: [target.layers[0].id], sortKey: target.topSortKey,
+            content: .node(Node(semantic: innerSemantic,
+                                frame: Rect(x: 400, y: 100, width: 140, height: 70))))))
+        try? BoardPackage.write(target, to: targetURL)
+
+        controller.enterLinkedBoard(from: node.id)
+        waited = 0
+        while canvasView.board.id != target.id, waited < 3 { pumpRunLoop(); waited += 0.05 }
+        guard let deeper = canvasView.board.elements.values.first(where: {
+            $0.node?.semantic.name == "deeper"
+        }) else { expect(false, "no deeper node after re-entry"); return }
+        controller.enterLinkedBoard(from: deeper.id)
+        waited = 0
+        while canvasView.board.id != third.id, waited < 3 { pumpRunLoop(); waited += 0.05 }
+        expect(canvasView.board.id == third.id, "nesting to depth 2 works")
+        expect(controller.linkedViewModel.depth == 2, "banner reports depth 2")
+        controller.exitLinkedBoard()
+        pumpRunLoop()
+        expect(controller.linkedViewModel.depth == 1, "popping one level reports depth 1")
+        controller.exitLinkedBoard()
+        waited = 0
+        while controller.linkedViewModel.isActive, waited < 3 { pumpRunLoop(); waited += 0.05 }
+        expect(!canvasView.isReadOnly, "back at the editable root")
+
+        document.undoManager?.undo() // the linked node
         pumpRunLoop()
     }
 

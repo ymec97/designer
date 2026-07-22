@@ -374,6 +374,7 @@ public final class CanvasView: NSView {
             if case .draw = gesture {} else if proposalGhost == nil {
                 renderer.drawEmptyHint(in: context, bounds: bounds)
             }
+            drawLinkBadges(in: context)
             drawProposalGhostOverlay(in: context)
             drawInFlightGesture(in: context)
             drawTransientHint(in: context)
@@ -597,6 +598,7 @@ public final class CanvasView: NSView {
             renderer.drawSnapGuide(guide, in: context, viewport: viewport)
         }
 
+        drawLinkBadges(in: context)
         drawProposalGhostOverlay(in: context)
         drawSimulationOverlay(in: context)
         drawFlowRecordingOverlay(in: context)
@@ -966,6 +968,123 @@ public final class CanvasView: NSView {
         }
     }
 
+    // MARK: Linked boards (drill-down)
+
+    /// Fired when the user activates a node's board link (double-clicking
+    /// the badge, or the context menu's Go to Board). The controller owns
+    /// navigation; the canvas only detects the gesture.
+    public var linkActivated: ((ElementID) -> Void)?
+
+    /// The controller supplies the right-click menu for a node (linking
+    /// actions live there); nil falls through to no menu.
+    public var nodeContextMenu: ((ElementID) -> NSMenu?)?
+
+    /// Linked-board view mode: the canvas shows a foreign board read-only —
+    /// navigation (pan/zoom/select) works, mutations don't start.
+    public var isReadOnly = false {
+        didSet {
+            guard isReadOnly != oldValue else { return }
+            if isReadOnly {
+                commitLabelEditor()
+                tool = .select
+                gesture = .idle
+            }
+            needsDisplay = true
+        }
+    }
+
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard !isReadOnly else { return nil }
+        if let badgeNode = linkBadgeHit(at: point) {
+            return nodeContextMenu?(badgeNode)
+        }
+        guard let element = editableNode(at: point), element.node != nil else {
+            return super.menu(for: event)
+        }
+        // Right-click selects the node it targets (platform convention).
+        if !selection.contains(element.id) {
+            selection = [element.id]
+        }
+        return nodeContextMenu?(element.id)
+    }
+
+    // MARK: Animated camera (linked-board zoom)
+
+    private var cameraAnimation: (start: CanvasViewport, target: CanvasViewport,
+                                  startTime: TimeInterval, duration: TimeInterval,
+                                  completion: (() -> Void)?)?
+    private var cameraTimer: Timer?
+
+    /// Glides the camera to `target` (ease-in-out; scale lerped in log space
+    /// so zooming feels linear). Completion fires exactly at the target.
+    public func animateViewport(to target: CanvasViewport, duration: TimeInterval = 0.32,
+                                completion: (() -> Void)? = nil) {
+        cameraTimer?.invalidate()
+        guard duration > 0.01 else {
+            viewport = target
+            completion?()
+            return
+        }
+        cameraAnimation = (viewport, target, CACurrentMediaTime(), duration, completion)
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
+            guard let self, let animation = self.cameraAnimation else {
+                timer.invalidate()
+                return
+            }
+            let raw = (CACurrentMediaTime() - animation.startTime) / animation.duration
+            let t = min(max(raw, 0), 1)
+            // Ease in-out.
+            let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+            let logStart = log(animation.start.scale), logEnd = log(animation.target.scale)
+            let scale = exp(logStart + (logEnd - logStart) * eased)
+            let origin = Point(
+                x: animation.start.origin.x + (animation.target.origin.x - animation.start.origin.x) * eased,
+                y: animation.start.origin.y + (animation.target.origin.y - animation.start.origin.y) * eased
+            )
+            self.viewport = CanvasViewport(origin: origin, scale: scale)
+            if t >= 1 {
+                timer.invalidate()
+                self.cameraTimer = nil
+                let done = animation.completion
+                self.cameraAnimation = nil
+                self.viewport = animation.target
+                done?()
+            }
+        }
+        cameraTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// The view-space rect of a linked node's badge — top-right, OUTSIDE the
+    /// frame so even tiny nodes wear it without covering their label.
+    public func linkBadgeRect(forNodeFrame frame: Rect) -> CGRect {
+        let rect = viewport.toView(frame)
+        let radius = max(7 * viewport.scale, 6)
+        return CGRect(x: rect.maxX + 2, y: rect.minY - radius * 2 - 2,
+                      width: radius * 2, height: radius * 2)
+    }
+
+    /// The linked node whose badge contains the view-space point, if any.
+    public func linkBadgeHit(at point: CGPoint) -> ElementID? {
+        for element in zOrderedElements.reversed() {
+            guard let node = element.node, node.semantic.linkedBoardID != nil else { continue }
+            if linkBadgeRect(forNodeFrame: node.frame).insetBy(dx: -3, dy: -3).contains(point) {
+                return element.id
+            }
+        }
+        return nil
+    }
+
+    private func drawLinkBadges(in context: CGContext) {
+        let hiddenLayers = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        for element in zOrderedElements {
+            guard let node = element.node, node.semantic.linkedBoardID != nil,
+                  element.layerIDs.contains(where: { !hiddenLayers.contains($0) }) else { continue }
+            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame), context: context)
+        }
+    }
+
     // MARK: Flow recording (F5)
 
     public private(set) var flowRecorder: FlowRecorder?
@@ -1318,6 +1437,24 @@ public final class CanvasView: NSView {
         commitLabelEditor()
         let point = convert(event.locationInWindow, from: nil)
 
+        // Linked-board view: navigation + selection only. The badge still
+        // works (nested links show the depth affordance), everything that
+        // would mutate is cut off before it starts.
+        if isReadOnly {
+            if event.clickCount == 2, let linked = linkBadgeHit(at: point) {
+                linkActivated?(linked)
+                return
+            }
+            let hit = editableElement(at: point)
+            if let hit, !event.modifierFlags.contains(.shift) {
+                selection = board.expandSelectionToGroups([hit.id])
+            } else if hit == nil {
+                selection = []
+            }
+            gesture = .idle
+            return
+        }
+
         if tool == .draw {
             gesture = .draw(
                 points: [strokePoint(from: event, at: point, since: event.timestamp)],
@@ -1333,6 +1470,12 @@ public final class CanvasView: NSView {
 
         if event.clickCount == 2 {
             Self.debugTrace?("doubleClick at view=\(point)")
+            // The link badge sits OUTSIDE node frames — check it explicitly
+            // before normal double-click handling (label edit / create).
+            if let linked = linkBadgeHit(at: point) {
+                linkActivated?(linked)
+                return
+            }
             handleDoubleClick(at: point)
             return
         }
