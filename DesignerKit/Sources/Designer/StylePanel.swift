@@ -10,14 +10,20 @@ final class StylePanelModel: ObservableObject {
         case pencil     // Draw tool: styles NEW ink strokes
         case shape      // Shape tool: styles the NEXT dragged shape
         case selection  // Select tool: restyles the selected element(s)
+        case connector  // Select tool with a connector selected
 
         var title: String {
             switch self {
             case .pencil: return "Pencil"
             case .shape: return "Shape"
             case .selection: return "Style"
+            case .connector: return "Connector"
             }
         }
+
+        /// Fill applies to blocks only — pencil strokes and connectors are
+        /// lines.
+        var showsFill: Bool { self == .shape || self == .selection }
     }
 
     @Published var isVisible = false
@@ -53,6 +59,9 @@ struct StylePanelActions {
     var styleChanged: (Style) -> Void
     var bringToFront: () -> Void
     var sendToBack: () -> Void
+    /// Explicit dismiss (the header ✕) — the panel no longer closes itself
+    /// on deselection/undo.
+    var close: () -> Void = {}
 }
 
 struct StylePanelContainer: View {
@@ -80,6 +89,15 @@ struct StylePanel: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Spacer()
+                Button {
+                    actions.close()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Close the style panel")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -91,6 +109,11 @@ struct StylePanel: View {
         .frame(width: 236)
         .floatingPanel(radius: 12)
         .graphiteAccent()
+        // The whole panel is a solid click target: a click on padding or
+        // between controls must NEVER fall through to the canvas (it used to
+        // deselect and close the panel).
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 
     private var hint: String {
@@ -98,6 +121,7 @@ struct StylePanel: View {
         case .pencil: return "new strokes"
         case .shape: return "next shape"
         case .selection: return "selected"
+        case .connector: return "selected"
         }
     }
 }
@@ -116,13 +140,13 @@ struct StyleControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            if model.mode != .pencil {
+            if model.mode.showsFill {
                 swatchRow(title: "Background", selected: model.fill, includeNone: true) { hex in
                     model.fill = hex
                     emit()
                 }
             }
-            swatchRow(title: model.mode == .pencil ? "Color" : "Outline",
+            swatchRow(title: model.mode.showsFill ? "Outline" : "Color",
                       selected: model.stroke, includeNone: false) { hex in
                 model.stroke = hex
                 emit()
@@ -159,19 +183,26 @@ struct StyleControls: View {
                 Text(model.mode == .pencil ? "Width" : "Outline width")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
-                Picker("", selection: Binding(
-                    get: { widthBucket },
-                    set: { model.strokeWidth = Self.widths[$0]; emit() }
-                )) {
-                    Text("S").tag(0)
-                    Text("M").tag(1)
-                    Text("L").tag(2)
+                HStack(spacing: 8) {
+                    Slider(value: Binding(
+                        get: { currentWidth },
+                        set: { model.strokeWidth = ($0 * 10).rounded() / 10; emit() }
+                    ), in: 0.5...8)
+                    // Live illustration: the actual stroke at the chosen
+                    // width and color, inside a small chip.
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color.secondary.opacity(0.35), lineWidth: 0.75)
+                        Capsule()
+                            .fill(Color(nsColor: NSColor(hexFallback: model.stroke ?? "#8B95A5")))
+                            .frame(width: 20, height: min(max(CGFloat(currentWidth), 1), 12))
+                    }
+                    .frame(width: 30, height: 20)
+                    .help(String(format: "%.1f pt", currentWidth))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
 
-            if model.mode == .selection {
+            if model.mode == .selection || model.mode == .connector {
                 HStack(spacing: 6) {
                     Button {
                         actions.sendToBack()
@@ -190,16 +221,25 @@ struct StyleControls: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+
+            Button {
+                // Back to the app defaults for this mode — one click.
+                model.fill = model.mode == .shape ? Style.noFill : nil
+                model.stroke = nil
+                model.strokeWidth = nil
+                model.opacity = 1
+                emit()
+            } label: {
+                Label("Remove formatting", systemImage: "paintbrush.slash")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.borderless)
+            .help("Reset color, outline, width, and opacity to the defaults")
         }
     }
 
-    private static let widths: [Double] = [1.25, 2.5, 4.5]
-
-    private var widthBucket: Int {
-        let width = model.strokeWidth ?? (model.mode == .pencil ? 2 : 1.25)
-        if width < 2 { return 0 }
-        if width < 3.5 { return 1 }
-        return 2
+    private var currentWidth: Double {
+        model.strokeWidth ?? (model.mode == .pencil ? 2 : 1.25)
     }
 
     private func emit() {

@@ -64,9 +64,10 @@ final class UITestDriver {
         step25ShapeToolAndStyles()
         step26LabelEditorNeverBlanketsToolbar()
         step27SnapOverlapDragByMouse()
+        step28StylePanelPolish()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish verified")
             exit(0)
         } else {
             for failure in failures {
@@ -1047,7 +1048,7 @@ final class UITestDriver {
         document.perform(.batch([.insertElement(c), .insertElement(d)]), actionName: "Mouse Drag Subjects")
         // Explicit 1x viewport with the subjects mid-screen, clear of the
         // toolbar band (reveal would zoom far out on the cluttered board).
-        canvasView.viewport = CanvasViewport(origin: Point(x: -40, y: 5300), scale: 1)
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 5300), scale: 1)
         canvasView.select([])
         pumpRunLoop()
 
@@ -1083,6 +1084,84 @@ final class UITestDriver {
         expect(frame(c.id).intersects(frame(d.id)), "shapes dragged together overlap")
 
         for _ in 0..<3 { document.undoManager?.undo() } // 2 drags + insert
+        pumpRunLoop()
+    }
+
+    /// Style-panel polish round: S pops the shape picker like the toolbar
+    /// button, undoing a fresh shape keeps the panel open, web SVG paste
+    /// lands as an image block, connector selection styles through the
+    /// panel's connector mode.
+    private func step28StylePanelPolish() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no controller for style-panel polish"); return
+        }
+
+        // (1) "s" requests the shape picker popup, same as the button.
+        key(1, characters: "s")
+        pumpRunLoop()
+        expect(controller.shapePickerVisibleForTesting, "'s' pops the shape picker")
+        key(1, characters: "s")
+        pumpRunLoop()
+        expect(!controller.shapePickerVisibleForTesting, "'s' toggles the picker closed")
+
+        // (2) Undo after creating a shape keeps the style panel open.
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 5900), scale: 1)
+        canvasView.pendingShapeStyle = Style(fill: Style.noFill)
+        canvasView.activateShapeTool(shape: .rectangle, lockAspect: false)
+        pumpRunLoop()
+        let from = canvasView.viewport.toView(Point(x: 40, y: 6000))
+        let to = canvasView.viewport.toView(Point(x: 260, y: 6120))
+        send(.leftMouseDown, at: from, clickCount: 1)
+        for step in 1...5 {
+            let t = CGFloat(step) / 5
+            send(.leftMouseDragged, at: CGPoint(
+                x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t), clickCount: 1)
+        }
+        send(.leftMouseUp, at: to, clickCount: 1)
+        pumpRunLoop()
+        expect(controller.stylePanelModel.isVisible, "panel visible after drawing a shape")
+        document.undoManager?.undo()
+        pumpRunLoop()
+        expect(controller.stylePanelModel.isVisible,
+               "undoing the fresh shape must NOT close the style panel")
+
+        // (3) A web-copied SVG pastes as an image block.
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"60\"><rect width=\"80\" height=\"60\" fill=\"#4A90D9\"/></svg>"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("some page text \(svg) trailing", forType: .string)
+        let nodesBefore = document.board.elements.values.filter { $0.node != nil }.count
+        canvasView.paste(nil)
+        pumpRunLoop()
+        let pasted = document.board.elementsInZOrder.reversed()
+            .compactMap(\.node).first
+        expect(document.board.elements.values.filter { $0.node != nil }.count == nodesBefore + 1,
+               "SVG paste creates a block")
+        expect(pasted?.style.image?.hasPrefix("data:image/svg") == true,
+               "pasted block carries the SVG as its image")
+        document.undoManager?.undo()
+        pumpRunLoop()
+
+        // (4) Selecting a connector puts the panel in connector mode.
+        let layer = document.board.layers[0].id
+        let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "cs-a"),
+                                            frame: Rect(x: 0, y: 6300, width: 120, height: 60))))
+        let b = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "cs-b"),
+                                            frame: Rect(x: 400, y: 6300, width: 120, height: 60))))
+        let e = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                            to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(e)]),
+                         actionName: "Connector Style Graph")
+        canvasView.select([e.id])
+        pumpRunLoop()
+        expect(controller.stylePanelModel.mode == .connector,
+               "selecting a connector switches the panel to connector mode")
+        document.undoManager?.undo()
+        pumpRunLoop()
+        canvasView.select([])
+        controller.stylePanelModel.isVisible = false
         pumpRunLoop()
     }
 

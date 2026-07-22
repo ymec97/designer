@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.8.1 — 2026-07-22
+
+Style panel polish round (work-mac feedback).
+
+- "S" now pops the shape picker exactly like clicking the toolbar button
+  (the tool arms once you choose a shape).
+- Undoing a freshly drawn shape (⌘Z) no longer slams the style panel
+  shut — it falls back to pending-shape mode; the panel now closes only
+  via its new header ✕.
+- Clicks on the style panel's background/padding no longer fall through
+  to the canvas (that's what was deselecting and closing the panel).
+- NEW: paste SVGs copied from the web (and raster images) straight onto
+  the canvas — they become image blocks sized to their natural aspect.
+- NEW: "Remove formatting" button resets fill/outline/width/opacity to
+  the defaults in one click.
+- NEW: connectors get their own style panel mode — select a connector to
+  recolor it, change its width, or fade it (connector opacity is now
+  rendered); Send to Back / Bring to Front included.
+- The width control is now a slider with a live preview chip showing the
+  actual stroke at the chosen width and color.
+
 ## v0.8.0 — 2026-07-22
 
 Shapes + a universal Style panel, two agent-review fixes, two bug fixes,

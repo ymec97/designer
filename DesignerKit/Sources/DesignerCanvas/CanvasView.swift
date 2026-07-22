@@ -219,6 +219,10 @@ public final class CanvasView: NSView {
     /// Observers (toolbar) are told when the tool changes, however it changes.
     public var toolChanged: ((Tool) -> Void)?
 
+    /// "S" opens the shape PICKER (same as clicking the toolbar button) —
+    /// wired by the controller; unset falls back to arming the last shape.
+    public var shapePickerRequested: (() -> Void)?
+
     /// Style applied to the NEXT dragged shape (set by the style panel).
     /// The default is the grouping-outline look the feature exists for:
     /// no background, default stroke.
@@ -1777,7 +1781,13 @@ public final class CanvasView: NSView {
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "v": return activateSelectTool(nil)
             case "d": return activateDrawTool(nil)
-            case "s": return activateShapeTool(nil)
+            case "s":
+                // Same behavior as the toolbar button: pop the shape picker.
+                if let shapePickerRequested {
+                    shapePickerRequested()
+                    return
+                }
+                return activateShapeTool(nil)
             default: break
             }
         }
@@ -1936,10 +1946,83 @@ public final class CanvasView: NSView {
     }
 
     @objc public func paste(_ sender: Any?) {
-        guard let data = NSPasteboard.general.data(forType: Self.clipPasteboardType),
-              let clip = try? JSONDecoder().decode(Board.self, from: data),
-              !clip.elements.isEmpty else { return }
-        insertClip(clip, centeredOnViewport: true)
+        if let data = NSPasteboard.general.data(forType: Self.clipPasteboardType),
+           let clip = try? JSONDecoder().decode(Board.self, from: data),
+           !clip.elements.isEmpty {
+            insertClip(clip, centeredOnViewport: true)
+            return
+        }
+        // Foreign content: an SVG copied from the web, or a raster image —
+        // becomes an image block (Style.image data URI) at viewport center.
+        _ = pasteForeignImage()
+    }
+
+    /// SVG markup (string/HTML/public.svg-image) or a raster image on the
+    /// pasteboard becomes an image block. Returns whether anything landed.
+    @discardableResult
+    public func pasteForeignImage() -> Bool {
+        let pasteboard = NSPasteboard.general
+
+        // 1. SVG: dedicated type, or markup inside a plain string / HTML.
+        var svgText: String?
+        if let data = pasteboard.data(forType: NSPasteboard.PasteboardType("public.svg-image")) {
+            svgText = String(data: data, encoding: .utf8)
+        }
+        if svgText == nil {
+            for type in [NSPasteboard.PasteboardType.string, .html] {
+                guard let text = pasteboard.string(forType: type) else { continue }
+                if let range = text.range(of: "<svg"),
+                   let end = text.range(of: "</svg>", range: range.lowerBound..<text.endIndex) {
+                    svgText = String(text[range.lowerBound..<end.upperBound])
+                    break
+                }
+            }
+        }
+        if let svgText, let data = svgText.data(using: .utf8), NSImage(data: data) != nil {
+            let uri = "data:image/svg+xml;base64,\(data.base64EncodedString())"
+            insertImageBlock(dataURI: uri, naturalSize: NSImage(data: data)?.size)
+            return true
+        }
+
+        // 2. Raster: PNG directly, or anything NSImage can read (TIFF from
+        // most apps) re-encoded as PNG.
+        if let png = pasteboard.data(forType: .png), let image = NSImage(data: png) {
+            insertImageBlock(dataURI: "data:image/png;base64,\(png.base64EncodedString())",
+                             naturalSize: image.size)
+            return true
+        }
+        if let image = NSImage(pasteboard: pasteboard),
+           let tiff = image.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            insertImageBlock(dataURI: "data:image/png;base64,\(png.base64EncodedString())",
+                             naturalSize: image.size)
+            return true
+        }
+        return false
+    }
+
+    private func insertImageBlock(dataURI: String, naturalSize: CGSize?) {
+        // Clamp to a sane on-board footprint, preserving aspect.
+        let natural = naturalSize.flatMap { $0.width > 1 && $0.height > 1 ? $0 : nil }
+            ?? CGSize(width: 240, height: 180)
+        let maxSide = 420.0 * creationScaleFactor()
+        let scale = min(1, maxSide / Double(max(natural.width, natural.height)))
+        let width = Double(natural.width) * scale
+        let height = Double(natural.height) * scale
+        let center = visibleCenterWorld
+        let layerIDs = activeLayerIDs()
+        let element = Element(
+            layerIDs: layerIDs.isEmpty ? [board.layers[0].id] : layerIDs,
+            sortKey: board.topSortKey,
+            content: .node(Node(
+                semantic: NodeSemantic(name: ""),
+                frame: Rect(x: center.x - width / 2, y: center.y - height / 2,
+                            width: width, height: height),
+                style: Style(fill: Style.noFill, image: dataURI)
+            ))
+        )
+        delegate?.canvasView(self, perform: .insertElement(element), actionName: "Paste Image")
+        selection = [element.id]
     }
 
     @objc public func duplicateSelection(_ sender: Any?) {
@@ -1968,7 +2051,12 @@ public final class CanvasView: NSView {
     }
 
     public var canPaste: Bool {
-        NSPasteboard.general.data(forType: Self.clipPasteboardType) != nil
+        let pasteboard = NSPasteboard.general
+        if pasteboard.data(forType: Self.clipPasteboardType) != nil { return true }
+        if pasteboard.data(forType: NSPasteboard.PasteboardType("public.svg-image")) != nil { return true }
+        if pasteboard.data(forType: .png) != nil || pasteboard.data(forType: .tiff) != nil { return true }
+        if let text = pasteboard.string(forType: .string), text.contains("<svg") { return true }
+        return false
     }
 
     /// Removes manual bends from every selected connector (P5).
