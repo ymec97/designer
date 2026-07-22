@@ -189,6 +189,70 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertLessThan(frame(plain, "Web App").x, 1000, "plain parse still lays out fresh")
     }
 
+    /// The wire format carries no styling — matched blocks must inherit the
+    /// current board's Style so accepting a proposal never strips a shape's
+    /// colors/opacity.
+    func testAnchoredParseInheritsStyles() throws {
+        var current = Board(title: "Styled")
+        let layer = current.layers[0].id
+        let grouping = Style(fill: Style.noFill, stroke: "#D95757", strokeWidth: 2.5, opacity: 0.3)
+        try current.apply(.insertElement(Element(
+            layerIDs: [layer], sortKey: current.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "Group Box"),
+                                frame: Rect(x: 0, y: 0, width: 400, height: 300),
+                                style: grouping)))))
+
+        let proposal = """
+        # designer-board
+
+        {"nodes":[{"id":"group-box","name":"Group Box"},
+                  {"id":"newbie","name":"Newbie"}],"edges":[]}
+        """
+        let anchored = try LLMInterchange.parse(proposal, anchoredTo: current).board
+        let matched = anchored.elements.values.first { $0.node?.semantic.name == "Group Box" }!.node!
+        XCTAssertEqual(matched.style, grouping, "matched block keeps its style through the wire")
+        let newbie = anchored.elements.values.first { $0.node?.semantic.name == "Newbie" }!.node!
+        XCTAssertEqual(newbie.style, Style(), "new blocks arrive unstyled")
+    }
+
+    /// The agent can RECOLOR a block explicitly (fill/opacity), the color
+    /// round-trips, and it registers as a CHANGE (so review shows it) —
+    /// without touching `kind`. Preserved fields (strokeWidth/image) survive.
+    func testAgentCanSetExplicitColorAndItDiffsAsAChange() throws {
+        var current = Board(title: "Recolor")
+        let layer = current.layers[0].id
+        try current.apply(.insertElement(Element(
+            layerIDs: [layer], sortKey: current.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(kind: .service, name: "API"),
+                                frame: Rect(x: 0, y: 0, width: 160, height: 80),
+                                style: Style(fill: "#111111", strokeWidth: 3))))))
+
+        // get_board round-trip carries the style; the agent changes only fill.
+        let wire = LLMInterchange.export(current)
+        XCTAssertTrue(wire.contains("\"fill\""), "export carries fill so agents can see/edit it")
+        let proposal = """
+        # designer-board
+
+        {"nodes":[{"id":"api","name":"API","kind":"service","fill":"#4A90D9","opacity":0.5}],"edges":[]}
+        """
+        let proposed = try LLMInterchange.parse(proposal, anchoredTo: current).board
+        let element = proposed.elements.values.first { $0.node != nil }!
+        let node = element.node!
+        XCTAssertEqual(node.style.fill, "#4A90D9", "agent's explicit fill wins")
+        XCTAssertEqual(node.style.opacity, 0.5, "agent's explicit opacity wins")
+        XCTAssertEqual(node.style.strokeWidth, 3, "strokeWidth (wire can't carry it) is preserved")
+        XCTAssertEqual(node.semantic.kind, .service, "kind is untouched — no kind-dot hijack")
+
+        // The diff flags it as a CHANGE with the proposed element id, so the
+        // review ghost renders it in place.
+        let diff = LLMInterchange.diff(current: current, proposed: proposed)
+        XCTAssertTrue(diff.addedNodes.isEmpty && diff.removedNodes.isEmpty,
+                      "a recolor is neither an add nor a remove")
+        XCTAssertEqual(diff.changedNodes.count, 1, "the recolor is one changed node")
+        XCTAssertTrue(diff.changedElementIDs.contains(element.id),
+                      "the changed element id is exposed for the ghost overlay")
+    }
+
     func testNoEdgesStacksCompactly() {
         // No edges = no flow: one tidy column (spilling sideways past 10).
         let b = board(#"{"nodes":[{"id":"a","name":"a"},{"id":"b","name":"b"}],"edges":[]}"#)

@@ -66,6 +66,24 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         return stack
     }()
 
+    /// The leading column mirrors it for left-side panels (style, inspector)
+    /// so they stack instead of overlapping.
+    private lazy var leftPanelStack: NSStackView = {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.detachesHiddenViews = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -18),
+        ])
+        return stack
+    }()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         boardSubscription = document.$board.sink { [weak self] board in
@@ -86,8 +104,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         }
         canvasView.toolChanged = { [weak self] tool in
             self?.toolbarState.tool = tool
+            self?.refreshStylePanel()
         }
         installToolbar()
+        installStylePanel()
         installLayersPanel()
         installLibraryPanel()
         installCommandPalette()
@@ -138,12 +158,88 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
         host.isHidden = true
-        view.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            host.topAnchor.constraint(equalTo: view.topAnchor, constant: 78),
-        ])
+        leftPanelStack.addArrangedSubview(host)
         inspectorHost = host
+    }
+
+    // MARK: Style panel (shapes / pencil / selection)
+
+    let stylePanelModel = StylePanelModel()
+    private var stylePanelHost: NSView?
+
+    private func installStylePanel() {
+        let panel = StylePanelContainer(
+            model: stylePanelModel,
+            actions: StylePanelActions(
+                styleChanged: { [weak self] style in self?.stylePanelEdited(style) },
+                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront() },
+                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() }
+            )
+        )
+        let host = NSHostingView(rootView: panel)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        leftPanelStack.insertArrangedSubview(host, at: 0)
+        stylePanelHost = host
+    }
+
+    /// A style edit lands where the panel's mode points: the pencil, the
+    /// pending shape, or the live selection (one undo step per edit).
+    private func stylePanelEdited(_ style: Style) {
+        switch stylePanelModel.mode {
+        case .pencil:
+            canvasView.pendingInkStyle = style
+        case .shape:
+            canvasView.pendingShapeStyle = style
+        case .selection:
+            let operations = canvasView.selection.compactMap { id -> BoardOperation? in
+                guard var element = document.board.elements[id] else { return nil }
+                switch element.content {
+                case .node(var node):
+                    node.style = style
+                    element.content = .node(node)
+                case .ink(var ink):
+                    ink.style = style
+                    element.content = .ink(ink)
+                case .note(var note):
+                    note.style = style
+                    element.content = .note(note)
+                default:
+                    return nil
+                }
+                return .replaceElement(element)
+            }
+            guard !operations.isEmpty else { return }
+            document.perform(.batch(operations), actionName: "Edit Style")
+        }
+    }
+
+    /// Mode routing: pencil while drawing, shape while the shape tool is
+    /// armed, selection when styleable elements are selected — hidden
+    /// otherwise.
+    func refreshStylePanel() {
+        switch canvasView.tool {
+        case .draw:
+            stylePanelModel.seed(from: canvasView.pendingInkStyle, mode: .pencil)
+            stylePanelModel.isVisible = true
+        case .shape:
+            stylePanelModel.seed(from: canvasView.pendingShapeStyle, mode: .shape)
+            stylePanelModel.isVisible = true
+        case .select:
+            let styleable = canvasView.selection.compactMap { id -> Style? in
+                switch document.board.elements[id]?.content {
+                case .node(let node): return node.style
+                case .ink(let ink): return ink.style
+                case .note(let note): return note.style
+                default: return nil
+                }
+            }
+            if let first = styleable.first {
+                stylePanelModel.seed(from: first, mode: .selection)
+                stylePanelModel.isVisible = true
+            } else {
+                stylePanelModel.isVisible = false
+            }
+        }
     }
 
     // MARK: In-app assistant (F6)
@@ -587,7 +683,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.proposalGhost = CanvasView.ProposalGhost(
             proposedBoard: stored,
             addedElements: diff.addedElementIDs,
-            removedElements: diff.removedElementIDs
+            removedElements: diff.removedElementIDs,
+            changedElements: diff.changedElementIDs
         )
     }
 
@@ -857,7 +954,8 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.proposalGhost = CanvasView.ProposalGhost(
             proposedBoard: proposed,
             addedElements: diff.addedElementIDs,
-            removedElements: diff.removedElementIDs
+            removedElements: diff.removedElementIDs,
+            changedElements: diff.changedElementIDs
         )
         if let ghostBounds = canvasView.proposalGhostBounds() {
             canvasView.reveal(worldRect: ghostBounds)
@@ -1080,6 +1178,18 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             PaletteCommand(title: "Select Tool", shortcut: "V", systemImage: "cursorarrow") { [weak self] in
                 self?.canvasView.activateSelectTool(nil)
             },
+            PaletteCommand(title: "Shape Tool", shortcut: "S", systemImage: "square.on.circle",
+                           keywords: ["shapes", "rectangle", "circle", "square", "triangle", "ellipse", "grouping"]) { [weak self] in
+                self?.canvasView.activateShapeTool(nil)
+            },
+            PaletteCommand(title: "Bring to Front", shortcut: nil, systemImage: "square.3.layers.3d.top.filled",
+                           keywords: ["z-order", "front", "raise", "above"]) { [weak self] in
+                self?.canvasView.bringSelectionToFront()
+            },
+            PaletteCommand(title: "Send to Back", shortcut: nil, systemImage: "square.3.layers.3d.bottom.filled",
+                           keywords: ["z-order", "back", "behind", "lower", "grouping"]) { [weak self] in
+                self?.canvasView.sendSelectionToBack()
+            },
             PaletteCommand(title: "Structurize Sketch into Shapes", shortcut: "⌘R", systemImage: "wand.and.stars") { [weak self] in
                 self?.structurize(nil)
             },
@@ -1177,8 +1287,19 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.activeLayerID = id
     }
 
+    private var layersPanelHost: NSView?
+
+    /// Test hook: whether the Layers panel host is currently shown.
+    var layersPanelIsOpenForTesting: Bool { !(layersPanelHost?.isHidden ?? true) }
+
     @objc func toggleLayersPanel(_ sender: Any?) {
         layersModel.isVisible.toggle()
+        // Drive the AppKit host's isHidden too (not just the SwiftUI `if`):
+        // in an NSStackView with detachesHiddenViews, a perpetually-attached
+        // zero-size host could fail to reclaim space after a long session, so
+        // the panel "opened" but rendered at zero. isHidden makes re-show
+        // deterministic — consistent with Flows/Versions/Chat.
+        layersPanelHost?.isHidden = !layersModel.isVisible
         toolbarState.layersPanelVisible = layersModel.isVisible
     }
 
@@ -1251,7 +1372,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LayersPanelContainer(document: document, model: layersModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
         rightPanelStack.addArrangedSubview(host)
+        layersPanelHost = host
     }
 
     private func updateLayer(_ id: LayerID, _ mutate: (inout Layer) -> Void) {
@@ -1265,6 +1388,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             state: toolbarState,
             onSelectTool: { [weak self] in self?.toolbarAction { $0.activateSelectTool(nil) } },
             onDrawTool: { [weak self] in self?.toolbarAction { $0.activateDrawTool(nil) } },
+            onShapeChosen: { [weak self] choice in
+                self?.toolbarAction { $0.activateShapeTool(shape: choice.shape, lockAspect: choice.lockAspect) }
+            },
             onLayers: { [weak self] in
                 guard let self else { return }
                 self.toggleLayersPanel(nil)
@@ -1291,6 +1417,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             },
             onAssistant: { [weak self] in
                 self?.toggleChatPanel(nil)
+                // Restore first responder like every other toolbar action —
+                // otherwise focus stranded in a label editor keeps swallowing
+                // input after the panel toggles.
+                self?.view.window?.makeFirstResponder(self?.canvasView)
             },
             onCommandPalette: { [weak self] in
                 self?.toggleCommandPalette(nil)
@@ -1393,8 +1523,11 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("DesignerLibrary")
     )
 
+    private var libraryPanelHost: NSView?
+
     @objc func toggleLibraryPanel(_ sender: Any?) {
         libraryModel.isVisible.toggle()
+        libraryPanelHost?.isHidden = !libraryModel.isVisible
         toolbarState.libraryPanelVisible = libraryModel.isVisible
         if libraryModel.isVisible { reloadLibrary() }
     }
@@ -1483,7 +1616,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         let panel = LibraryPanelContainer(model: libraryModel, actions: actions)
         let host = NSHostingView(rootView: panel)
         host.translatesAutoresizingMaskIntoConstraints = false
+        host.isHidden = true
         rightPanelStack.addArrangedSubview(host)
+        libraryPanelHost = host
     }
 
     private func reloadLibrary() {
@@ -1750,6 +1885,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     func canvasViewDidChangeSelection(_ view: CanvasView) {
         refreshInspector()
+        refreshStylePanel()
     }
 }
 

@@ -156,16 +156,22 @@ public enum EdgeGeometry {
             if !detours.isEmpty {
                 // Re-anchor the endpoints toward the detour they actually
                 // approach from — anchors chosen for the straight line made
-                // curves hook around and arrive on the wrong side.
+                // curves hook around and arrive on the wrong side. BUT never
+                // accept a side that faces AWAY from the far endpoint: on a
+                // wide/short node a detour waypoint nudged just above center
+                // would otherwise pick `.top`, sending the arrowhead across
+                // the whole node to poke into the top edge from above.
                 var start = points[0], end = points[1]
                 if let first = detours.first,
                    let resolved = resolve(edge.from, toward: .free(first), frames: frames,
-                                          offsetOverride: anchorOffsets?.from) {
+                                          offsetOverride: anchorOffsets?.from),
+                   sideFaces(resolved.side, from: resolved.point, toward: points[1]) {
                     start = resolved.point
                 }
                 if let last = detours.last,
                    let resolved = resolve(edge.to, toward: .free(last), frames: frames,
-                                          offsetOverride: anchorOffsets?.to) {
+                                          offsetOverride: anchorOffsets?.to),
+                   sideFaces(resolved.side, from: resolved.point, toward: points[0]) {
                     end = resolved.point
                 }
                 var candidate = smoothed([start] + detours + [end])
@@ -548,6 +554,28 @@ public enum EdgeGeometry {
             guard let frame = frames(id) else { return .zero }
             return Point(x: frame.midX, y: frame.midY)
         }
+    }
+
+    /// The outward normal of a node side (screen coords: +y is down).
+    private static func outwardNormal(_ side: Anchor.Side) -> (dx: Double, dy: Double) {
+        switch side {
+        case .top: return (0, -1)
+        case .bottom: return (0, 1)
+        case .left: return (-1, 0)
+        case .right: return (1, 0)
+        default: return (0, 0)
+        }
+    }
+
+    /// True when `side` (at border point `from`) opens toward `target` — i.e.
+    /// the connector arriving/leaving there does NOT have to cross the node
+    /// interior to reach the far endpoint. A nil side (free anchor) always
+    /// passes. Used to reject a detour-chosen side that faces away.
+    private static func sideFaces(_ side: Anchor.Side?, from: Point, toward target: Point) -> Bool {
+        guard let side else { return true }
+        let normal = outwardNormal(side)
+        let toTarget = (dx: target.x - from.x, dy: target.y - from.y)
+        return normal.dx * toTarget.dx + normal.dy * toTarget.dy >= 0
     }
 
     /// Picks the frame side facing `target` (dominant axis wins).

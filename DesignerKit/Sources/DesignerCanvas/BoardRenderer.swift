@@ -225,30 +225,43 @@ final class BoardRenderer {
             )
         }
 
+        // Whole-element opacity: fill, stroke, and label fade as ONE via a
+        // transparency layer (bare setAlpha would double-composite where the
+        // stroke overlaps the fill edge).
+        let opacity = node.style.effectiveOpacity
+        if opacity < 1 {
+            context.saveGState()
+            context.setAlpha(CGFloat(opacity))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+
         // Soft elevation (Studio Graphite): a quiet drop shadow lifts the node
         // off the graphite ground. Skipped on dense boards (elevateNodes) to
-        // protect the frame budget.
-        let fillColor: CGColor
-        if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
-            fillColor = parsed.cgColor
-        } else {
-            fillColor = resolvedNodeFill(for: node.semantic.kind)
-        }
-        if elevateNodes {
-            context.saveGState()
-            context.setShadow(
-                offset: CGSize(width: 0, height: 1.5),
-                blur: 5 * viewport.scale,
-                color: Graphite.shadowColor.cgColor
-            )
-            context.setFillColor(fillColor)
-            context.addPath(path)
-            context.fillPath()
-            context.restoreGState()
-        } else {
-            context.setFillColor(fillColor)
-            context.addPath(path)
-            context.fillPath()
+        // protect the frame budget. `fill: "none"` shapes (grouping outlines)
+        // paint no background and cast no shadow.
+        if node.style.hasFill {
+            let fillColor: CGColor
+            if let hex = node.style.fill, let parsed = NSColor(hexString: hex) {
+                fillColor = parsed.cgColor
+            } else {
+                fillColor = resolvedNodeFill(for: node.semantic.kind)
+            }
+            if elevateNodes {
+                context.saveGState()
+                context.setShadow(
+                    offset: CGSize(width: 0, height: 1.5),
+                    blur: 5 * viewport.scale,
+                    color: Graphite.shadowColor.cgColor
+                )
+                context.setFillColor(fillColor)
+                context.addPath(path)
+                context.fillPath()
+                context.restoreGState()
+            } else {
+                context.setFillColor(fillColor)
+                context.addPath(path)
+                context.fillPath()
+            }
         }
 
         context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
@@ -287,8 +300,9 @@ final class BoardRenderer {
 
         // The kind dot — one saturated spot of colour, top-left inside the
         // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
-        // or triangle's corners crowd it).
-        let dottable = node.shape == .rectangle || node.shape == .ellipse
+        // or triangle's corners crowd it). Hollow (no-fill) shapes are
+        // decoration — a saturated dot on them reads as noise.
+        let dottable = (node.shape == .rectangle || node.shape == .ellipse) && node.style.hasFill
         if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
             let r = 3.4 * viewport.scale
             let inset = 13 * viewport.scale
@@ -332,10 +346,6 @@ final class BoardRenderer {
             }
         }
 
-        if isSelected {
-            strokeSelection(path: path, in: context, viewport: viewport)
-        }
-
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !node.semantic.name.isEmpty {
             // A cylinder's label lives in the drum, below the lid rim.
             if node.shape == .cylinder, textRect == rect {
@@ -346,10 +356,21 @@ final class BoardRenderer {
             drawText(
                 node.semantic.name,
                 fontSize: 13 * viewport.scale,
-                color: Self.textColor(onFill: node.style.fill),
+                color: node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText,
                 centeredIn: textRect,
                 context: context
             )
+        }
+
+        if opacity < 1 {
+            context.endTransparencyLayer()
+            context.restoreGState()
+        }
+
+        // Selection stays crisp OUTSIDE the opacity fade — a ghosted
+        // selection ring would look broken.
+        if isSelected {
+            strokeSelection(path: path, in: context, viewport: viewport)
         }
     }
 
@@ -476,6 +497,15 @@ final class BoardRenderer {
         context.setLineCap(.round)
         context.setLineJoin(.round)
 
+        // Stroke opacity via a transparency layer — the per-segment strokes
+        // overlap at joints and would double-darken under bare setAlpha.
+        let opacity = ink.style.effectiveOpacity
+        if opacity < 1 {
+            context.saveGState()
+            context.setAlpha(CGFloat(opacity))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+
         // Pressure-varying width: stroke per segment, width interpolated from
         // the endpoint pressures (0.5 = neutral for non-pressure devices).
         // Ink counts are small; per-segment stroking is fine.
@@ -488,6 +518,10 @@ final class BoardRenderer {
             context.addLine(to: viewport.toView(Point(x: point.x, y: point.y)))
             context.strokePath()
             previous = point
+        }
+        if opacity < 1 {
+            context.endTransparencyLayer()
+            context.restoreGState()
         }
 
         if isSelected, let bounds = SpatialIndex.boundingRect(of: Element(
@@ -1009,15 +1043,20 @@ final class BoardRenderer {
     }
 
     enum GhostBadgeKind {
-        case added, removed
+        case added, removed, changed
     }
 
-    /// A small +/− chip at a ghosted block's corner — legible even where
+    /// A small +/−/~ chip at a ghosted block's corner — legible even where
     /// dashes and tints blend into a busy board.
     func drawGhostBadge(kind: GhostBadgeKind, at corner: CGPoint, in context: CGContext, viewport: CanvasViewport) {
         let radius = max(7 * viewport.scale, 5)
         let center = CGPoint(x: corner.x, y: corner.y)
-        let color = kind == .added ? Graphite.proposalAdd : Graphite.proposalRemove
+        let color: NSColor
+        switch kind {
+        case .added: color = Graphite.proposalAdd
+        case .removed: color = Graphite.proposalRemove
+        case .changed: color = Graphite.proposalChange
+        }
         context.saveGState()
         context.setFillColor(color.cgColor)
         context.fillEllipse(in: CGRect(
@@ -1026,13 +1065,47 @@ final class BoardRenderer {
         context.setLineWidth(max(1.6 * viewport.scale, 1.2))
         context.setLineCap(.round)
         let arm = radius * 0.48
-        context.move(to: CGPoint(x: center.x - arm, y: center.y))
-        context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
-        if kind == .added {
+        switch kind {
+        case .added:
+            context.move(to: CGPoint(x: center.x - arm, y: center.y))
+            context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
             context.move(to: CGPoint(x: center.x, y: center.y - arm))
             context.addLine(to: CGPoint(x: center.x, y: center.y + arm))
+        case .removed:
+            context.move(to: CGPoint(x: center.x - arm, y: center.y))
+            context.addLine(to: CGPoint(x: center.x + arm, y: center.y))
+        case .changed:
+            // A small tilde-ish squiggle for "modified".
+            context.move(to: CGPoint(x: center.x - arm, y: center.y + arm * 0.35))
+            context.addCurve(
+                to: CGPoint(x: center.x + arm, y: center.y - arm * 0.35),
+                control1: CGPoint(x: center.x - arm * 0.2, y: center.y - arm * 0.8),
+                control2: CGPoint(x: center.x + arm * 0.2, y: center.y + arm * 0.8))
         }
         context.strokePath()
+        context.restoreGState()
+    }
+
+    /// Amber dashed ring marking an element modified in place (recolor,
+    /// relabel, restyle) in a proposal review.
+    func drawProposalChangedOutline(_ rect: CGRect, in context: CGContext, viewport: CanvasViewport) {
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalChange.withAlphaComponent(0.95).cgColor)
+        context.setLineWidth(max(1.8 * viewport.scale, 1.4))
+        context.setLineDash(phase: 0, lengths: [5 * viewport.scale, 4 * viewport.scale])
+        let inset = rect.insetBy(dx: -3, dy: -3)
+        context.stroke(inset)
+        context.restoreGState()
+    }
+
+    func drawProposalChangedRoute(_ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport) {
+        guard viewPoints.count >= 2 else { return }
+        context.saveGState()
+        context.setStrokeColor(Graphite.proposalChange.withAlphaComponent(0.9).cgColor)
+        context.setLineWidth(2.2 * viewport.scale)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 4 * viewport.scale])
+        strokePolyline(viewPoints, in: context)
         context.restoreGState()
     }
 

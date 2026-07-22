@@ -231,6 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             exit(1)
         }
         let controller = NSDocumentController.shared
+        // Session restoration may have reopened an earlier draft (e.g. a
+        // previous --ui-test run's autosave) — the bridge targets the
+        // FRONTMOST canvas, so nothing but the test document may be open.
+        for open in controller.documents {
+            open.close()
+        }
         guard let typeName = controller.defaultType,
               let document = try? controller.makeUntitledDocument(ofType: typeName) as? BoardDocument else {
             fail("no document"); return
@@ -239,12 +245,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.addDocument(document)
         document.makeWindowControllers()
         document.showWindows()
-        guard let canvasController = document.windowControllers.first?.window?.contentViewController as? CanvasViewController else {
+        guard let testWindow = document.windowControllers.first?.window,
+              let canvasController = testWindow.contentViewController as? CanvasViewController else {
             fail("no controller"); return
+        }
+        // Restoration can bring earlier windows back asynchronously; hide
+        // everything else once the launch settles so the frontmost lookup
+        // can only find the test window.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            for window in NSApp.windows where window !== testWindow {
+                window.orderOut(nil)
+            }
+            testWindow.makeKeyAndOrderFront(nil)
         }
 
         try? AgentController.shared.enable { port in
             DispatchQueue.global().async {
+                Thread.sleep(forTimeInterval: 1.0) // let the window sweep land
                 func post(_ body: String) -> [String: Any] {
                     var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp")!)
                     request.httpMethod = "POST"

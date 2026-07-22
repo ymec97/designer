@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.8.0 — 2026-07-22
+
+Shapes + a universal Style panel, two agent-review fixes, two bug fixes,
+and the two agent-proposal fixes that landed since v0.7.0.
+
+Shapes & styling
+- NEW: Shapes tool (S) + a toolbar picker (rectangle, square, ellipse,
+  circle, diamond, triangle) — the same node shapes sketch-recognition
+  produces. Drag on the canvas to size; ⇧ / the square·circle entries
+  lock aspect. New canvases' shapes default to no background, for
+  grouping outlines.
+- NEW: a context-sensitive Style panel on the left — Pencil mode (Draw
+  tool: ink color/width/opacity), Shape mode (the next drawn shape),
+  and Style mode (restyle the selection). Fill palette + "None"
+  (transparent background), stroke palette, S/M/L width, opacity slider
+  with quick 100%/30%, and Send to Back / Bring to Front. The Inspector
+  gains the same Style section.
+- Style model gains element `opacity` and a `fill: "none"` sentinel;
+  no-fill shapes skip fill, shadow, and the kind-dot; whole-element
+  opacity fades fill+stroke+label together.
+
+Agent review fidelity
+- The proposal review ghost now renders MODIFIED elements in place
+  (recolor, relabel, restyle, kind/shape change) with an amber "changed"
+  ring + badge — previously an in-place edit was invisible until you
+  accepted it.
+- Agents can now set a block's color directly: `fill`, `stroke`, and
+  `opacity` are in the agent JSON format (both directions). "Change the
+  color" recolors the block instead of hijacking `kind` (which also drew
+  the kind-dot). Matched blocks still inherit the current style for
+  fields the agent leaves unset.
+
+Fixes
+- FIX: connectors into a wide, short node (e.g. "Postgres") no longer
+  arrive on the wrong side with the arrowhead poking into the top edge —
+  a detour can't re-anchor an endpoint to a side that faces away from
+  the connector's source.
+- FIX: the right-side panels (Layers, Assistant) stopped opening after a
+  long session of zooming and creating shapes — the auto-opened label
+  editor, sized from the zoomed rect, ballooned over the toolbar and ate
+  the clicks. The editor is clamped and kept clear of the toolbar; the
+  right panels use one consistent show/hide mechanism; Assistant
+  restores focus like the other tools.
+- (from v0.7.1) A position-only proposal now reports "N blocks
+  repositioned" instead of "identical — nothing to review".
+- (from v0.7.2) Dangling connectors survive an accepted agent proposal
+  instead of being silently dropped.
+
+Tests
+- New real-mouse UI-test coverage: dragging a shape moves it, a drag
+  snaps into edge alignment, and dragging shapes together overlaps.
+
 ## v0.7.0 — 2026-07-20
 
 Agent proposals now REUSE the existing graph instead of rebuilding it

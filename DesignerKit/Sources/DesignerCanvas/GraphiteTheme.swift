@@ -38,6 +38,7 @@ public enum Graphite {
     /// removed. Distinct from the accent so ghosts never read as selection.
     public static let proposalAdd    = dynamic(light: "#0CA678", dark: "#3DDC97")
     public static let proposalRemove = dynamic(light: "#E03131", dark: "#FF7B7B")
+    public static let proposalChange = dynamic(light: "#E8943A", dark: "#F4B266")
 
     /// Palette for recorded flows (F5): distinct hues that read on both
     /// canvas grounds. Index 0 is the app accent; assignment cycles.

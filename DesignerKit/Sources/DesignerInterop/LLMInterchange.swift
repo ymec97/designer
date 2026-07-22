@@ -37,7 +37,9 @@ public enum LLMInterchange {
     #   `shape` ∈ rectangle|ellipse|diamond|triangle — convention: ellipse for
     #   databases/data stores, diamond for decision points, triangle for
     #   alerts, rectangle otherwise. `at` = [x, y] top-left, `size` =
-    #   [width, height] in points. PREFER omitting `at`/`size`: Designer then
+    #   [width, height] in points. Optional appearance: `fill`/`stroke` (hex
+    #   "#RRGGBB[AA]" or "none" for no background), `opacity` (0-1) — set these
+    #   to recolor a block instead of changing `kind`. PREFER omitting `at`/`size`: Designer then
     #   lays the board out like a human would (entry points left, flow
     #   left-to-right, related blocks adjacent, externals at the edge,
     #   compact). Keep names SHORT (2-4 words; details go in props/notes).
@@ -116,7 +118,54 @@ public enum LLMInterchange {
         if let current {
             wire.anchorPositions(to: current)
         }
-        return wire.toBoard()
+        var result = wire.toBoard()
+        if let current {
+            // The wire carries fill/stroke/opacity but NOT strokeWidth/image,
+            // so a matched block MERGES: start from the current style, then
+            // let the agent's explicit fill/stroke/opacity win. Fields the
+            // agent left unset keep the current look (and image survives).
+            result = ParseResult(
+                board: inheritingStyles(result.board, from: current),
+                warnings: result.warnings,
+                providedTitle: result.providedTitle
+            )
+        }
+        return result
+    }
+
+    /// Blocks matching a current block by slugged name keep the current
+    /// block's style for fields the wire can't express (strokeWidth, image),
+    /// while the agent's explicit fill/stroke/opacity override.
+    private static func inheritingStyles(_ board: Board, from current: Board) -> Board {
+        var styleForSlug: [String: Style] = [:]
+        for element in current.elementsInZOrder {
+            guard let node = element.node else { continue }
+            let key = WireBoard.slug(node.semantic.name.isEmpty
+                                     ? node.semantic.kind.rawValue : node.semantic.name)
+            if !key.isEmpty, styleForSlug[key] == nil {
+                styleForSlug[key] = node.style
+            }
+        }
+        guard !styleForSlug.isEmpty else { return board }
+
+        var updated = board
+        for element in board.elements.values {
+            guard var node = element.node else { continue }
+            let key = WireBoard.slug(node.semantic.name.isEmpty
+                                     ? node.semantic.kind.rawValue : node.semantic.name)
+            guard let inherited = styleForSlug[key] else { continue }
+            var merged = inherited
+            // Agent-set appearance (parsed from the wire) wins field by field.
+            if node.style.fill != nil { merged.fill = node.style.fill }
+            if node.style.stroke != nil { merged.stroke = node.style.stroke }
+            if node.style.opacity != nil { merged.opacity = node.style.opacity }
+            guard merged != node.style else { continue }
+            node.style = merged
+            var replaced = element
+            replaced.content = .node(node)
+            try? updated.apply(.replaceElement(replaced))
+        }
+        return updated
     }
 
     /// Finds the outermost balanced `{ … }` (ignoring braces inside strings),

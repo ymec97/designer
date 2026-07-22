@@ -35,6 +35,10 @@ enum MainMenu {
                                 action: #selector(CanvasView.activateDrawTool(_:)),
                                 keyEquivalent: "d")
         draw.keyEquivalentModifierMask = []
+        let shape = menu.addItem(withTitle: "Shape Tool",
+                                 action: #selector(CanvasView.activateShapeTool(_:)),
+                                 keyEquivalent: "s")
+        shape.keyEquivalentModifierMask = []
         menu.addItem(.separator())
         menu.addItem(withTitle: "Add Block",
                      action: #selector(CanvasView.addBlock(_:)),
