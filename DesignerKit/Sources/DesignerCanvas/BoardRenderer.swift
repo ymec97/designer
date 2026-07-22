@@ -1142,6 +1142,31 @@ final class BoardRenderer {
         context.restoreGState()
     }
 
+    /// A linked node's drill-down badge: accent circle with an ↗ arrow at the
+    /// node's top-right, OUTSIDE the frame (double-click to enter the board).
+    func drawLinkBadge(in rect: CGRect, context: CGContext) {
+        context.saveGState()
+        context.setFillColor(Graphite.accent.cgColor)
+        context.setShadow(offset: CGSize(width: 0, height: 1), blur: 2,
+                          color: Graphite.shadowColor.cgColor)
+        context.fillEllipse(in: rect)
+        context.setShadow(offset: .zero, blur: 0, color: nil)
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(max(rect.width * 0.11, 1.1))
+        context.setLineCap(.round)
+        // ↗ arrow: shaft + two head strokes.
+        let inset = rect.width * 0.3
+        let tail = CGPoint(x: rect.minX + inset, y: rect.maxY - inset)
+        let tip = CGPoint(x: rect.maxX - inset, y: rect.minY + inset)
+        context.move(to: tail)
+        context.addLine(to: tip)
+        context.move(to: CGPoint(x: tip.x - rect.width * 0.22, y: tip.y))
+        context.addLine(to: tip)
+        context.addLine(to: CGPoint(x: tip.x, y: tip.y + rect.height * 0.22))
+        context.strokePath()
+        context.restoreGState()
+    }
+
     /// A recordable connector during flow recording: dashed colored highlight.
     func drawFlowCandidate(
         _ viewPoints: [CGPoint], in context: CGContext, viewport: CanvasViewport

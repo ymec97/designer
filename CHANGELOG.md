@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.0 — 2026-07-22
+
+Linked boards: drill into a block's own board.
+
+- Right-click a block → "Link to Board…" (searchable catalog picker) or
+  "Create Board with Link" (creates a fresh board in the catalog, links
+  it, and opens it editable in its own window). Linked blocks wear a
+  small ↗ badge at their top-right, OUTSIDE the shape, so tiny blocks
+  link without covering their label.
+- Double-click the badge (or right-click → Go to Board): the camera
+  dives INTO the block with a swoosh, and the linked board appears in a
+  read-only "Linked board view" with a top banner. Nesting works to any
+  depth — each level remembers its exact camera.
+- Back (banner button or Escape) zooms out and restores the EXACT camera
+  position and zoom you left, level by level. "Open Editable" opens the
+  viewed board as a real document window for editing.
+- The linked view is strictly read-only: mouse edits don't start, undo
+  is disabled, and agent/document state is untouched until you're back.
+- Links are stored by the target board's stable id (they survive file
+  moves/renames), persist in board.json, and are invisible to the agent
+  wire format — an accepted AI proposal can't wipe or forge them.
+
 ## v0.8.1 — 2026-07-22
 
 Style panel polish round (work-mac feedback).

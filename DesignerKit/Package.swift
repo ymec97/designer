@@ -41,6 +41,7 @@ let package = Package(
                 "DesignerModel", "DesignerPersistence", "DesignerCanvas",
                 "DesignerRecognition", "DesignerInterop", "DesignerAgent",
             ],
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(name: "DesignerModelTests", dependencies: ["DesignerModel"]),
