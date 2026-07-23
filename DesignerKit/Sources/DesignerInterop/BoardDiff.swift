@@ -157,8 +157,8 @@ extension LLMInterchange {
         }
         for id in aNodes.keys where bNodes[id] != nil {
             let beforeWire = aNodes[id]!.wire, afterWire = bNodes[id]!.wire
-            if beforeWire.signature != afterWire.signature {
-                diff.changedNodes.append(.init(id: id, before: beforeWire.signature, after: afterWire.signature))
+            if let d = beforeWire.delta(to: afterWire) {
+                diff.changedNodes.append(.init(id: id, before: d.before, after: d.after))
                 diff.changedElementIDs.insert(bNodes[id]!.element)
             }
             if beforeWire.at != afterWire.at || beforeWire.size != afterWire.size {
@@ -190,9 +190,8 @@ extension LLMInterchange {
             diff.removedElementIDs.insert(entry.element)
         }
         for key in aEdges.keys where bEdges[key] != nil {
-            let before = aEdges[key]!.wire.signature, after = bEdges[key]!.wire.signature
-            if before != after {
-                diff.changedEdges.append(.init(id: key, before: before, after: after))
+            if let d = aEdges[key]!.wire.delta(to: bEdges[key]!.wire) {
+                diff.changedEdges.append(.init(id: key, before: d.before, after: d.after))
                 diff.changedElementIDs.insert(bEdges[key]!.element)
             }
         }
@@ -216,12 +215,35 @@ private func similarNames(_ a: String, _ b: String) -> Bool {
 
 private extension WireBoard.WireNode {
     var displayName: String { name ?? id }
-    /// Fields that, when changed, count as a modified node (position excluded —
-    /// frame changes are tracked separately as `movedNodes`). Style is
-    /// included so a recolor is a visible, reviewable change.
-    var signature: String {
-        "\(name ?? "")|\(kind ?? "generic")|\(shape ?? "rectangle")|\(orientation ?? "up")"
-            + "|\(fill ?? "")|\(stroke ?? "")|\(opacity.map { String($0) } ?? "")"
+    /// Layer membership as a readable label ("Base" when unset / base-only).
+    var layersLabel: String {
+        let names = (layers ?? []).sorted()
+        return names.isEmpty ? "Base" : names.joined(separator: ", ")
+    }
+    /// Human-readable before/after listing ONLY the fields that changed, so the
+    /// review box reads "fill #4A90D9 → #5FA55A" or "layer Base → connections"
+    /// instead of a raw pipe-delimited signature. Layer membership IS compared
+    /// here, so re-layering a block is a visible, reviewable change. Position
+    /// is excluded (tracked separately as `movedNodes`). Returns nil when
+    /// nothing tracked here changed.
+    func delta(to other: WireBoard.WireNode) -> (before: String, after: String)? {
+        var before: [String] = [], after: [String] = []
+        func cmp(_ label: String, _ a: String?, _ b: String?, _ def: String) {
+            let av = a ?? def, bv = b ?? def
+            if av != bv { before.append("\(label) \(av)"); after.append("\(label) \(bv)") }
+        }
+        cmp("name", name, other.name, "")
+        cmp("kind", kind, other.kind, "generic")
+        cmp("shape", shape, other.shape, "rectangle")
+        cmp("orientation", orientation, other.orientation, "up")
+        cmp("fill", fill, other.fill, "default")
+        cmp("stroke", stroke, other.stroke, "default")
+        cmp("opacity", opacity.map { compact($0) }, other.opacity.map { compact($0) }, "1")
+        if layersLabel != other.layersLabel {
+            before.append("layer \(layersLabel)"); after.append("layer \(other.layersLabel)")
+        }
+        guard !before.isEmpty else { return nil }
+        return (before.joined(separator: " · "), after.joined(separator: " · "))
     }
     /// "(x, y) w×h" for the moved-block diff lines.
     var footprint: String {
@@ -243,7 +265,27 @@ private extension WireBoard.WireEdge {
         let l = (label?.isEmpty == false) ? " (\(label!))" : ""
         return "\(from) → \(to)\(l)"
     }
-    var signature: String {
-        "\(direction ?? "forward")|\(`protocol` ?? "")|\(data ?? "")|\(condition ?? "")"
+    var layersLabel: String {
+        let names = (layers ?? []).sorted()
+        return names.isEmpty ? "Base" : names.joined(separator: ", ")
+    }
+    /// Readable before/after for a changed connector, listing only the fields
+    /// that differ — including layer membership, so "move all connectors to
+    /// layer X" shows up clearly in the review. Returns nil when unchanged.
+    func delta(to other: WireBoard.WireEdge) -> (before: String, after: String)? {
+        var before: [String] = [], after: [String] = []
+        func cmp(_ label: String, _ a: String?, _ b: String?, _ def: String) {
+            let av = a ?? def, bv = b ?? def
+            if av != bv { before.append("\(label) \(av)"); after.append("\(label) \(bv)") }
+        }
+        cmp("direction", direction, other.direction, "forward")
+        cmp("protocol", `protocol`, other.`protocol`, "")
+        cmp("data", data, other.data, "")
+        cmp("condition", condition, other.condition, "")
+        if layersLabel != other.layersLabel {
+            before.append("layer \(layersLabel)"); after.append("layer \(other.layersLabel)")
+        }
+        guard !before.isEmpty else { return nil }
+        return (before.joined(separator: " · "), after.joined(separator: " · "))
     }
 }
