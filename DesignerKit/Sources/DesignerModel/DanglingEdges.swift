@@ -91,11 +91,14 @@ extension Board {
     /// Expands an operation so that any node it inserts also snaps nearby
     /// dangling endpoints onto itself, as part of the same undo step.
     public func expandingWithReattachments(_ operation: BoardOperation) -> BoardOperation {
-        var insertedNodes: [(ElementID, Rect)] = []
+        // Nodes that were placed OR moved by this operation — either way, a
+        // free (dangling) connector endpoint that lands on/near them should
+        // snap to them (F7b: drop or drag an SVG onto loose connectors).
+        var placedNodes: [(ElementID, Rect)] = []
         func collect(_ operation: BoardOperation) {
             switch operation {
-            case .insertElement(let element):
-                if let node = element.node { insertedNodes.append((element.id, node.frame)) }
+            case .insertElement(let element), .replaceElement(let element):
+                if let node = element.node { placedNodes.append((element.id, node.frame)) }
             case .batch(let children):
                 children.forEach(collect)
             default:
@@ -103,10 +106,10 @@ extension Board {
             }
         }
         collect(operation)
-        guard !insertedNodes.isEmpty else { return operation }
+        guard !placedNodes.isEmpty else { return operation }
 
         var fixes: [BoardOperation] = []
-        for (id, frame) in insertedNodes {
+        for (id, frame) in placedNodes {
             fixes.append(contentsOf: reattachmentOperations(forNodeID: id, frame: frame))
         }
         guard !fixes.isEmpty else { return operation }

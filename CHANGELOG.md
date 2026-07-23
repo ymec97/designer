@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.10.0 — 2026-07-23
+
+Large feedback batch from a working session on a real HLD board: canvas
+legibility, tool/gesture defaults, connector clarity, linked-board feel,
+undo integrity, and z-order/layer clarity.
+
+Canvas & recognition
+- Removed the legacy colored "kind dot" from blocks; kind still drives the
+  default tint.
+- Focus mode keeps labels legible on mid-gray fills (no more dark-on-dark),
+  and dims SVG/raster image nodes along with everything else.
+- Connector captions no longer flicker while zooming (stable placement while
+  the viewport is in motion).
+- Routing avoids blocks mid-drag, so edges stop crossing-then-popping as you
+  move nodes.
+
+Tools & gestures
+- Double-click empty canvas now drops a borderless text box (replaces the old
+  block-on-double-click).
+- Shape tool stays armed after placing, defaults to the standard block fill,
+  and the outline slider shows a percentage. ⌘Z removes the shape without
+  switching tools.
+- Freehand drawings can be moved (the stroke follows, not just its guides).
+- No-fill shapes are click-through in their hollow interior; their border
+  still selects and moves (and doesn't start a connector).
+- New elements auto-pan clear of the left style panel.
+- Text boxes: live text-size control, resize scales the text, borderless caret
+  editing; SVG/image nodes show only layer + text-size controls.
+
+Linked boards
+- Diving into a linked block is one seamless zoom into the node (~30% slower,
+  centered) instead of a stop-and-slide; the swoosh is much quieter.
+- Broken links wear an amber badge with a hover explanation instead of
+  navigating nowhere.
+- The out-of-folder board catalog persists an index so links survive upgrades;
+  dangling connector endpoints snap to a node moved under them.
+
+Undo, agent & flows
+- Undo integrity: one edit = one undo step (no stuck ⌘Z, no dead no-op steps),
+  and undo/redo is blocked inside the read-only linked-board view.
+- Agent proposals preserve node board-links on accept and surface layer
+  changes with readable field deltas.
+- Flow recording: pick a source, walk bidirectional edges once each way, and
+  filter to visible layers.
+
+Clarity & tooling
+- Z-order gets a layer chip, a position readout, and step buttons.
+- Command palette ranks titles above keyword synonyms.
+- macOS CI workflow runs the release battery; `@claude` GitHub action.
+
 ## v0.9.0 — 2026-07-22
 
 Linked boards: drill into a block's own board.

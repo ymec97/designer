@@ -86,6 +86,15 @@ public enum StrokeRecognizer {
         // sit near 0.785, triangles near 0.6, so 0.82 cleanly separates
         // "round" from "cornered". (Straight-edged shapes fail this and are
         // classified by corner count below.)
+        //
+        // NOTE: the v0.10 B5 attempt to rescue wobbly circles by also gating on
+        // the convex hull's circularity was reverted — on the jittered-shape
+        // corpus a wobbly rectangle's/diamond's hull rounds off into the same
+        // 0.80–0.88 band as a real circle (and corner counts overlap too), so
+        // no hull threshold separates them without swallowing the angular
+        // shapes (recognition rate fell to 56%). A robust "hand-drawn circle"
+        // rescue needs a different signal (e.g. turning-angle uniformity), not
+        // a circularity threshold; see docs.
         let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
         let area = polygonArea(points)
         let circularity = perimeter > 0 ? 4 * .pi * area / (perimeter * perimeter) : 0

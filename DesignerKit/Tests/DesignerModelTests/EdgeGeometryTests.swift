@@ -443,4 +443,53 @@ final class EdgeGeometryTests: XCTestCase {
             && point.x >= frame.x - tolerance && point.x <= frame.maxX + tolerance
         return onVertical || onHorizontal
     }
+
+    // MARK: Discrete anchor slots (endpoint re-targeting)
+
+    func testAnchorSlotsCoverEveryFace() {
+        let frame = Rect(x: 10, y: 20, width: 80, height: 40)
+        let slots = EdgeGeometry.anchorSlots(for: frame)
+        XCTAssertEqual(slots.count, 12, "4 faces × 3 offsets")
+        for slot in slots {
+            XCTAssertTrue(onBorder(slot.point, of: frame), "every slot sits on the border")
+        }
+    }
+
+    func testNearestAnchorSlotSnapsToTheClosestFacePoint() {
+        let frame = Rect(x: 0, y: 0, width: 100, height: 60)
+        // Just outside the right face, low down → right / far (0.75) slot.
+        let right = EdgeGeometry.nearestAnchorSlot(to: Point(x: 112, y: 46), on: frame)
+        XCTAssertEqual(right.side, .right)
+        XCTAssertEqual(right.offset, 0.75, accuracy: 1e-9)
+        // Above the top-middle → top / center (0.5) slot.
+        let top = EdgeGeometry.nearestAnchorSlot(to: Point(x: 50, y: -12), on: frame)
+        XCTAssertEqual(top.side, .top)
+        XCTAssertEqual(top.offset, 0.5, accuracy: 1e-9)
+        // Left of the upper-left → left / near (0.25) slot.
+        let left = EdgeGeometry.nearestAnchorSlot(to: Point(x: -6, y: 10), on: frame)
+        XCTAssertEqual(left.side, .left)
+        XCTAssertEqual(left.offset, 0.25, accuracy: 1e-9)
+    }
+
+    // MARK: Rubber-band route intersection
+
+    /// A connector's bounding box spans both endpoints, so a selection band in
+    /// the empty space it diagonally crosses overlaps the box but not the line.
+    /// Rubber-band selection must test the line, not the box.
+    func testRouteIntersectionIgnoresBoundingBoxGaps() throws {
+        let a = addNode("a", frame: Rect(x: 0, y: 200, width: 20, height: 20))
+        let b = addNode("b", frame: Rect(x: 400, y: 0, width: 20, height: 20))
+        let edge = connect(a, b)
+        let route = try XCTUnwrap(self.route(edge))
+
+        // Top-left empty space: inside the route's bbox, far from the line.
+        let farBand = Rect(x: 20, y: 20, width: 30, height: 30)
+        XCTAssertTrue(route.boundingRect.intersects(farBand), "bbox overlaps — the bug's cause")
+        XCTAssertFalse(EdgeGeometry.route(route, intersects: farBand), "line does not cross the band")
+
+        // A band straddling the midpoint really crosses the line.
+        let mid = route.midpoint
+        let onBand = Rect(x: mid.x - 10, y: mid.y - 10, width: 20, height: 20)
+        XCTAssertTrue(EdgeGeometry.route(route, intersects: onBand))
+    }
 }

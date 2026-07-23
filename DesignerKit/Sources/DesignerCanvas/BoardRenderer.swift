@@ -8,6 +8,13 @@ final class BoardRenderer {
     /// is both an LOD optimization and better visual noise behavior.
     static let textVisibilityScale: Double = 0.35
 
+    /// Must match `CanvasView.dimmedAlpha` — the focus-mode dim strength. Used
+    /// to fold dimming into image draws that don't inherit the context alpha.
+    static let dimmedFraction: CGFloat = 0.22
+    /// Legibility floor for a dimmed node's label: the rest of the element
+    /// recedes at `dimmedFraction`, but the text stays readable.
+    static let dimmedLabelFloor: CGFloat = 0.6
+
     private struct TextCacheKey: Hashable {
         let text: String
         let fontSize: CGFloat
@@ -47,11 +54,43 @@ final class BoardRenderer {
         didSet { if sketchy != oldValue { textCache.removeAll() } }
     }
 
+    /// Board-wide connector caption visibility. `.onFocus` draws a caption
+    /// only for edges the view marks `emphasized` (selected / hovered / flow).
+    /// Mirrors `board.captionMode`; set by the canvas each pass.
+    var captionMode: Board.CaptionMode = .always
+
+    /// Whether an edge's caption should paint this pass, given the mode and
+    /// whether the view considers the edge focused.
+    private func shouldDrawCaption(emphasized: Bool) -> Bool {
+        switch captionMode {
+        case .always: return true
+        case .onFocus: return emphasized
+        case .off: return false
+        }
+    }
+
     /// Collision registry for connector captions — call once before each
     /// full edge pass so labels placed earlier repel the ones after.
     private var captionPlacer = EdgeGeometry.CaptionPlacer()
-    func beginCaptionPass() {
-        captionPlacer = EdgeGeometry.CaptionPlacer()
+    /// Resolved world centers per edge, kept between frames so captions stay
+    /// pinned (and just scale) during a zoom instead of re-solving — and
+    /// jittering — every frame (B2). Re-solved only on a settled viewport.
+    private(set) var captionCenters: [ElementID: Point] = [:]
+    private var captionsResolve = true
+    /// `resolve == true` runs the collision-avoiding placement this pass and
+    /// updates `captionCenters`; `false` reuses the cached centers (used while
+    /// a zoom/animation is in flight).
+    func beginCaptionPass(resolve: Bool = true) {
+        captionsResolve = resolve
+        if resolve { captionPlacer = EdgeGeometry.CaptionPlacer() }
+    }
+
+    /// World-space caption pill size measured at scale 1 — stable across zoom,
+    /// so a placement solve doesn't shift as the font rounds at different zooms
+    /// (rendering still measures at the live zoom). B2.
+    private func worldCaptionPillSize(for edge: Edge) -> Size? {
+        guard let content = captionContent(for: edge, viewport: CanvasViewport(scale: 1)) else { return nil }
+        return Size(width: Double(content.pillSize.width), height: Double(content.pillSize.height))
     }
 
     /// Strokes a jittered two-pass version of `viewPoints` (already in view
@@ -109,14 +148,15 @@ final class BoardRenderer {
         viewport: CanvasViewport,
         frameOverride: Rect? = nil,
         isSelected: Bool,
-        suppressText: Bool = false
+        suppressText: Bool = false,
+        dimmed: Bool = false
     ) {
         switch element.content {
         case .node(let node):
             drawNode(
                 node, frame: frameOverride ?? node.frame,
                 in: context, viewport: viewport,
-                isSelected: isSelected, suppressText: suppressText
+                isSelected: isSelected, suppressText: suppressText, dimmed: dimmed
             )
         case .note(let note):
             drawNote(
@@ -125,7 +165,22 @@ final class BoardRenderer {
                 isSelected: isSelected, suppressText: suppressText
             )
         case .ink(let ink):
-            drawInk(ink, in: context, viewport: viewport, isSelected: isSelected)
+            // Ink has no frame, so a live move arrives as a `frameOverride`
+            // (the transient bounding box). Translate the stroke by the delta
+            // from its current bounding-box origin so a dragged drawing visibly
+            // follows the cursor at ALL zooms, not just far zoom (I4 / B13).
+            var drawn = ink
+            if let frameOverride, let first = ink.points.first {
+                var minX = first.x, minY = first.y
+                for point in ink.points { minX = min(minX, point.x); minY = min(minY, point.y) }
+                let dx = frameOverride.x - minX, dy = frameOverride.y - minY
+                if dx != 0 || dy != 0 {
+                    drawn.points = ink.points.map {
+                        StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
+                    }
+                }
+            }
+            drawInk(drawn, in: context, viewport: viewport, isSelected: isSelected)
         case .boundary(let boundary):
             drawBoundary(
                 boundary, frame: frameOverride ?? boundary.frame,
@@ -174,7 +229,7 @@ final class BoardRenderer {
     private func drawNode(
         _ node: Node, frame: Rect,
         in context: CGContext, viewport: CanvasViewport,
-        isSelected: Bool, suppressText: Bool
+        isSelected: Bool, suppressText: Bool, dimmed: Bool = false
     ) {
         let rect = viewport.toView(frame)
         let path: CGPath
@@ -298,29 +353,6 @@ final class BoardRenderer {
             }
         }
 
-        // The kind dot — one saturated spot of colour, top-left inside the
-        // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
-        // or triangle's corners crowd it). Hollow (no-fill) shapes are
-        // decoration — a saturated dot on them reads as noise.
-        let dottable = (node.shape == .rectangle || node.shape == .ellipse) && node.style.hasFill
-        if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
-            let r = 3.4 * viewport.scale
-            let inset = 13 * viewport.scale
-            // A rect's top-left inset sits OUTSIDE an ellipse — anchor the
-            // dot along the ellipse's -135° radius instead.
-            let anchor: CGPoint
-            if node.shape == .ellipse {
-                anchor = CGPoint(
-                    x: rect.midX - (rect.width / 2 - inset) * 0.7071,
-                    y: rect.midY - (rect.height / 2 - inset) * 0.7071
-                )
-            } else {
-                anchor = CGPoint(x: rect.minX + inset, y: rect.minY + inset)
-            }
-            context.setFillColor(Palette.kindDot(for: node.semantic.kind).cgColor)
-            context.fillEllipse(in: CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2))
-        }
-
         // Embedded image (imported diagrams): aspect-fit inside the frame,
         // leaving a strip at the bottom for the name when there is one.
         var textRect = rect
@@ -336,9 +368,14 @@ final class BoardRenderer {
                     x: box.midX - drawSize.width / 2, y: box.midY - drawSize.height / 2,
                     width: drawSize.width, height: drawSize.height
                 )
+                // `NSImage.draw` paints through a FRESH NSGraphicsContext, which
+                // does NOT inherit the CGContext's focus-dim `setAlpha` — so an
+                // SVG/raster node would stay full-strength while everything else
+                // dims. Fold the dim into the draw `fraction` explicitly.
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-                image.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1,
+                image.draw(in: drawRect, from: .zero, operation: .sourceOver,
+                           fraction: dimmed ? Self.dimmedFraction : 1,
                            respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
                 NSGraphicsContext.restoreGraphicsState()
                 textRect = CGRect(x: rect.minX, y: rect.maxY - max(labelStrip, 1),
@@ -353,13 +390,30 @@ final class BoardRenderer {
                 textRect = CGRect(x: rect.minX, y: rect.minY + lid,
                                   width: rect.width, height: rect.height - lid)
             }
+            // Focus dimming is a blanket 22% alpha over the whole element, so a
+            // filled node's background collapses toward the canvas ground. The
+            // on-fill contrast colour (dark ink on a light-ish fill) then goes
+            // dark-on-dark and the label vanishes — the reported bug on the
+            // rightmost `#8B95A5` swatch. When dimmed, colour the label against
+            // the GROUND instead and give it a legibility floor so it stays
+            // readable while the rest of the node recedes.
+            let labelColor = dimmed
+                ? Palette.nodeText
+                : (node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText)
+            if dimmed {
+                context.saveGState()
+                context.setAlpha(Self.dimmedLabelFloor)
+            }
             drawText(
                 node.semantic.name,
-                fontSize: 13 * viewport.scale,
-                color: node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText,
+                fontSize: clampedLabelFontSize(
+                    base: 13, multiplier: node.style.effectiveTextMultiplier,
+                    text: node.semantic.name, frameView: textRect, viewport: viewport),
+                color: labelColor,
                 centeredIn: textRect,
                 context: context
             )
+            if dimmed { context.restoreGState() }
         }
 
         if opacity < 1 {
@@ -472,14 +526,18 @@ final class BoardRenderer {
         isSelected: Bool, suppressText: Bool
     ) {
         let rect = viewport.toView(frame)
-        if isSelected {
-            let path = CGPath(rect: rect.insetBy(dx: -2, dy: -2), transform: nil)
-            strokeSelection(path: path, in: context, viewport: viewport)
-        }
+        // A text box shows NO outline/box — not even a selection ring (I3); the
+        // resize handles (drawn separately when selected) are the only chrome,
+        // so it reads as pure text you click into and type.
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !note.text.isEmpty {
             drawText(
                 note.text,
-                fontSize: 12 * viewport.scale,
+                // The font tracks the box HEIGHT, so drag-resizing a text box
+                // scales the text itself (I2); S/M/L/XL still nudges via the
+                // multiplier, and clampedLabelFontSize shrinks to fit the width.
+                fontSize: clampedLabelFontSize(
+                    base: CGFloat(max(frame.height * 0.55, 6)), multiplier: note.style.effectiveTextMultiplier,
+                    text: note.text, frameView: rect, viewport: viewport),
                 color: Palette.noteText,
                 in: rect,
                 context: context
@@ -542,8 +600,10 @@ final class BoardRenderer {
         isSelected: Bool,
         isDangling: Bool = false,
         simplified: Bool = false,
+        emphasized: Bool = true,
         captionFraction: Double = 0.5,
-        captionObstacles: ((Rect) -> [Rect])? = nil
+        captionObstacles: ((Rect) -> [Rect])? = nil,
+        edgeID: ElementID? = nil
     ) {
         // Connector opacity: fade the whole edge (line, arrowheads, caption)
         // as one; the body has early returns, so wrap it here. Selection
@@ -555,15 +615,17 @@ final class BoardRenderer {
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
-                            simplified: simplified, captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            simplified: simplified, emphasized: emphasized,
+                            captionFraction: captionFraction,
+                            captionObstacles: captionObstacles, edgeID: edgeID)
             context.endTransparencyLayer()
             context.restoreGState()
         } else {
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
-                            simplified: simplified, captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            simplified: simplified, emphasized: emphasized,
+                            captionFraction: captionFraction,
+                            captionObstacles: captionObstacles, edgeID: edgeID)
         }
     }
 
@@ -575,8 +637,10 @@ final class BoardRenderer {
         isSelected: Bool,
         isDangling: Bool,
         simplified: Bool,
+        emphasized: Bool,
         captionFraction: Double,
-        captionObstacles: ((Rect) -> [Rect])?
+        captionObstacles: ((Rect) -> [Rect])?,
+        edgeID: ElementID?
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
@@ -645,10 +709,23 @@ final class BoardRenderer {
 
         // Label pill + well-known-key badges along the route. Placement is
         // collision-aware: pills dodge blocks AND each other, sliding along
-        // the route and nudging perpendicular on dense boards.
-        if viewport.scale >= Self.textVisibilityScale {
+        // the route and nudging perpendicular on dense boards. The caption
+        // mode can suppress it (Off) or restrict it to focused edges (On Focus).
+        if viewport.scale >= Self.textVisibilityScale, shouldDrawCaption(emphasized: emphasized) {
             var center = route.point(atFraction: captionFraction)
-            if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
+            if let edgeID {
+                // Settled: solve collision-avoided placement (scale-independent
+                // pill size) and cache it. In flight: reuse the cached world
+                // center so the caption just scales instead of jittering (B2).
+                if captionsResolve, let obstacles = captionObstacles, let pillWorld = worldCaptionPillSize(for: edge) {
+                    center = captionPlacer.place(
+                        preferred: captionFraction, route: route,
+                        pillSize: pillWorld, obstacles: obstacles)
+                    captionCenters[edgeID] = center
+                } else if let cached = captionCenters[edgeID] {
+                    center = cached
+                }
+            } else if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
                 center = captionPlacer.place(
                     preferred: captionFraction,
                     route: route,
@@ -925,6 +1002,24 @@ final class BoardRenderer {
         context.strokePath()
     }
 
+    /// Candidate anchor dots shown on a node while a connector endpoint is
+    /// dragged over it. The `selected` index (the slot the endpoint would snap
+    /// to) gets a filled highlight; the rest are small open dots.
+    func drawAnchorSlots(_ viewPoints: [CGPoint], selected: Int?, in context: CGContext) {
+        context.setStrokeColor(Palette.selection.cgColor)
+        context.setLineWidth(1.5)
+        for (index, point) in viewPoints.enumerated() {
+            let isSelected = index == selected
+            let radius: CGFloat = isSelected ? 5 : 3.5
+            let rect = CGRect(
+                x: point.x - radius, y: point.y - radius,
+                width: radius * 2, height: radius * 2)
+            context.setFillColor(isSelected ? Palette.selection.cgColor : Graphite.panel.cgColor)
+            context.fillEllipse(in: rect)
+            context.strokeEllipse(in: rect)
+        }
+    }
+
     /// The grab dot on a selected connector (P5 bend affordance).
     func drawBendHandle(at point: CGPoint, in context: CGContext) {
         let rect = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
@@ -1144,13 +1239,22 @@ final class BoardRenderer {
 
     /// A linked node's drill-down badge: accent circle with an ↗ arrow at the
     /// node's top-right, OUTSIDE the frame (double-click to enter the board).
-    func drawLinkBadge(in rect: CGRect, context: CGContext) {
+    func drawLinkBadge(in rect: CGRect, broken: Bool = false, context: CGContext) {
         context.saveGState()
-        context.setFillColor(Graphite.accent.cgColor)
+        // Broken links (target board missing) wear an amber "!" instead of the
+        // accent ↗, so it's obvious the drill-down won't work (F4).
+        let amber = NSColor(hexString: "#E8943A") ?? Graphite.accent
+        context.setFillColor((broken ? amber : Graphite.accent).cgColor)
         context.setShadow(offset: CGSize(width: 0, height: 1), blur: 2,
                           color: Graphite.shadowColor.cgColor)
         context.fillEllipse(in: rect)
         context.setShadow(offset: .zero, blur: 0, color: nil)
+        if broken {
+            drawText("!", fontSize: rect.height * 0.72, color: .white,
+                     centeredIn: rect, context: context)
+            context.restoreGState()
+            return
+        }
         context.setStrokeColor(NSColor.white.cgColor)
         context.setLineWidth(max(rect.width * 0.11, 1.1))
         context.setLineCap(.round)
@@ -1317,6 +1421,25 @@ final class BoardRenderer {
         )
         attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Font size for a label: base × the element's textSize multiplier × zoom,
+    /// then clamped so a single measured line of `text` fits inside `frameView`
+    /// (view space) — keeps XL text from spilling out of a small shape (F6).
+    private func clampedLabelFontSize(
+        base: CGFloat, multiplier: Double, text: String,
+        frameView: CGRect, viewport: CanvasViewport
+    ) -> CGFloat {
+        let requested = base * CGFloat(multiplier) * CGFloat(viewport.scale)
+        guard !text.isEmpty else { return requested }
+        let measured = attributedString(text, fontSize: requested, color: .black).size()
+        let maxW = max(frameView.width - 8 * viewport.scale, 1)
+        let maxH = max(frameView.height - 8 * viewport.scale, 1)
+        let widthRatio = measured.width > maxW ? maxW / measured.width : 1
+        let heightRatio = measured.height > maxH ? maxH / measured.height : 1
+        let ratio = min(widthRatio, heightRatio)
+        // Never shrink below the readable floor the renderer already respects.
+        return max(requested * ratio, min(requested, 9))
     }
 
     private func attributedString(

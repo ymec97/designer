@@ -1,0 +1,62 @@
+name: macOS battery
+
+# The Designer release battery (see CLAUDE.md → "Build, test, verify").
+# macОS-only: the app is AppKit and --ui-test drives real events through a
+# window server, so this must run on a macOS runner, not Linux.
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-battery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  battery:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # DesignerModel is Swift 6, so we need Xcode 16+.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain
+        run: |
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR"
+          xcodebuild -version
+          swift --version
+
+      - name: Unit tests (swift test)
+        working-directory: DesignerKit
+        run: swift test
+
+      - name: Build app
+        run: scripts/build-app.sh
+
+      - name: UI test (--ui-test)
+        run: |
+          set -o pipefail
+          ./build/Designer.app/Contents/MacOS/Designer --ui-test | tee ui-test.log
+          grep -q "UI-TEST PASS" ui-test.log
+
+      - name: Smoke test (--smoke-test)
+        run: ./build/Designer.app/Contents/MacOS/Designer --smoke-test "$RUNNER_TEMP/smoke.designerboard"
+
+      - name: Agent test (--agent-test, live MCP round-trip)
+        run: ./build/Designer.app/Contents/MacOS/Designer --agent-test
+
+      # Perf is throttled on shared/virtualized CI hardware, so failures here
+      # are usually environmental, not regressions — keep it visible but
+      # non-blocking. Trust perf numbers only on dedicated hardware.
+      - name: Perf test (--perf-test, non-blocking)
+        continue-on-error: true
+        run: |
+          caffeinate -u -t 5
+          caffeinate -dimsu ./build/Designer.app/Contents/MacOS/Designer --perf-test

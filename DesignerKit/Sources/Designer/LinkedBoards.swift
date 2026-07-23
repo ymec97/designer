@@ -143,6 +143,25 @@ extension CanvasViewController {
         canvasView.nodeContextMenu = { [weak self] nodeID in
             self?.buildNodeContextMenu(for: nodeID)
         }
+        // Broken-link resolution + affordances (F4). Resolution is a catalog
+        // (filesystem) scan, injected so the canvas needn't know BoardCatalog.
+        canvasView.resolveLinkValidity = { BoardCatalog.url(forBoardID: $0) != nil }
+        canvasView.brokenLinkHoverChanged = { [weak self] id, rect in
+            self?.showBrokenLinkPopover(for: id, at: rect)
+        }
+        canvasView.brokenLinkActivated = { [weak self] id in
+            guard let self, let frame = self.canvasView.board.elements[id]?.node?.frame else { return }
+            self.showBrokenLinkPopover(for: id, at: self.canvasView.linkBadgeRect(forNodeFrame: frame))
+        }
+        canvasView.refreshBrokenLinks()
+        // The catalog can change in another window; re-check on focus + on our
+        // own catalog-change notification.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.canvasView.refreshBrokenLinks() }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("DesignerCatalogChanged"), object: nil, queue: .main
+        ) { [weak self] _ in self?.canvasView.refreshBrokenLinks() }
 
         let banner = LinkedViewBanner(
             model: linkedViewModel,
@@ -210,6 +229,25 @@ extension CanvasViewController {
         view.window?.beginSheet(sheetWindow)
     }
 
+    /// Show (id != nil) or dismiss (id == nil) the broken-link explanation
+    /// popover anchored to the badge rect (F4).
+    func showBrokenLinkPopover(for id: ElementID?, at rect: CGRect) {
+        brokenLinkPopover?.performClose(nil)
+        brokenLinkPopover = nil
+        guard let id else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView:
+            BrokenLinkPopover(relink: { [weak self] in
+                self?.brokenLinkPopover?.performClose(nil)
+                self?.brokenLinkPopover = nil
+                self?.presentLinkPicker(for: id)
+            })
+        )
+        popover.show(relativeTo: rect, of: canvasView, preferredEdge: .maxY)
+        brokenLinkPopover = popover
+    }
+
     private func dismissLinkPicker() {
         if let sheet = linkPickerWindow {
             view.window?.endSheet(sheet)
@@ -242,6 +280,7 @@ extension CanvasViewController {
             return
         }
         setLink(newBoard.id, on: nodeID)
+        NotificationCenter.default.post(name: Notification.Name("DesignerCatalogChanged"), object: nil)
         AppActions.open(url)
     }
 
@@ -291,23 +330,28 @@ extension CanvasViewController {
         ))
 
         playSwoosh()
-        // Zoom INTO the node — the camera dives until the block fills the
-        // screen — then the linked board fades in at a fitted camera.
+        // One continuous dive INTO the node: the camera zooms toward the node
+        // center (kept anchored so it doesn't drift to the viewport middle
+        // first), the board is swapped at peak zoom under cover of the motion,
+        // and we continue straight into the linked board's fitted camera — no
+        // stop-and-move. ~30% slower than before for a smoother "wow" moment.
         let dive = viewportDivingInto(node.frame)
-        canvasView.animateViewport(to: dive, duration: 0.34) { [weak self] in
+        let nodeCenter = CGPoint(x: node.frame.midX, y: node.frame.midY)
+        canvasView.animateViewport(to: dive, duration: 0.44, anchorWorld: nodeCenter) { [weak self] in
             guard let self else { return }
             self.canvasView.board = target
             self.canvasView.isReadOnly = true
             var fitted = self.canvasView.viewport
             let content = target.contentBounds() ?? Rect(x: 0, y: 0, width: 800, height: 500)
             fitted.fit(content, in: self.canvasView.bounds.size)
-            // Arrive slightly zoomed-out from the fit, then settle — reads
-            // as "landing inside".
+            // Continue the SAME inward motion: start a touch tighter than the
+            // fit and ease out to it, so it reads as one seamless arrival
+            // rather than a second, separate camera move.
             var from = fitted
-            from.setScale(fitted.scale * 1.35,
+            from.setScale(fitted.scale * 1.18,
                           at: CGPoint(x: self.canvasView.bounds.midX, y: self.canvasView.bounds.midY))
             self.canvasView.viewport = from
-            self.canvasView.animateViewport(to: fitted, duration: 0.22)
+            self.canvasView.animateViewport(to: fitted, duration: 0.29)
             self.linkedViewModel.title = target.title
             self.linkedViewModel.depth = self.linkedBoardStack.count
             self.linkedViewModel.isActive = true
@@ -324,7 +368,10 @@ extension CanvasViewController {
         canvasView.board = poppingToRoot ? document.board : frame.board
         canvasView.isReadOnly = !poppingToRoot
         canvasView.viewport = viewportDivingInto(frame.enteredNodeFrame)
-        canvasView.animateViewport(to: frame.savedViewport, duration: 0.34)
+        // Pull back out FROM the node, anchored on it, ~30% slower to match the
+        // dive — one smooth reverse of the entry.
+        let nodeCenter = CGPoint(x: frame.enteredNodeFrame.midX, y: frame.enteredNodeFrame.midY)
+        canvasView.animateViewport(to: frame.savedViewport, duration: 0.44, anchorWorld: nodeCenter)
         if poppingToRoot {
             linkedViewModel.isActive = false
             linkedViewModel.depth = 0
@@ -355,8 +402,35 @@ extension CanvasViewController {
            let url = Bundle.module.url(forResource: "swoosh", withExtension: "wav") {
             linkedBoardSwoosh = NSSound(contentsOf: url, byReference: true)
         }
+        // The drill-in swoosh was way too loud; keep it as a soft, unobtrusive
+        // cue rather than a startling one.
+        linkedBoardSwoosh?.volume = 0.35
         linkedBoardSwoosh?.stop()
         linkedBoardSwoosh?.play()
+    }
+}
+
+/// Hover explanation for a broken board link (F4): the target board isn't in
+/// the catalog anymore, with a one-click path to re-link.
+struct BrokenLinkPopover: View {
+    let relink: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color(nsColor: NSColor(hexString: "#E8943A") ?? .systemOrange))
+                Text("Broken board link").font(.system(size: 12, weight: .semibold))
+            }
+            Text("This block links to a board that isn't in your catalog anymore — it may have been moved, renamed, or deleted, or it was never shared alongside this board.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Re-link…", action: relink)
+                .font(.system(size: 11))
+        }
+        .padding(12)
+        .frame(width: 260)
     }
 }
 

@@ -82,3 +82,24 @@ Release workflow (branching, tagging, packaging) is codified in
   `VERSION` + `CHANGELOG.md` when releasing → annotated tag `v<semver>` →
   push `main` + tag. No force pushes. Shipped tags never move.
 - `internal/` and `.claude/settings.local.json` are local-only (gitignored).
+
+## Cloud / remote sessions (Claude Code on the web)
+
+- **Finish every cloud work session with the `cloud-handoff` skill**
+  (`.claude/skills/cloud-handoff/SKILL.md`): write/refresh `TEST_PLAN.md`, push
+  it to the feature branch, and print a Mac-agent handoff (branch + change
+  context). The battery can't run in cloud, so this is how a Mac agent picks it up.
+- This is a macOS/AppKit app: the Xcode toolchain is **not** present on the
+  Linux cloud runner, so `swift test` / `scripts/build-app.sh` / the `--*-test`
+  battery cannot run there. Write the code + tests carefully and run the full
+  release battery on a Mac before merging/tagging.
+- `git push` fails there: the git relay allows fetch (read) but returns
+  **403 Forbidden** on `git-receive-pack` (write). When the session's GitHub
+  App has `contents: write`, push with the **GitHub MCP** instead —
+  `mcp__github__create_branch` (from `main`) then `mcp__github__push_files`
+  (owner/repo `ymec97/designer`, the feature branch, all changed+new file
+  contents in one commit). Don't retry the raw `git push`.
+- If the MCP write also 403s with **"Resource not accessible by integration"**
+  (as it did on 2026-07-23), the app installation is read-only — commit
+  locally and ask the user to grant Claude's GitHub integration write access
+  for this repo; do not keep retrying either path.

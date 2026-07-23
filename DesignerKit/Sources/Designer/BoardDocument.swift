@@ -12,6 +12,37 @@ final class BoardDocument: NSDocument, ObservableObject {
 
     override class var autosavesInPlace: Bool { true }
 
+    /// Configure the undo manager ONCE (not per-`perform`): turning off
+    /// `groupsByEvent` while AppKit's automatic per-event top-level group is
+    /// already open strands that group — its runloop-end close observer stops
+    /// firing — and after a couple of edits `undo()` no-ops ("stuck"). Doing
+    /// it here, before any operation runs, means no automatic group is ever
+    /// opened, and `perform` brackets each op in exactly one explicit group.
+    override var undoManager: UndoManager? {
+        get { super.undoManager }
+        set {
+            super.undoManager = newValue
+            newValue?.groupsByEvent = false
+        }
+    }
+
+    /// Record every board we open or save into the persisted catalog index
+    /// (B1), so a board saved OUTSIDE the managed folder stays discoverable
+    /// even after the system recent-documents list rotates or resets on an app
+    /// upgrade. `fileURL` is set both on open and on save-as, and `remember`
+    /// reads the board id straight from the file on disk, so this one hook
+    /// covers both cases.
+    override var fileURL: URL? {
+        didSet {
+            if let url = fileURL, url != oldValue {
+                // AppKit can set fileURL on a background thread during autosave;
+                // remember() reads/writes small files, so keep it off whatever
+                // thread we're on (and off main) via a background hop.
+                DispatchQueue.global(qos: .utility).async { BoardCatalog.remember(url) }
+            }
+        }
+    }
+
     /// True while the document lives under its auto-generated "Untitled N"
     /// name in the managed Boards folder and the user never chose a name.
     /// The first explicit ⌘S then PROMPTS (name + location) instead of
@@ -132,14 +163,17 @@ final class BoardDocument: NSDocument, ObservableObject {
     /// NSDocument's change tracking and autosave.
     func perform(_ operation: BoardOperation, actionName: String) {
         DesignerCanvas.CanvasView.debugTrace?("document.perform \(actionName)")
+        // A no-op operation (e.g. an empty batch) must NOT consume an undo
+        // slot — otherwise ⌘Z "does nothing" for a step, which reads as undo
+        // being broken.
+        guard !operation.isNoOp else { return }
         do {
             let inverse = try board.apply(operation)
             guard let undoManager else { return }
-            // One operation = exactly one undo step. AppKit's default
-            // per-event grouping would merge operations that happen to share
-            // a runloop cycle (e.g. a label commit followed by a connect in
-            // one event, or future agent batches) into a single undo.
-            undoManager.groupsByEvent = false
+            // One operation = exactly one undo step. `groupsByEvent` is set
+            // to false once in the undoManager setter (per-event grouping
+            // would otherwise merge operations that share a runloop cycle),
+            // so here we just bracket this op in its own explicit group.
             let needsGroup = !undoManager.isUndoing && !undoManager.isRedoing
             if needsGroup { undoManager.beginUndoGrouping() }
             undoManager.registerUndo(withTarget: self) { document in

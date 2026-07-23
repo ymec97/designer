@@ -101,6 +101,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             }
             self.refreshFlowsPanel(board)
             self.refreshInspector()
+            self.evaluateDensitySuggestion(board)
         }
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
@@ -126,6 +127,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         refreshVersionsPanel()
         installZoomHUD()
         installLinkedBoards()
+        installDensitySuggestion()
     }
 
     // MARK: Inspector (feature 2)
@@ -178,16 +180,20 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     var linkedBoardStack: [LinkedBoardFrame] = []
     let linkedViewModel = LinkedViewModel()
+    let densitySuggestionModel = DensitySuggestionModel()
     var linkPickerWindow: NSWindow?
     var linkedBoardSwoosh: NSSound?
+    var brokenLinkPopover: NSPopover?
 
     private func installStylePanel() {
         let panel = StylePanelContainer(
             model: stylePanelModel,
             actions: StylePanelActions(
                 styleChanged: { [weak self] style in self?.stylePanelEdited(style) },
-                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront() },
-                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() },
+                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront(); self?.refreshStylePanel() },
+                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack(); self?.refreshStylePanel() },
+                stepForward: { [weak self] in self?.canvasView.stepSelectionForward(); self?.refreshStylePanel() },
+                stepBackward: { [weak self] in self?.canvasView.stepSelectionBackward(); self?.refreshStylePanel() },
                 close: { [weak self] in
                     self?.stylePanelModel.isVisible = false
                     self?.view.window?.makeFirstResponder(self?.canvasView)
@@ -202,18 +208,60 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     /// A style edit lands where the panel's mode points: the pencil, the
     /// pending shape, or the live selection (one undo step per edit).
+    /// Populate the style panel's layer chip + z-position readout (F8) for a
+    /// single non-connector selection; clear it otherwise.
+    private func updateZOrderReadout() {
+        let sel = canvasView.selection
+        guard sel.count == 1, let id = sel.first,
+              let element = document.board.elements[id], element.edge == nil else {
+            stylePanelModel.layerChipText = nil
+            stylePanelModel.zPositionText = nil
+            stylePanelModel.canStepForward = false
+            stylePanelModel.canStepBackward = false
+            return
+        }
+        let layerNames = element.layerIDs.compactMap { lid in
+            document.board.layers.first { $0.id == lid }?.name
+        }
+        stylePanelModel.layerChipText = layerNames.count > 1 ? "Mixed" : (layerNames.first ?? "—")
+        if let z = canvasView.zPosition(of: id) {
+            stylePanelModel.zPositionText = "\(Self.ordinal(z.rank)) from front of \(z.total)"
+        } else {
+            stylePanelModel.zPositionText = nil
+        }
+        stylePanelModel.canStepForward = canvasView.canStepSelection(forward: true)
+        stylePanelModel.canStepBackward = canvasView.canStepSelection(forward: false)
+    }
+
+    private static func ordinal(_ n: Int) -> String {
+        let ones = n % 10, tens = (n / 10) % 10
+        let suffix: String
+        if tens == 1 { suffix = "th" }
+        else if ones == 1 { suffix = "st" }
+        else if ones == 2 { suffix = "nd" }
+        else if ones == 3 { suffix = "rd" }
+        else { suffix = "th" }
+        return "\(n)\(suffix)"
+    }
+
     private func stylePanelEdited(_ style: Style) {
         switch stylePanelModel.mode {
         case .pencil:
             canvasView.pendingInkStyle = style
         case .shape:
             canvasView.pendingShapeStyle = style
-        case .selection, .connector:
+        case .selection, .connector, .image:
             let operations = canvasView.selection.compactMap { id -> BoardOperation? in
                 guard var element = document.board.elements[id] else { return nil }
                 switch element.content {
                 case .node(var node):
-                    node.style = style
+                    // The panel never edits the embedded image or the extra
+                    // bag (board links), so preserve them — otherwise editing
+                    // an SVG node's text size would wipe its image.
+                    var newStyle = style
+                    newStyle.image = node.style.image
+                    newStyle.extra = node.style.extra
+                    node.style = newStyle
                     element.content = .node(node)
                 case .ink(var ink):
                     ink.style = style
@@ -241,6 +289,13 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// armed, selection when styleable elements are selected — hidden
     /// otherwise.
     func refreshStylePanel() {
+        // Keep the canvas's "left panel showing" signal in sync on every exit
+        // so newly-created elements can auto-pan clear of it (B3), and refresh
+        // the z-order readout (F8).
+        defer {
+            canvasView.leftPanelIsVisible = stylePanelModel.isVisible || inspectorModel.visible
+            updateZOrderReadout()
+        }
         if canvasView.isReadOnly {
             stylePanelModel.isVisible = false
             return
@@ -266,16 +321,18 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 }
             }
             if let first = styleable.first {
-                stylePanelModel.seed(from: first, mode: .selection)
+                // A single image/SVG node gets the restricted panel: layers +
+                // text size only (F7).
+                let singleImageNode = canvasView.selection.count == 1 && first.image != nil
+                stylePanelModel.seed(from: first, mode: singleImageNode ? .image : .selection)
                 stylePanelModel.isVisible = true
             } else if let connectorStyle {
                 stylePanelModel.seed(from: connectorStyle, mode: .connector)
                 stylePanelModel.isVisible = true
-            } else if stylePanelModel.isVisible {
-                // An empty selection (deselect click, or ⌘Z removing the
-                // shape you just drew) does NOT slam the panel shut — it
-                // falls back to pending-shape mode. The header ✕ closes it.
-                stylePanelModel.seed(from: canvasView.pendingShapeStyle, mode: .shape)
+            } else {
+                // Nothing stylable is selected: hide the panel rather than
+                // lingering on the last shape's (or connector's) controls.
+                stylePanelModel.isVisible = false
             }
         }
     }
@@ -392,16 +449,15 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     }
 
     @objc func recordFlow(_ sender: Any?) {
-        guard canvasView.selection.count == 1, let source = canvasView.selection.first,
-              document.board.elements[source]?.node != nil else {
-            let alert = NSAlert()
-            alert.messageText = "Select a source block first"
-            alert.informativeText = "Click the block the traffic starts from, then Record Flow: you'll walk the journey by clicking each block it visits next."
-            alert.runModal()
-            return
-        }
         if !flowsModel.visible { toggleFlowsPanel(nil) }
-        canvasView.startFlowRecording(from: source)
+        if canvasView.selection.count == 1, let source = canvasView.selection.first,
+           document.board.elements[source]?.node != nil {
+            canvasView.startFlowRecording(from: source)
+        } else {
+            // No source selected: drop into the dimmed canvas and let the user
+            // click the starting block (F10), instead of blocking with an alert.
+            canvasView.beginFlowSourcePick()
+        }
         view.window?.makeFirstResponder(canvasView)
     }
 
@@ -646,6 +702,30 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             ),
             actionName: document.board.isSketchy ? "Clean Style" : "Hand-drawn Style"
         )
+    }
+
+    // MARK: Connector caption visibility
+
+    /// Sets the board-wide caption mode (undoable, stored in `extra`). `.always`
+    /// clears the key so the board reads as an unmodified default.
+    func applyCaptionMode(_ mode: Board.CaptionMode) {
+        guard mode != document.board.captionMode else { return }
+        let value: JSONValue? = mode == .always ? nil : .string(mode.rawValue)
+        let name: String
+        switch mode {
+        case .always: name = "Captions: Always"
+        case .onFocus: name = "Captions: On Focus"
+        case .off: name = "Captions: Off"
+        }
+        document.perform(.setExtra(key: Board.captionModeExtraKey, value: value), actionName: name)
+    }
+
+    @objc func setCaptionMode(_ sender: NSMenuItem) {
+        switch sender.tag {
+        case 1: applyCaptionMode(.onFocus)
+        case 2: applyCaptionMode(.off)
+        default: applyCaptionMode(.always)
+        }
     }
 
     // MARK: Zoom HUD (P1)
@@ -1937,8 +2017,28 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 }
 
 extension CanvasViewController: NSMenuItemValidation {
+    /// Undo/redo are routed through the controller (it sits in the responder
+    /// chain) so we can BLOCK them while a read-only linked-board view is
+    /// showing — otherwise ⌘Z mutates the hidden document board with no visible
+    /// effect, which reads as undo being broken. When editing a text label the
+    /// field editor is earlier in the chain and handles ⌘Z itself, so in-field
+    /// undo is unaffected.
+    @objc func undo(_ sender: Any?) {
+        guard !canvasView.isReadOnly else { NSSound.beep(); return }
+        document.undoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard !canvasView.isReadOnly else { NSSound.beep(); return }
+        document.undoManager?.redo()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case Selector(("undo:")):
+            return !canvasView.isReadOnly && (document.undoManager?.canUndo ?? false)
+        case Selector(("redo:")):
+            return !canvasView.isReadOnly && (document.undoManager?.canRedo ?? false)
         case #selector(structurize(_:)):
             return canvasView.selection.contains { id in
                 if case .ink = document.board.elements[id]?.content { return true }
@@ -1949,6 +2049,10 @@ extension CanvasViewController: NSMenuItemValidation {
             return true
         case #selector(toggleSketchyStyle(_:)):
             menuItem.state = document.board.isSketchy ? .on : .off
+            return true
+        case #selector(setCaptionMode(_:)):
+            let mode: Board.CaptionMode = menuItem.tag == 1 ? .onFocus : (menuItem.tag == 2 ? .off : .always)
+            menuItem.state = document.board.captionMode == mode ? .on : .off
             return true
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty

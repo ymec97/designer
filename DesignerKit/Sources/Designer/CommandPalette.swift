@@ -35,7 +35,7 @@ struct CommandPalette: View {
         // Score each command; keep matches, best first. Stable ordering for
         // equal scores preserves the natural command order.
         return model.commands
-            .map { (command: $0, score: score(query: q, title: $0.searchText)) }
+            .map { (command: $0, score: score(query: q, command: $0)) }
             .filter { $0.score > 0 }
             .enumerated()
             .sorted { ($0.element.score, -$0.offset) > ($1.element.score, -$1.offset) }
@@ -43,29 +43,37 @@ struct CommandPalette: View {
     }
 
     /// 0 = no match. Every whitespace-separated token of the query must match
-    /// somewhere in the title (order-independent — "flow record" still finds
-    /// "Record Flow…"); the score sums per-token quality plus a bonus when
-    /// the whole query is a literal prefix of the title.
-    private func score(query: String, title: String) -> Int {
+    /// the command (order-independent — "flow record" still finds "Record
+    /// Flow…"); the score sums per-token quality plus a bonus when the whole
+    /// query is a literal prefix of the TITLE.
+    private func score(query: String, command: PaletteCommand) -> Int {
         let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !tokens.isEmpty else { return 0 }
         var total = 0
         for token in tokens {
-            let value = tokenScore(token, in: title)
+            let value = tokenScore(token, in: command)
             guard value > 0 else { return 0 } // every token must match
             total += value
         }
-        if title.hasPrefix(query) { total += 100 }
+        if command.title.lowercased().hasPrefix(query) { total += 300 }
         return total
     }
 
-    /// One token against the title. Exact-ish matches rank highest; anything
-    /// else falls through to fzf-style fuzzy scoring, so "smltrfc" finds
-    /// "Simulate Traffic…" and near-misses still land.
-    private func tokenScore(_ token: String, in title: String) -> Int {
-        let words = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        if words.contains(where: { $0.hasPrefix(token) }) { return 200 + token.count }
-        if title.contains(token) { return 160 }
+    /// One token scored against a command. A command's own TITLE dominates by
+    /// a wide band, so typing "group" surfaces Group/Ungroup Selection first
+    /// and never lets a command that merely lists "grouping" as a synonym
+    /// (Shape Tool, Send to Back) rank above them. Keyword synonyms match in a
+    /// much lower band; fuzzy (fzf-style, so "smltrfc" finds "Simulate
+    /// Traffic…") is the last resort and runs on the title only.
+    private func tokenScore(_ token: String, in command: PaletteCommand) -> Int {
+        let title = command.title.lowercased()
+        let titleWords = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        if titleWords.contains(token) { return 1000 + token.count }          // exact title word
+        if titleWords.contains(where: { $0.hasPrefix(token) }) { return 600 + token.count } // title word-prefix
+        if title.contains(token) { return 400 }                               // title substring
+        let keywords = command.keywords.map { $0.lowercased() }
+        if keywords.contains(where: { $0.hasPrefix(token) }) { return 220 }    // synonym word-prefix
+        if keywords.contains(where: { $0.contains(token) }) { return 160 }     // synonym substring
         return fuzzyScore(token, in: title)
     }
 

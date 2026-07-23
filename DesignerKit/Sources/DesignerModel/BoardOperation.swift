@@ -32,6 +32,16 @@ public enum BoardOperation: Equatable, Sendable {
     /// Applied in order, inverted in reverse order. Atomic: if any child
     /// fails, the already-applied prefix is rolled back.
     case batch([BoardOperation])
+
+    /// True when applying this changes nothing — an empty batch, or a batch
+    /// whose children are all no-ops. Such an op must not register an undo
+    /// step (a ⌘Z that consumes a slot but changes nothing reads as broken).
+    public var isNoOp: Bool {
+        if case .batch(let children) = self {
+            return children.allSatisfy(\.isNoOp)
+        }
+        return false
+    }
 }
 
 public enum BoardOperationError: Error, LocalizedError, Equatable {

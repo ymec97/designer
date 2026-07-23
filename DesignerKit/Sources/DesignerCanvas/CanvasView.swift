@@ -22,6 +22,7 @@ public final class CanvasView: NSView {
                 dismissLabelEditorWithoutCommit()
             }
             renderer.sketchy = board.isSketchy
+            renderer.captionMode = board.captionMode
             parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
             anchorSpreadCache = EdgeGeometry.anchorSpread(in: board)
             routeCache = SpatialIndex.resolveRoutes(for: board)
@@ -41,7 +42,12 @@ public final class CanvasView: NSView {
                 return element.id
             })
             selection.formIntersection(Set(board.elements.keys))
+            captionsDirty = true // routes changed → caption layout must re-solve (B2)
+            refreshLabelEditorFontIfEditing() // live text-box size while editing (I3c)
             needsDisplay = true
+            // Broken-link validity needs a filesystem scan — never do it inline
+            // in the frame path; coalesce it to just after this change (F4).
+            DispatchQueue.main.async { [weak self] in self?.refreshBrokenLinks() }
         }
     }
 
@@ -150,12 +156,30 @@ public final class CanvasView: NSView {
             needsDisplay = true
             if viewport.scale != oldValue.scale {
                 viewportScaleChanged?(viewport.scale)
+                // Re-solve caption placement only AFTER the zoom settles (B2):
+                // debounce so a continuous pinch reuses cached centers.
+                scheduleCaptionSettle()
             }
         }
     }
 
     /// Fires when the zoom level changes (P1: the zoom HUD tracks it).
     public var viewportScaleChanged: ((Double) -> Void)?
+
+    /// True when connector caption placement needs re-solving (B2). Set on
+    /// board changes and ~100 ms after a zoom stops; cleared on the solve frame.
+    private var captionsDirty = true
+    private var captionSettleWork: DispatchWorkItem?
+
+    private func scheduleCaptionSettle() {
+        captionSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.captionsDirty = true
+            self?.needsDisplay = true
+        }
+        captionSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
+    }
 
     public private(set) var selection: Set<ElementID> = [] {
         didSet {
@@ -226,7 +250,26 @@ public final class CanvasView: NSView {
     /// Style applied to the NEXT dragged shape (set by the style panel).
     /// The default is the grouping-outline look the feature exists for:
     /// no background, default stroke.
-    public var pendingShapeStyle = Style(fill: Style.noFill)
+    // Picker shapes default to the standard node fill (fill == nil resolves to
+    // the theme's node background), matching a double-clicked block. Pick the
+    // "None" swatch for a hollow grouping-outline shape.
+    public var pendingShapeStyle = Style()
+
+    /// Kept in sync by the controller: true when the left style/inspector panel
+    /// is showing, so newly-created elements can auto-pan clear of it (B3).
+    public var leftPanelIsVisible = false
+
+    /// If `frame`'s on-screen rect underlaps the left style-panel band while a
+    /// panel is showing, pan so it clears the band (view x-band ≈ 0…268:
+    /// leading 16 + width 236 + 16 gap). Pure view-state — no board mutation,
+    /// no undo. No-op when the panel is hidden or the element already clears it.
+    private func nudgeClearOfLeftPanel(_ frame: Rect) {
+        guard leftPanelIsVisible else { return }
+        let band: CGFloat = 268
+        let viewRect = viewport.toView(frame)
+        guard viewRect.minX < band else { return }
+        viewport.pan(viewDeltaX: band + 12 - viewRect.minX, viewDeltaY: 0)
+    }
     /// Style applied to NEW ink strokes (pencil settings in the style panel).
     public var pendingInkStyle = Style(strokeWidth: 2)
     /// The shape the shape tool returns to when re-activated via key/palette.
@@ -309,8 +352,20 @@ public final class CanvasView: NSView {
 
     /// Live waypoint list during a `.bendEdge` drag; committed on up.
     private var transientBend: (id: ElementID, waypoints: [Point])?
-    /// Live endpoint position during a `.moveEndpoint` drag.
-    private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point)?
+    /// Live endpoint position during a `.moveEndpoint` drag. `anchor` is the
+    /// resolved attachment the endpoint would commit to — a discrete node slot
+    /// when hovering a block, else a free (dangling) point.
+    private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point, anchor: DesignerModel.Anchor)?
+
+    /// The connector under the cursor. Tracked only to reveal its caption in
+    /// On-Focus mode (hover-to-peek); redraws only when it changes and the
+    /// mode cares, so it costs nothing in Always / Off.
+    private var hoveredEdgeID: ElementID? {
+        didSet {
+            guard hoveredEdgeID != oldValue, board.captionMode == .onFocus else { return }
+            needsDisplay = true
+        }
+    }
 
     /// World-space width of the border band that starts a connection drag
     /// instead of a move (in view pixels, so it feels constant at any zoom).
@@ -397,6 +452,12 @@ public final class CanvasView: NSView {
         let overrideFrames = transientFrames.isEmpty
             ? nil
             : board.frameProvider(overrides: transientFrames)
+        // Live obstacles over the dragged frames so mid-drag routes avoid blocks
+        // and match the settled route the drop produces — no more "cross then
+        // pop" (B10). Built once per frame, only while a drag is in flight.
+        let dragObstacles: ((Rect) -> [Rect])? = transientFrames.isEmpty
+            ? nil
+            : SpatialIndex.nodeObstacleQuery(for: board, overrides: transientFrames)
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
@@ -404,21 +465,24 @@ public final class CanvasView: NSView {
             if let transientBend, transientBend.id == element.id, var edge = element.edge {
                 edge.waypoints = transientBend.waypoints
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let transientEndpoint, transientEndpoint.id == element.id, var edge = element.edge {
                 switch transientEndpoint.end {
-                case .from: edge.from = .free(transientEndpoint.point)
-                case .to: edge.to = .free(transientEndpoint.point)
+                case .from: edge.from = transientEndpoint.anchor
+                case .to: edge.to = transientEndpoint.anchor
                 }
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames,
                     parallelOffset: parallelOffsetCache[element.id] ?? 0,
-                    anchorOffsets: anchorSpreadCache[element.id])
+                    anchorOffsets: anchorSpreadCache[element.id],
+                    obstacles: dragObstacles)
             }
             return routeCache[element.id]
         }
@@ -495,9 +559,12 @@ public final class CanvasView: NSView {
             }
             for id in inkElementIDs {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
+                // A live ink move arrives as `frameOverride` (transient bbox);
+                // renderer.draw translates the stroke for it (I4/B13).
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     renderer.draw(
                         element, in: context, viewport: viewport,
+                        frameOverride: transientFrames[id],
                         isSelected: selection.contains(id)
                     )
                 }
@@ -535,7 +602,12 @@ public final class CanvasView: NSView {
             // Connector captions dodge blocks AND each other; the spatial
             // index answers the pill-rect probes, the renderer's caption
             // pass tracks pill-vs-pill.
-            renderer.beginCaptionPass()
+            // Only re-solve caption placement on a SETTLED viewport (no camera
+            // animation, and the debounce after the last zoom fired) — otherwise
+            // reuse cached centers so captions don't jitter mid-zoom (B2).
+            let resolveCaptions = captionsDirty && cameraAnimation == nil
+            renderer.beginCaptionPass(resolve: resolveCaptions)
+            if resolveCaptions { captionsDirty = false }
             let captionObstacles: (Rect) -> [Rect] = { [spatialIndex, board] rect in
                 spatialIndex.query(rect).compactMap { board.elements[$0]?.node?.frame }
             }
@@ -544,13 +616,20 @@ public final class CanvasView: NSView {
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     if let edge = element.edge {
                         if let route = routeFor(element) {
+                            // "Focused" for On-Focus captions: selected, part of
+                            // the emphasized flow set, or under the cursor.
+                            let emphasized = selection.contains(element.id)
+                                || (emphasizedElements?.contains(element.id) ?? false)
+                                || hoveredEdgeID == element.id
                             renderer.drawEdge(
                                 edge, route: route,
                                 in: context, viewport: viewport,
                                 isSelected: selection.contains(element.id),
                                 isDangling: danglingEdgeIDs.contains(element.id),
+                                emphasized: emphasized,
                                 captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5,
-                                captionObstacles: captionObstacles
+                                captionObstacles: captionObstacles,
+                                edgeID: element.id
                             )
                         }
                     } else {
@@ -560,7 +639,8 @@ public final class CanvasView: NSView {
                             viewport: viewport,
                             frameOverride: transientFrames[element.id],
                             isSelected: selection.contains(element.id),
-                            suppressText: element.id == editingElementID
+                            suppressText: element.id == editingElementID,
+                            dimmed: isDimmed(element)
                         )
                     }
                 }
@@ -601,6 +681,7 @@ public final class CanvasView: NSView {
         drawLinkBadges(in: context)
         drawProposalGhostOverlay(in: context)
         drawSimulationOverlay(in: context)
+        drawFlowSourcePickOverlay(in: context)
         drawFlowRecordingOverlay(in: context)
         drawInFlightGesture(in: context)
         drawTransientHint(in: context)
@@ -1013,12 +1094,16 @@ public final class CanvasView: NSView {
 
     private var cameraAnimation: (start: CanvasViewport, target: CanvasViewport,
                                   startTime: TimeInterval, duration: TimeInterval,
-                                  completion: (() -> Void)?)?
+                                  anchorWorld: Point?, completion: (() -> Void)?)?
     private var cameraTimer: Timer?
 
     /// Glides the camera to `target` (ease-in-out; scale lerped in log space
-    /// so zooming feels linear). Completion fires exactly at the target.
+    /// so zooming feels linear). Completion fires exactly at the target. When
+    /// `anchorWorld` is given, that world point's on-screen position is
+    /// interpolated directly, so the motion zooms INTO it (used for the
+    /// linked-board dive, so it doesn't drift to the viewport middle first).
     public func animateViewport(to target: CanvasViewport, duration: TimeInterval = 0.32,
+                                anchorWorld: CGPoint? = nil,
                                 completion: (() -> Void)? = nil) {
         cameraTimer?.invalidate()
         guard duration > 0.01 else {
@@ -1026,7 +1111,8 @@ public final class CanvasView: NSView {
             completion?()
             return
         }
-        cameraAnimation = (viewport, target, CACurrentMediaTime(), duration, completion)
+        let anchor = anchorWorld.map { Point(x: Double($0.x), y: Double($0.y)) }
+        cameraAnimation = (viewport, target, CACurrentMediaTime(), duration, anchor, completion)
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
             guard let self, let animation = self.cameraAnimation else {
                 timer.invalidate()
@@ -1038,10 +1124,23 @@ public final class CanvasView: NSView {
             let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
             let logStart = log(animation.start.scale), logEnd = log(animation.target.scale)
             let scale = exp(logStart + (logEnd - logStart) * eased)
-            let origin = Point(
-                x: animation.start.origin.x + (animation.target.origin.x - animation.start.origin.x) * eased,
-                y: animation.start.origin.y + (animation.target.origin.y - animation.start.origin.y) * eased
-            )
+            let origin: Point
+            if let anchor = animation.anchorWorld {
+                // Keep the anchor's screen position moving smoothly from its
+                // start mapping to its target mapping, so the zoom homes in on
+                // the node instead of the camera sliding after a center zoom.
+                let startScreen = animation.start.toView(anchor)
+                let endScreen = animation.target.toView(anchor)
+                let screenX = startScreen.x + (endScreen.x - startScreen.x) * eased
+                let screenY = startScreen.y + (endScreen.y - startScreen.y) * eased
+                origin = Point(x: anchor.x - Double(screenX) / scale,
+                               y: anchor.y - Double(screenY) / scale)
+            } else {
+                origin = Point(
+                    x: animation.start.origin.x + (animation.target.origin.x - animation.start.origin.x) * eased,
+                    y: animation.start.origin.y + (animation.target.origin.y - animation.start.origin.y) * eased
+                )
+            }
             self.viewport = CanvasViewport(origin: origin, scale: scale)
             if t >= 1 {
                 timer.invalidate()
@@ -1049,6 +1148,7 @@ public final class CanvasView: NSView {
                 let done = animation.completion
                 self.cameraAnimation = nil
                 self.viewport = animation.target
+                self.captionsDirty = true // re-solve captions now the camera settled (B2)
                 done?()
             }
         }
@@ -1081,8 +1181,56 @@ public final class CanvasView: NSView {
         for element in zOrderedElements {
             guard let node = element.node, node.semantic.linkedBoardID != nil,
                   element.layerIDs.contains(where: { !hiddenLayers.contains($0) }) else { continue }
-            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame), context: context)
+            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame),
+                                   broken: brokenLinkIDs.contains(element.id), context: context)
         }
+    }
+
+    // MARK: Broken board links (F4)
+
+    /// Nodes whose linked board can't be resolved to a file. Recomputed off the
+    /// hot path (never per frame — resolution is a filesystem scan).
+    public private(set) var brokenLinkIDs: Set<ElementID> = []
+    /// Injected by the controller so the canvas needn't depend on BoardCatalog.
+    public var resolveLinkValidity: ((BoardID) -> Bool)?
+    /// Fires when the hovered broken-link badge changes (id, its view rect).
+    public var brokenLinkHoverChanged: ((ElementID?, CGRect) -> Void)?
+    /// Fires when a broken link's badge is clicked (explain instead of navigate).
+    public var brokenLinkActivated: ((ElementID) -> Void)?
+    private var hoveredBrokenLink: ElementID?
+
+    /// Re-resolve every link's validity. Runs the filesystem scan ONCE,
+    /// deduped by board id — call from board changes (async), window focus,
+    /// or catalog-change notifications, never per frame.
+    public func refreshBrokenLinks() {
+        guard let resolve = resolveLinkValidity else {
+            if !brokenLinkIDs.isEmpty { brokenLinkIDs = []; needsDisplay = true }
+            return
+        }
+        var broken: Set<ElementID> = []
+        var cache: [BoardID: Bool] = [:]
+        for element in zOrderedElements {
+            guard let linkID = element.node?.semantic.linkedBoardID else { continue }
+            let ok: Bool
+            if let cached = cache[linkID] { ok = cached }
+            else { ok = resolve(linkID); cache[linkID] = ok }
+            if !ok { broken.insert(element.id) }
+        }
+        if broken != brokenLinkIDs { brokenLinkIDs = broken; needsDisplay = true }
+    }
+
+    /// Broken-link hover hit-test — call from mouseMoved. Cheap: only iterates
+    /// the (usually empty) broken set.
+    private func updateBrokenLinkHover(at point: CGPoint) {
+        let hit = brokenLinkIDs.first { id in
+            guard let frame = board.elements[id]?.node?.frame else { return false }
+            return linkBadgeRect(forNodeFrame: frame).insetBy(dx: -3, dy: -3).contains(point)
+        }
+        guard hit != hoveredBrokenLink else { return }
+        hoveredBrokenLink = hit
+        let rect = hit.flatMap { board.elements[$0]?.node?.frame }
+            .map { linkBadgeRect(forNodeFrame: $0) } ?? .zero
+        brokenLinkHoverChanged?(hit, rect)
     }
 
     // MARK: Flow recording (F5)
@@ -1095,16 +1243,40 @@ public final class CanvasView: NSView {
     /// chooser menu resolves into `recordFlowCandidate`.
     private var pendingFlowChoices: [FlowRecorder.Candidate] = []
 
+    /// True while we're waiting for the user to click the source block (F10):
+    /// Record with nothing selected drops straight into the dimmed recording
+    /// canvas and lets them pick the starting block, instead of an alert.
+    public private(set) var isPickingFlowSource = false
+
     @discardableResult
     public func startFlowRecording(from source: ElementID) -> Bool {
         guard board.elements[source]?.node != nil else { return false }
         stopSimulation()
         commitLabelEditor()
+        isPickingFlowSource = false
         flowRecorder = FlowRecorder(source: source)
         select([])
         flowRecordingChanged?(true, 0)
         needsDisplay = true
         return true
+    }
+
+    /// Enter the "pick a source block" step (F10): dim the canvas like a live
+    /// recording and wait for the first block click to become the source.
+    public func beginFlowSourcePick() {
+        stopSimulation()
+        commitLabelEditor()
+        select([])
+        isPickingFlowSource = true
+        flowRecordingChanged?(true, 0)
+        needsDisplay = true
+    }
+
+    public func cancelFlowSourcePick() {
+        guard isPickingFlowSource else { return }
+        isPickingFlowSource = false
+        flowRecordingChanged?(false, 0)
+        needsDisplay = true
     }
 
     public func cancelFlowRecording() {
@@ -1142,7 +1314,10 @@ public final class CanvasView: NSView {
             guard let element = board.elements[id] else { return false }
             return element.layerIDs.contains { !hidden.contains($0) }
         }
-        return visible(candidate.edge) && visible(candidate.to)
+        // Both the connector and the block it delivers to must be on a visible
+        // layer, and so must the origin — an element hidden by its layer must
+        // never appear as an advancement option, even across layers (F13).
+        return visible(candidate.from) && visible(candidate.edge) && visible(candidate.to)
     }
 
     /// A click while recording. The primary gesture is clicking the NEXT
@@ -1249,6 +1424,21 @@ public final class CanvasView: NSView {
     /// path glows in accent; the blocks you can click NEXT re-render normally
     /// with a dashed accent ring, their connectors drawn as usual — so the
     /// choice reads as "which block does the traffic visit next".
+    private func drawFlowSourcePickOverlay(in context: CGContext) {
+        guard isPickingFlowSource else { return }
+        renderer.drawSimulationScrim(bounds, in: context)
+        let hidden = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        // Lift every visible block above the scrim so the user can see what to
+        // click for the source.
+        for element in board.elementsInZOrder {
+            guard element.node != nil,
+                  element.layerIDs.contains(where: { !hidden.contains($0) }) else { continue }
+            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+        }
+        renderer.drawHintCaption("Click the block the traffic starts from",
+                                 at: CGPoint(x: bounds.midX, y: 40), in: context)
+    }
+
     private func drawFlowRecordingOverlay(in context: CGContext) {
         guard let recorder = flowRecorder else { return }
         let frames = board.frameProvider(overrides: transientFrames)
@@ -1337,6 +1527,15 @@ public final class CanvasView: NSView {
         case .moveEndpoint(_, _, let target):
             if let target, let frame = board.frameProvider(overrides: transientFrames)(target) {
                 renderer.highlightConnectTarget(viewport.toView(frame), in: context)
+                // Show the discrete slots the endpoint can snap to, with the
+                // one it would land on highlighted.
+                let slots = EdgeGeometry.anchorSlots(for: frame)
+                var selected: Int?
+                if case .element(_, let side, let offset)? = transientEndpoint?.anchor {
+                    selected = slots.firstIndex { $0.side == side && $0.offset == offset }
+                }
+                renderer.drawAnchorSlots(
+                    slots.map { viewport.toView($0.point) }, selected: selected, in: context)
             }
 
         case .shapeDraw(let start, let current):
@@ -1430,6 +1629,15 @@ public final class CanvasView: NSView {
         // Simulation is a read-only mode; ignore edit gestures (pan/zoom still
         // work via scroll/pinch). The transport controls it.
         if isSimulating { return }
+        if isPickingFlowSource {
+            let world = viewport.toWorld(convert(event.locationInWindow, from: nil))
+            if let nodeID = board.elementsInZOrder.reversed().first(where: {
+                $0.node?.frame.contains(world) == true && isEditable(id: $0.id)
+            })?.id {
+                _ = startFlowRecording(from: nodeID) // clears the pick flag
+            }
+            return // clicks on empty canvas just wait for a valid block
+        }
         if isRecordingFlow {
             handleFlowRecordingClick(at: convert(event.locationInWindow, from: nil), event: event)
             return
@@ -1442,6 +1650,7 @@ public final class CanvasView: NSView {
         // would mutate is cut off before it starts.
         if isReadOnly {
             if event.clickCount == 2, let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -1473,6 +1682,7 @@ public final class CanvasView: NSView {
             // The link badge sits OUTSIDE node frames — check it explicitly
             // before normal double-click handling (label edit / create).
             if let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -1532,8 +1742,13 @@ public final class CanvasView: NSView {
         // The band wins even when a connector lies on top of the border
         // (its anchor sits exactly there — the just-created connector would
         // otherwise swallow the next connection drag as a bend/selection).
+        // BUT only for FILLED / image nodes: a no-fill node (a grouping
+        // outline) is hittable ONLY on its border, so if the connect band
+        // claimed it there'd be no way to select or move it — its border must
+        // select/move instead (I1). Real connections start from solid blocks.
         let bandNode = (hit?.node != nil ? hit : editableNode(at: point))
-        if let bandNode, !event.modifierFlags.contains(.shift),
+        let bandNodeConnectable = bandNode?.node.map { $0.style.hasFill || $0.style.image != nil } ?? false
+        if let bandNode, bandNodeConnectable, !event.modifierFlags.contains(.shift),
            isInConnectBand(point, of: bandNode) {
             gesture = .connect(from: bandNode.id, current: point, target: nil)
             return
@@ -1600,14 +1815,33 @@ public final class CanvasView: NSView {
             transientBend = (id, waypoints)
             needsDisplay = true
 
-        case .moveEndpoint(let id, let end, _):
+        case .moveEndpoint(let id, let end, let previousTarget):
             let world = viewport.toWorld(point)
-            transientEndpoint = (id, end, world)
             // Highlight the block the endpoint would attach to — anywhere on
             // the other end's block means "cancel", not a self-loop.
             let otherEnd = board.elements[id]?.edge.map { end == .from ? $0.to : $0.from }
-            let candidate = editableNode(at: point)?.id
+            // Fill-aware hit (like the new-connection drag): a no-fill grouping
+            // rectangle is hollow, so its big frame no longer magnetizes the
+            // endpoint — you snap to real blocks, not the group outline (I5).
+            let hit = editableElement(at: point)
+            var candidate: ElementID? = hit?.node != nil ? hit?.id : nil
+            // Hysteresis: if we've drifted just off the previously targeted
+            // SOLID block, keep it rather than thrashing to nothing/another as
+            // the cursor moves a little (I5). A fresh solid hit always wins.
+            if candidate == nil, let previousTarget,
+               let node = board.elements[previousTarget]?.node,
+               node.style.hasFill || node.style.image != nil {
+                let margin = 14 / viewport.scale
+                let f = node.frame
+                let expanded = Rect(x: f.x - margin, y: f.y - margin,
+                                    width: f.width + margin * 2, height: f.height + margin * 2)
+                if expanded.contains(world) { candidate = previousTarget }
+            }
             let targetID = candidate == otherEnd?.elementID ? nil : candidate
+            // Over a block: snap to its nearest discrete anchor slot so the
+            // endpoint jumps between fixed points. Off a block: dangle free.
+            let anchor = endpointAnchor(forTarget: targetID, droppedAt: world)
+            transientEndpoint = (id, end, world, anchor)
             gesture = .moveEndpoint(id: id, end: end, target: targetID)
             needsDisplay = true
 
@@ -1617,9 +1851,12 @@ public final class CanvasView: NSView {
             if hitID != nil, !selection.isEmpty {
                 var originals: [ElementID: Rect] = [:]
                 for id in selection {
-                    if let element = board.elements[id],
-                       element.node != nil || isNote(element) || element.boundary != nil {
-                        originals[id] = SpatialIndex.boundingRect(of: element)
+                    if let element = board.elements[id] {
+                        let movable = element.node != nil || isNote(element) || element.boundary != nil
+                        let isInk = { if case .ink = element.content { return true }; return false }()
+                        if movable || isInk {
+                            originals[id] = SpatialIndex.boundingRect(of: element)
+                        }
                     }
                 }
                 gesture = .move(originals: originals, startWorld: viewport.toWorld(start))
@@ -1718,8 +1955,17 @@ public final class CanvasView: NSView {
                 width: Double(band.width) / viewport.scale,
                 height: Double(band.height) / viewport.scale
             )
-            let hitIDs = board.expandSelectionToGroups(
-                spatialIndex.query(worldBand).filter { isEditable(id: $0) })
+            // The spatial index answers by bounding box; a connector's box
+            // spans both endpoints, so it can overlap the band while the actual
+            // line is nowhere near it. Require the route to truly cross the band
+            // for edges — nodes/ink keep partial-overlap selection (intentional).
+            let candidates = spatialIndex.query(worldBand).filter { isEditable(id: $0) }
+            let precise = candidates.filter { id in
+                guard board.elements[id]?.edge != nil else { return true }
+                guard let route = routeCache[id] else { return false }
+                return EdgeGeometry.route(route, intersects: worldBand)
+            }
+            let hitIDs = board.expandSelectionToGroups(precise)
             if event.modifierFlags.contains(.shift) {
                 selection.formUnion(hitIDs)
             } else {
@@ -1803,12 +2049,9 @@ public final class CanvasView: NSView {
                 // self-loop connector would be meaningless), as is a drop
                 // that never moved.
                 if targetID != otherEnd.elementID {
-                    let anchor: DesignerModel.Anchor
-                    if let targetID {
-                        anchor = .element(targetID, side: nil, offset: nil)
-                    } else {
-                        anchor = .free(dragged.point)
-                    }
+                    // Reuse the anchor resolved during the drag: a discrete
+                    // node slot when over a block, else a free dangling point.
+                    let anchor = dragged.anchor
                     if end == .from { edge.from = anchor } else { edge.to = anchor }
                     element.content = .edge(edge)
                     delegate?.canvasView(
@@ -1902,8 +2145,36 @@ public final class CanvasView: NSView {
                 beginLabelEdit(for: hit)
             }
         } else {
-            createBlock(at: viewport.toWorld(point))
+            // Double-click on empty canvas creates a borderless text box, not
+            // a shape (F5). Shapes come from the shape tool / picker; ⌘B still
+            // adds a block.
+            insertTextNote(at: viewport.toWorld(point))
         }
+    }
+
+    /// A borderless, background-less text box (a `.note`, which renders as pure
+    /// text) placed at `world`, immediately in label-edit. This is the default
+    /// double-click gesture on empty canvas (F5).
+    private func insertTextNote(at world: Point) {
+        let layerIDs = activeLayerIDs()
+        guard !layerIDs.isEmpty else { return }
+        let factor = creationScaleFactor()
+        let size = CGSize(width: 140 * factor, height: 40 * factor)
+        let frame = Rect(
+            x: world.x - Double(size.width) / 2, y: world.y - Double(size.height) / 2,
+            width: Double(size.width), height: Double(size.height)
+        )
+        let element = Element(
+            layerIDs: layerIDs,
+            sortKey: board.topSortKey,
+            content: .note(Note(text: "", frame: frame, style: Style(fill: Style.noFill)))
+        )
+        delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Text")
+        selection = [element.id]
+        if let inserted = board.elements[element.id] {
+            beginLabelEdit(for: inserted)
+        }
+        nudgeClearOfLeftPanel(frame)
     }
 
     // MARK: Keyboard
@@ -1936,6 +2207,10 @@ public final class CanvasView: NSView {
         }
         if isSimulating, event.keyCode == 53 { // escape exits simulation
             stopSimulation()
+            return
+        }
+        if isPickingFlowSource, event.keyCode == 53 { // escape cancels source pick
+            cancelFlowSourcePick()
             return
         }
         if isRecordingFlow {
@@ -2308,11 +2583,15 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+        nudgeClearOfLeftPanel(frame)
     }
 
     /// Shape-tool commit: a node at EXACTLY the dragged frame, unlabeled
     /// (grouping shapes start nameless — double-click labels later), styled
-    /// by the pending style. The tool reverts to Select, Excalidraw-style.
+    /// by the pending style. The shape tool STAYS armed so you can stamp
+    /// several shapes in a row (Esc / V returns to Select). Because the tool
+    /// is pure view state that undo never touches, ⌘Z removes the shape
+    /// without reverting your pick back to the cursor.
     private func insertShape(worldRect: Rect, shape: NodeShape, style: Style) {
         let layerIDs = activeLayerIDs()
         let element = Element(
@@ -2327,7 +2606,7 @@ public final class CanvasView: NSView {
         )
         delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Shape")
         selection = [element.id]
-        tool = .select
+        nudgeClearOfLeftPanel(worldRect)
     }
 
     /// Shift (or a square/circle picker entry) constrains the drag to equal
@@ -2350,6 +2629,58 @@ public final class CanvasView: NSView {
 
     public func sendSelectionToBack() {
         reorderSelection(toFront: false)
+    }
+
+    /// Peers of `id` for layer-scoped z-order: elements sharing at least one of
+    /// its layers, in back→front draw order (includes `id` itself).
+    private func zPeers(of id: ElementID) -> [Element] {
+        guard let element = board.elements[id] else { return [] }
+        let layers = element.layerIDs
+        return board.elementsInZOrder.filter {
+            $0.id == id || !$0.layerIDs.isDisjoint(with: layers)
+        }
+    }
+
+    /// 1-based rank from the FRONT among layer-sharing peers, and the peer
+    /// count — drives the style panel's "Nth from front of M" readout (F8).
+    public func zPosition(of id: ElementID) -> (rank: Int, total: Int)? {
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return nil }
+        return (rank: peers.count - idx, total: peers.count)
+    }
+
+    public func canStepSelection(forward: Bool) -> Bool {
+        guard selection.count == 1, let id = selection.first else { return false }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return false }
+        return forward ? idx < peers.count - 1 : idx > 0
+    }
+
+    public func stepSelectionForward() { stepSelection(forward: true) }
+    public func stepSelectionBackward() { stepSelection(forward: false) }
+
+    /// Move the single selected element ONE position among its layer-sharing
+    /// peers (not to the global extreme like To Front/Back). One undo step.
+    private func stepSelection(forward: Bool) {
+        guard selection.count == 1, let id = selection.first,
+              let element = board.elements[id] else { return }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return }
+        var moved = element
+        if forward {
+            guard idx < peers.count - 1 else { return } // already frontmost among peers
+            let above = peers[idx + 1]
+            let aboveAbove = idx + 2 < peers.count ? peers[idx + 2].sortKey : nil
+            moved.sortKey = SortKey.between(above.sortKey, aboveAbove)
+        } else {
+            guard idx > 0 else { return } // already backmost among peers
+            let below = peers[idx - 1]
+            let belowBelow = idx - 2 >= 0 ? peers[idx - 2].sortKey : nil
+            moved.sortKey = SortKey.between(belowBelow, below.sortKey)
+        }
+        delegate?.canvasView(self, perform: .replaceElement(moved),
+                             actionName: forward ? "Bring Forward" : "Send Backward")
+        needsDisplay = true
     }
 
     private func reorderSelection(toFront: Bool) {
@@ -2392,6 +2723,35 @@ public final class CanvasView: NSView {
         context.restoreGState()
     }
 
+    /// The editor font for `element`. For a text box (`.note`) it tracks the box
+    /// HEIGHT (× textSize) so the field matches the on-canvas text and scales
+    /// with a resize (I2/I3); other elements use the fixed zoom-scaled size.
+    /// Clamped to keep the field legible and (at high zoom) from ballooning over
+    /// the toolbar.
+    private func labelEditorFont(for element: Element, frame: Rect) -> NSFont {
+        let raw: CGFloat
+        let cap: CGFloat
+        if isNote(element), case .note(let note) = element.content {
+            raw = CGFloat(max(frame.height * 0.55, 6))
+                * CGFloat(note.style.effectiveTextMultiplier) * CGFloat(viewport.scale)
+            cap = 120
+        } else {
+            raw = 13 * CGFloat(viewport.scale)
+            cap = 26
+        }
+        return .systemFont(ofSize: min(max(raw, 11), cap), weight: .medium)
+    }
+
+    /// Keep the live editor font in sync when the element being edited changes
+    /// size (text-size control or a resize during edit) so you SEE the text
+    /// change size while typing (I3c). Called from `board` didSet.
+    private func refreshLabelEditorFontIfEditing() {
+        guard let field = labelEditor, let id = editingElementID,
+              let element = board.elements[id],
+              let frame = SpatialIndex.boundingRect(of: element) else { return }
+        field.font = labelEditorFont(for: element, frame: frame)
+    }
+
     public func beginLabelEdit(for element: Element) {
         commitLabelEditor()
         guard let frame = SpatialIndex.boundingRect(of: element) else { return }
@@ -2399,16 +2759,17 @@ public final class CanvasView: NSView {
 
         let field = NSTextField(string: currentLabel(of: element))
         field.isBordered = false
-        field.drawsBackground = true
+        // A text box (`.note`) edits as pure text: no background box, no focus
+        // ring — just a caret you type into (I3). Nodes/boundaries keep the
+        // solid field background for legibility over their fill.
+        let isTextBox = isNote(element)
+        field.drawsBackground = !isTextBox
         field.backgroundColor = .textBackgroundColor
+        field.focusRingType = isTextBox ? .none : .default
         field.alignment = .center
-        // B1: the field scales WITH the zoomed node so the font stays legible
-        // — but CLAMPED: at high zoom an unbounded field ballooned to
-        // thousands of points and blanketed the toolbar, swallowing every
-        // click (Layers/Assistant appeared dead). Cap size and keep it below
-        // the toolbar band and inside the view.
-        let fontSize = min(max(13 * viewport.scale, 11), 26)
-        field.font = .systemFont(ofSize: fontSize, weight: .medium)
+        let font = labelEditorFont(for: element, frame: frame)
+        field.font = font
+        let fontSize = font.pointSize
         let fieldHeight = fontSize + 12
         let viewRect = viewport.toView(frame)
         let width = min(max(viewRect.width - 8, 40), 340)
@@ -2564,8 +2925,18 @@ public final class CanvasView: NSView {
             boundary.frame = frame
             element.content = .boundary(boundary)
             return true
-        case .ink, .edge:
-            return false // M3 handles ink transforms
+        case .ink(var ink):
+            // Ink has no frame; translate every point by the delta between its
+            // current bounding box and the dragged frame (B13).
+            guard let current = SpatialIndex.boundingRect(of: element) else { return false }
+            let dx = frame.x - current.x, dy = frame.y - current.y
+            ink.points = ink.points.map {
+                StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
+            }
+            element.content = .ink(ink)
+            return true
+        case .edge:
+            return false // routing follows endpoints; no frame move
         }
     }
 
@@ -2597,10 +2968,44 @@ public final class CanvasView: NSView {
         return candidates.max { ($0.sortKey, $0.id) < ($1.sortKey, $1.id) }
     }
 
+    /// The anchor a dragged connector endpoint should commit to: the nearest
+    /// discrete slot on the target block (so it pins to a fixed point the user
+    /// can later re-pick to de-clutter), or a free dangling point off any block.
+    private func endpointAnchor(
+        forTarget targetID: ElementID?, droppedAt world: Point
+    ) -> DesignerModel.Anchor {
+        guard let targetID,
+              let frame = board.frameProvider(overrides: transientFrames)(targetID) else {
+            return .free(world)
+        }
+        let slot = EdgeGeometry.nearestAnchorSlot(to: world, on: frame)
+        return .element(targetID, side: slot.side, offset: slot.offset)
+    }
+
     private func preciseHit(_ element: Element, world: Point, tolerance: Double) -> Bool {
         switch element.content {
         case .node(let node):
-            return node.frame.contains(world)
+            guard node.frame.contains(world) else { return false }
+            // A filled node (or one showing an image) is solid everywhere. A
+            // no-fill shape (hollow outline / grouping rectangle) is empty
+            // inside — a click in the interior should fall through to whatever
+            // sits behind it; only its border and its own label are "solid".
+            if node.style.hasFill || node.style.image != nil { return true }
+            func inset(_ rect: Rect, by amount: Double) -> Rect {
+                Rect(x: rect.x + amount, y: rect.y + amount,
+                     width: max(rect.width - amount * 2, 0), height: max(rect.height - amount * 2, 0))
+            }
+            let band = max(8 / viewport.scale, tolerance)
+            if !inset(node.frame, by: band).contains(world) { return true } // on the border
+            if !node.semantic.name.isEmpty {
+                // The centered label area stays clickable so a titled outline
+                // (or a text box inside a shape) can still be grabbed.
+                let labelHeight = min(node.frame.height, 28)
+                let labelBox = Rect(x: node.frame.x, y: node.frame.midY - labelHeight / 2,
+                                    width: node.frame.width, height: labelHeight)
+                if labelBox.contains(world) { return true }
+            }
+            return false
         case .note(let note):
             return note.frame.contains(world)
         case .ink(let ink):
@@ -2663,7 +3068,17 @@ public final class CanvasView: NSView {
     // MARK: Cursor feedback
 
     public override func mouseMoved(with event: NSEvent) {
-        updateCursor(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(at: point)
+        // Hover-to-peek captions: only worth a hit-test when the mode reveals
+        // captions on focus; otherwise leave `hoveredEdgeID` untouched/cleared.
+        if board.captionMode == .onFocus {
+            let hit = editableElement(at: point)
+            hoveredEdgeID = hit?.edge != nil ? hit?.id : nil
+        } else if hoveredEdgeID != nil {
+            hoveredEdgeID = nil
+        }
+        updateBrokenLinkHover(at: point)
     }
 
     private func updateCursor(at point: CGPoint?) {
@@ -2680,7 +3095,11 @@ public final class CanvasView: NSView {
                $0.rect(around: handleBox).insetBy(dx: -3, dy: -3).contains(point)
            }) {
             handle.cursor.set()
-        } else if let hit = editableElement(at: point), hit.node != nil, isInConnectBand(point, of: hit) {
+        } else if let hit = editableElement(at: point), let node = hit.node,
+                  node.style.hasFill || node.style.image != nil,
+                  isInConnectBand(point, of: hit) {
+            // Only solid blocks show the connect crosshair on their border; a
+            // no-fill outline shows the normal arrow so it reads as movable (I1).
             NSCursor.crosshair.set()
         } else {
             NSCursor.arrow.set()
