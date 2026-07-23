@@ -43,6 +43,7 @@ public final class CanvasView: NSView {
             })
             selection.formIntersection(Set(board.elements.keys))
             captionsDirty = true // routes changed → caption layout must re-solve (B2)
+            refreshLabelEditorFontIfEditing() // live text-box size while editing (I3c)
             needsDisplay = true
             // Broken-link validity needs a filesystem scan — never do it inline
             // in the frame path; coalesce it to just after this change (F4).
@@ -558,20 +559,12 @@ public final class CanvasView: NSView {
             }
             for id in inkElementIDs {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
-                // Ink has no frame, so a live move shows up by translating the
-                // stroke points by the transient-frame delta (B13).
-                var drawElement = element
-                if let tf = transientFrames[id], case .ink(var ink) = element.content,
-                   let current = SpatialIndex.boundingRect(of: element) {
-                    let dx = tf.x - current.x, dy = tf.y - current.y
-                    ink.points = ink.points.map {
-                        StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
-                    }
-                    drawElement.content = .ink(ink)
-                }
+                // A live ink move arrives as `frameOverride` (transient bbox);
+                // renderer.draw translates the stroke for it (I4/B13).
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     renderer.draw(
-                        drawElement, in: context, viewport: viewport,
+                        element, in: context, viewport: viewport,
+                        frameOverride: transientFrames[id],
                         isSelected: selection.contains(id)
                     )
                 }
@@ -1749,8 +1742,13 @@ public final class CanvasView: NSView {
         // The band wins even when a connector lies on top of the border
         // (its anchor sits exactly there — the just-created connector would
         // otherwise swallow the next connection drag as a bend/selection).
+        // BUT only for FILLED / image nodes: a no-fill node (a grouping
+        // outline) is hittable ONLY on its border, so if the connect band
+        // claimed it there'd be no way to select or move it — its border must
+        // select/move instead (I1). Real connections start from solid blocks.
         let bandNode = (hit?.node != nil ? hit : editableNode(at: point))
-        if let bandNode, !event.modifierFlags.contains(.shift),
+        let bandNodeConnectable = bandNode?.node.map { $0.style.hasFill || $0.style.image != nil } ?? false
+        if let bandNode, bandNodeConnectable, !event.modifierFlags.contains(.shift),
            isInConnectBand(point, of: bandNode) {
             gesture = .connect(from: bandNode.id, current: point, target: nil)
             return
@@ -1817,12 +1815,28 @@ public final class CanvasView: NSView {
             transientBend = (id, waypoints)
             needsDisplay = true
 
-        case .moveEndpoint(let id, let end, _):
+        case .moveEndpoint(let id, let end, let previousTarget):
             let world = viewport.toWorld(point)
             // Highlight the block the endpoint would attach to — anywhere on
             // the other end's block means "cancel", not a self-loop.
             let otherEnd = board.elements[id]?.edge.map { end == .from ? $0.to : $0.from }
-            let candidate = editableNode(at: point)?.id
+            // Fill-aware hit (like the new-connection drag): a no-fill grouping
+            // rectangle is hollow, so its big frame no longer magnetizes the
+            // endpoint — you snap to real blocks, not the group outline (I5).
+            let hit = editableElement(at: point)
+            var candidate: ElementID? = hit?.node != nil ? hit?.id : nil
+            // Hysteresis: if we've drifted just off the previously targeted
+            // SOLID block, keep it rather than thrashing to nothing/another as
+            // the cursor moves a little (I5). A fresh solid hit always wins.
+            if candidate == nil, let previousTarget,
+               let node = board.elements[previousTarget]?.node,
+               node.style.hasFill || node.style.image != nil {
+                let margin = 14 / viewport.scale
+                let f = node.frame
+                let expanded = Rect(x: f.x - margin, y: f.y - margin,
+                                    width: f.width + margin * 2, height: f.height + margin * 2)
+                if expanded.contains(world) { candidate = previousTarget }
+            }
             let targetID = candidate == otherEnd?.elementID ? nil : candidate
             // Over a block: snap to its nearest discrete anchor slot so the
             // endpoint jumps between fixed points. Off a block: dangle free.
@@ -2709,6 +2723,35 @@ public final class CanvasView: NSView {
         context.restoreGState()
     }
 
+    /// The editor font for `element`. For a text box (`.note`) it tracks the box
+    /// HEIGHT (× textSize) so the field matches the on-canvas text and scales
+    /// with a resize (I2/I3); other elements use the fixed zoom-scaled size.
+    /// Clamped to keep the field legible and (at high zoom) from ballooning over
+    /// the toolbar.
+    private func labelEditorFont(for element: Element, frame: Rect) -> NSFont {
+        let raw: CGFloat
+        let cap: CGFloat
+        if isNote(element), case .note(let note) = element.content {
+            raw = CGFloat(max(frame.height * 0.55, 6))
+                * CGFloat(note.style.effectiveTextMultiplier) * CGFloat(viewport.scale)
+            cap = 120
+        } else {
+            raw = 13 * CGFloat(viewport.scale)
+            cap = 26
+        }
+        return .systemFont(ofSize: min(max(raw, 11), cap), weight: .medium)
+    }
+
+    /// Keep the live editor font in sync when the element being edited changes
+    /// size (text-size control or a resize during edit) so you SEE the text
+    /// change size while typing (I3c). Called from `board` didSet.
+    private func refreshLabelEditorFontIfEditing() {
+        guard let field = labelEditor, let id = editingElementID,
+              let element = board.elements[id],
+              let frame = SpatialIndex.boundingRect(of: element) else { return }
+        field.font = labelEditorFont(for: element, frame: frame)
+    }
+
     public func beginLabelEdit(for element: Element) {
         commitLabelEditor()
         guard let frame = SpatialIndex.boundingRect(of: element) else { return }
@@ -2716,16 +2759,17 @@ public final class CanvasView: NSView {
 
         let field = NSTextField(string: currentLabel(of: element))
         field.isBordered = false
-        field.drawsBackground = true
+        // A text box (`.note`) edits as pure text: no background box, no focus
+        // ring — just a caret you type into (I3). Nodes/boundaries keep the
+        // solid field background for legibility over their fill.
+        let isTextBox = isNote(element)
+        field.drawsBackground = !isTextBox
         field.backgroundColor = .textBackgroundColor
+        field.focusRingType = isTextBox ? .none : .default
         field.alignment = .center
-        // B1: the field scales WITH the zoomed node so the font stays legible
-        // — but CLAMPED: at high zoom an unbounded field ballooned to
-        // thousands of points and blanketed the toolbar, swallowing every
-        // click (Layers/Assistant appeared dead). Cap size and keep it below
-        // the toolbar band and inside the view.
-        let fontSize = min(max(13 * viewport.scale, 11), 26)
-        field.font = .systemFont(ofSize: fontSize, weight: .medium)
+        let font = labelEditorFont(for: element, frame: frame)
+        field.font = font
+        let fontSize = font.pointSize
         let fieldHeight = fontSize + 12
         let viewRect = viewport.toView(frame)
         let width = min(max(viewRect.width - 8, 40), 340)
@@ -3051,7 +3095,11 @@ public final class CanvasView: NSView {
                $0.rect(around: handleBox).insetBy(dx: -3, dy: -3).contains(point)
            }) {
             handle.cursor.set()
-        } else if let hit = editableElement(at: point), hit.node != nil, isInConnectBand(point, of: hit) {
+        } else if let hit = editableElement(at: point), let node = hit.node,
+                  node.style.hasFill || node.style.image != nil,
+                  isInConnectBand(point, of: hit) {
+            // Only solid blocks show the connect crosshair on their border; a
+            // no-fill outline shows the normal arrow so it reads as movable (I1).
             NSCursor.crosshair.set()
         } else {
             NSCursor.arrow.set()

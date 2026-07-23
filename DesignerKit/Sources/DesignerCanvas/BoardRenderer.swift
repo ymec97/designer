@@ -165,7 +165,22 @@ final class BoardRenderer {
                 isSelected: isSelected, suppressText: suppressText
             )
         case .ink(let ink):
-            drawInk(ink, in: context, viewport: viewport, isSelected: isSelected)
+            // Ink has no frame, so a live move arrives as a `frameOverride`
+            // (the transient bounding box). Translate the stroke by the delta
+            // from its current bounding-box origin so a dragged drawing visibly
+            // follows the cursor at ALL zooms, not just far zoom (I4 / B13).
+            var drawn = ink
+            if let frameOverride, let first = ink.points.first {
+                var minX = first.x, minY = first.y
+                for point in ink.points { minX = min(minX, point.x); minY = min(minY, point.y) }
+                let dx = frameOverride.x - minX, dy = frameOverride.y - minY
+                if dx != 0 || dy != 0 {
+                    drawn.points = ink.points.map {
+                        StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
+                    }
+                }
+            }
+            drawInk(drawn, in: context, viewport: viewport, isSelected: isSelected)
         case .boundary(let boundary):
             drawBoundary(
                 boundary, frame: frameOverride ?? boundary.frame,
@@ -511,15 +526,17 @@ final class BoardRenderer {
         isSelected: Bool, suppressText: Bool
     ) {
         let rect = viewport.toView(frame)
-        if isSelected {
-            let path = CGPath(rect: rect.insetBy(dx: -2, dy: -2), transform: nil)
-            strokeSelection(path: path, in: context, viewport: viewport)
-        }
+        // A text box shows NO outline/box — not even a selection ring (I3); the
+        // resize handles (drawn separately when selected) are the only chrome,
+        // so it reads as pure text you click into and type.
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !note.text.isEmpty {
             drawText(
                 note.text,
+                // The font tracks the box HEIGHT, so drag-resizing a text box
+                // scales the text itself (I2); S/M/L/XL still nudges via the
+                // multiplier, and clampedLabelFontSize shrinks to fit the width.
                 fontSize: clampedLabelFontSize(
-                    base: 12, multiplier: note.style.effectiveTextMultiplier,
+                    base: CGFloat(max(frame.height * 0.55, 6)), multiplier: note.style.effectiveTextMultiplier,
                     text: note.text, frameView: rect, viewport: viewport),
                 color: Palette.noteText,
                 in: rect,
