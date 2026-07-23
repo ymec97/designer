@@ -317,10 +317,34 @@ final class BoardRenderer {
                 context.addPath(path)
                 context.fillPath()
             }
+            // Diagonal-stripe hatching over the solid fill. Clipped to the
+            // shape path so it works for any geometry; at far zoom the stripes
+            // simply become invisible (spacing scales with the viewport).
+            if node.style.isStriped {
+                context.saveGState()
+                context.addPath(path)
+                context.clip()
+                context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke)
+                    .copy(alpha: 0.45) ?? color(hex: node.style.stroke, fallback: Palette.nodeStroke))
+                context.setLineWidth(1.2 * viewport.scale)
+                let spacing = max(7 * viewport.scale, 3)
+                let h = rect.height
+                var x = rect.minX - h
+                while x < rect.maxX {
+                    context.move(to: CGPoint(x: x, y: rect.minY))
+                    context.addLine(to: CGPoint(x: x + h, y: rect.maxY))
+                    x += spacing
+                }
+                context.strokePath()
+                context.restoreGState()
+            }
         }
 
         context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
         context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.25) * viewport.scale)
+        if node.style.isDashed, !sketchy {
+            context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 4 * viewport.scale])
+        }
         if sketchy {
             // Hand-drawn outline: two wobbly passes instead of the clean path
             // (the fill stays clean underneath — tidy color, rough ink).
@@ -345,6 +369,7 @@ final class BoardRenderer {
         } else {
             context.addPath(path)
             context.strokePath()
+            context.setLineDash(phase: 0, lengths: []) // clear before rim / next element
             // The cylinder's lid rim is stroke-only decoration — putting it
             // in the fill path punched a winding hole over the label.
             if node.shape == .cylinder {

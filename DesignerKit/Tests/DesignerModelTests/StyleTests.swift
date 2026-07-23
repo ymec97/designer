@@ -34,4 +34,32 @@ final class StyleTests: XCTestCase {
         let re = try JSONDecoder().decode(Style.self, from: JSONEncoder().encode(decoded))
         XCTAssertEqual(re, decoded)
     }
+
+    func testFillPatternAndOutlineStyleRoundTrip() throws {
+        let style = Style(fill: "#4A90D9", fillPattern: .stripes, outlineStyle: .dashed)
+        XCTAssertTrue(style.isStriped)
+        XCTAssertTrue(style.isDashed)
+        let back = try JSONDecoder().decode(Style.self, from: JSONEncoder().encode(style))
+        XCTAssertEqual(back.fillPattern, .stripes)
+        XCTAssertEqual(back.outlineStyle, .dashed)
+    }
+
+    func testDefaultPatternAndOutlineOmittedFromJSON() throws {
+        // Explicit .solid is the default and must not bloat the document.
+        let data = try JSONEncoder().encode(Style(fill: "#4A90D9", fillPattern: .solid, outlineStyle: .solid))
+        let json = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(json.contains("fillPattern"))
+        XCTAssertFalse(json.contains("outlineStyle"))
+        let back = try JSONDecoder().decode(Style.self, from: data)
+        XCTAssertFalse(back.isStriped)
+        XCTAssertFalse(back.isDashed)
+    }
+
+    func testUnknownPatternValueDecodesLeniently() throws {
+        // A future pattern name we don't know reads as nil (solid) instead of
+        // failing the whole board's decode.
+        let json = ##"{"fill":"#4A90D9","fillPattern":"crosshatch"}"##
+        let decoded = try JSONDecoder().decode(Style.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.fillPattern, "unknown enum value reads as nil, not a crash")
+    }
 }

@@ -49,6 +49,11 @@ struct WireBoard: Codable {
         var fill: String?
         var stroke: String?
         var opacity: Double?
+        /// Background pattern the agent can request: "solid" or "stripes".
+        /// Omitted = keep current.
+        var fillPattern: String?
+        /// Outline style: "solid" or "dashed". Omitted = keep current.
+        var outlineStyle: String?
         /// Layer names this node appears on (multi-membership). Omitted =
         /// the base layer.
         var layers: [String]?
@@ -140,6 +145,8 @@ extension WireBoard {
                 fill: node.style.fill,
                 stroke: node.style.stroke,
                 opacity: node.style.opacity,
+                fillPattern: node.style.fillPattern?.rawValue,
+                outlineStyle: node.style.outlineStyle?.rawValue,
                 layers: membership(of: element)
             ))
         }
@@ -299,7 +306,10 @@ extension WireBoard {
             // Explicit style from the wire (agent recolor). A node that omits
             // all three keeps an empty Style — style inheritance then restores
             // the current look for matched nodes.
-            let style = Style(fill: wireNode.fill, stroke: wireNode.stroke, opacity: wireNode.opacity)
+            let style = Style(
+                fill: wireNode.fill, stroke: wireNode.stroke, opacity: wireNode.opacity,
+                fillPattern: wireNode.fillPattern.flatMap(FillPattern.init(rawValue:)),
+                outlineStyle: wireNode.outlineStyle.flatMap(OutlineStyle.init(rawValue:)))
             let element = Element(
                 layerIDs: resolveLayers(wireNode.layers),
                 sortKey: board.topSortKey,
