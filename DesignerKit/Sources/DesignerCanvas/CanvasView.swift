@@ -498,9 +498,20 @@ public final class CanvasView: NSView {
             }
             for id in inkElementIDs {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
+                // Ink has no frame, so a live move shows up by translating the
+                // stroke points by the transient-frame delta (B13).
+                var drawElement = element
+                if let tf = transientFrames[id], case .ink(var ink) = element.content,
+                   let current = SpatialIndex.boundingRect(of: element) {
+                    let dx = tf.x - current.x, dy = tf.y - current.y
+                    ink.points = ink.points.map {
+                        StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
+                    }
+                    drawElement.content = .ink(ink)
+                }
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     renderer.draw(
-                        element, in: context, viewport: viewport,
+                        drawElement, in: context, viewport: viewport,
                         isSelected: selection.contains(id)
                     )
                 }
@@ -1621,9 +1632,12 @@ public final class CanvasView: NSView {
             if hitID != nil, !selection.isEmpty {
                 var originals: [ElementID: Rect] = [:]
                 for id in selection {
-                    if let element = board.elements[id],
-                       element.node != nil || isNote(element) || element.boundary != nil {
-                        originals[id] = SpatialIndex.boundingRect(of: element)
+                    if let element = board.elements[id] {
+                        let movable = element.node != nil || isNote(element) || element.boundary != nil
+                        let isInk = { if case .ink = element.content { return true }; return false }()
+                        if movable || isInk {
+                            originals[id] = SpatialIndex.boundingRect(of: element)
+                        }
                     }
                 }
                 gesture = .move(originals: originals, startWorld: viewport.toWorld(start))
@@ -2570,8 +2584,18 @@ public final class CanvasView: NSView {
             boundary.frame = frame
             element.content = .boundary(boundary)
             return true
-        case .ink, .edge:
-            return false // M3 handles ink transforms
+        case .ink(var ink):
+            // Ink has no frame; translate every point by the delta between its
+            // current bounding box and the dragged frame (B13).
+            guard let current = SpatialIndex.boundingRect(of: element) else { return false }
+            let dx = frame.x - current.x, dy = frame.y - current.y
+            ink.points = ink.points.map {
+                StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
+            }
+            element.content = .ink(ink)
+            return true
+        case .edge:
+            return false // routing follows endpoints; no frame move
         }
     }
 
