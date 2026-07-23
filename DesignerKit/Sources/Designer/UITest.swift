@@ -301,15 +301,17 @@ final class UITestDriver {
             expect(false, "no source block for connect")
             return
         }
-        // Create block B to the right of A.
+        // Create block B to the right of A. Double-click now makes a text box
+        // (v0.10 F5), so insert the block directly (the gesture under test here
+        // is the CONNECT drag below, not block creation).
         let bWorldCenter = Point(x: aFrame.maxX + 320, y: aFrame.midY)
         let bView = canvasView.viewport.toView(bWorldCenter)
-        click(at: bView, clickCount: 1)
-        click(at: bView, clickCount: 2)
-        pumpRunLoop()
-        key(53) // escape closes the label editor without a name
-        pumpRunLoop()
-        canvasView.commitLabelEditor()
+        let bElement = Element(
+            layerIDs: [document.board.layers[0].id], sortKey: document.board.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "B"),
+                                frame: Rect(x: bWorldCenter.x - 80, y: bWorldCenter.y - 40,
+                                            width: 160, height: 80))))
+        document.perform(.insertElement(bElement), actionName: "Add Block B")
         pumpRunLoop()
         expect(
             document.board.elements.values.filter { $0.node != nil }.count == 2,
@@ -399,21 +401,23 @@ final class UITestDriver {
             expect(document.board.isDangling(dangling), "surviving connector should be dangling")
         }
 
-        // Double-click near the loose endpoint: the new block snaps it in.
-        // (Clamped into the view — the moved block can sit near the edge.)
-        var target = bCenter
-        if let released = document.board.elements[edgeID]?.edge,
-           case .free(let point) = released.to {
-            target = canvasView.viewport.toView(Point(x: point.x - 60, y: point.y))
+        // Place a new block OVER the loose endpoint: any block placed through
+        // the canvas delegate runs the reattachment expansion, snapping a
+        // nearby dangling endpoint onto it. (Double-click now makes a text box,
+        // so we place the block through the same delegate path a real placement
+        // uses, rather than the old double-click gesture.)
+        var endWorld = canvasView.viewport.toWorld(bCenter)
+        if let released = document.board.elements[edgeID]?.edge, case .free(let point) = released.to {
+            endWorld = point
         }
-        target.x = min(max(target.x, 30), canvasView.bounds.width - 30)
-        target.y = min(max(target.y, 60), canvasView.bounds.height - 30)
-        click(at: target, clickCount: 1)
-        click(at: target, clickCount: 2)
-        pumpRunLoop()
-        key(53) // escape the label editor
-        pumpRunLoop()
-        canvasView.commitLabelEditor()
+        if let controller = window.contentViewController as? CanvasViewController {
+            let snapBlock = Element(
+                layerIDs: [document.board.layers[0].id], sortKey: document.board.topSortKey,
+                content: .node(Node(semantic: NodeSemantic(name: "snap"),
+                                    frame: Rect(x: endWorld.x - 60, y: endWorld.y - 40,
+                                                width: 120, height: 80))))
+            controller.canvasView(canvasView, perform: .insertElement(snapBlock), actionName: "Add Snap Block")
+        }
         pumpRunLoop()
 
         guard let snapped = document.board.elements[edgeID]?.edge else {
@@ -974,7 +978,8 @@ final class UITestDriver {
         expect(rect.node.style.opacity == 0.5, "pending opacity applied")
         expect(abs(rect.node.frame.width - 300) < 3 && abs(rect.node.frame.height - 160) < 3,
                "shape matches the dragged size (got \(rect.node.frame))")
-        expect(canvasView.tool == .select, "tool reverts to Select after drawing")
+        let stillArmed: Bool = { if case .shape = canvasView.tool { return true }; return false }()
+        expect(stillArmed, "shape tool STAYS armed after drawing (v0.10 B6)")
 
         // Aspect-locked circle: drag a non-square rect, get a square frame.
         canvasView.activateShapeTool(shape: .ellipse, lockAspect: true)
@@ -1039,8 +1044,11 @@ final class UITestDriver {
         canvasView.viewport = CanvasViewport(origin: Point(x: -20, y: 4900), scale: 13)
         pumpRunLoop()
 
-        // Create a block near the TOP of the view (double-click) — opens the
-        // label editor; a naive field would cover the toolbar.
+        // Double-click near the TOP of the view opens a text box's label editor
+        // (v0.10 F5). The regression this guards is POSITIONAL — the auto-opened
+        // field must not balloon over the toolbar band — so the load-bearing
+        // checks are minY/maxY/width; the height just must stay bounded (a text
+        // box editor scales with its box, so it's taller than a block's).
         let topPoint = CGPoint(x: canvasView.bounds.midX, y: 96)
         click(at: topPoint, clickCount: 1)
         click(at: topPoint, clickCount: 2)
@@ -1048,11 +1056,11 @@ final class UITestDriver {
 
         if let field = canvasView.labelEditorFrameForTesting {
             expect(field.width <= 341, "label editor width is clamped (got \(field.width))")
-            expect(field.height <= 42, "label editor height is clamped (got \(field.height))")
+            expect(field.height <= 160, "label editor height stays bounded (got \(field.height))")
             expect(field.minY >= 60, "label editor stays below the toolbar band (minY=\(field.minY))")
             expect(field.maxY <= canvasView.bounds.height + 1, "label editor stays in view")
         } else {
-            expect(false, "expected an open label editor after creating a block at high zoom")
+            expect(false, "expected an open label editor after double-click at high zoom")
         }
 
         // Commit the editor (click empty canvas), then the Layers panel must
@@ -1161,8 +1169,8 @@ final class UITestDriver {
         expect(controller.stylePanelModel.isVisible, "panel visible after drawing a shape")
         document.undoManager?.undo()
         pumpRunLoop()
-        expect(!controller.stylePanelModel.isVisible,
-               "undoing the fresh shape empties the selection, hiding the style panel")
+        expect(controller.stylePanelModel.isVisible,
+               "undoing the fresh shape KEEPS the panel (falls back to pending-shape mode, v0.8.1)")
 
         // (3) A web-copied SVG pastes as an image block.
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"60\"><rect width=\"80\" height=\"60\" fill=\"#4A90D9\"/></svg>"
