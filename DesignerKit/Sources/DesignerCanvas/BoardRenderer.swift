@@ -57,8 +57,25 @@ final class BoardRenderer {
     /// Collision registry for connector captions — call once before each
     /// full edge pass so labels placed earlier repel the ones after.
     private var captionPlacer = EdgeGeometry.CaptionPlacer()
-    func beginCaptionPass() {
-        captionPlacer = EdgeGeometry.CaptionPlacer()
+    /// Resolved world centers per edge, kept between frames so captions stay
+    /// pinned (and just scale) during a zoom instead of re-solving — and
+    /// jittering — every frame (B2). Re-solved only on a settled viewport.
+    private(set) var captionCenters: [ElementID: Point] = [:]
+    private var captionsResolve = true
+    /// `resolve == true` runs the collision-avoiding placement this pass and
+    /// updates `captionCenters`; `false` reuses the cached centers (used while
+    /// a zoom/animation is in flight).
+    func beginCaptionPass(resolve: Bool = true) {
+        captionsResolve = resolve
+        if resolve { captionPlacer = EdgeGeometry.CaptionPlacer() }
+    }
+
+    /// World-space caption pill size measured at scale 1 — stable across zoom,
+    /// so a placement solve doesn't shift as the font rounds at different zooms
+    /// (rendering still measures at the live zoom). B2.
+    private func worldCaptionPillSize(for edge: Edge) -> Size? {
+        guard let content = captionContent(for: edge, viewport: CanvasViewport(scale: 1)) else { return nil }
+        return Size(width: Double(content.pillSize.width), height: Double(content.pillSize.height))
     }
 
     /// Strokes a jittered two-pass version of `viewPoints` (already in view
@@ -552,7 +569,8 @@ final class BoardRenderer {
         isDangling: Bool = false,
         simplified: Bool = false,
         captionFraction: Double = 0.5,
-        captionObstacles: ((Rect) -> [Rect])? = nil
+        captionObstacles: ((Rect) -> [Rect])? = nil,
+        edgeID: ElementID? = nil
     ) {
         // Connector opacity: fade the whole edge (line, arrowheads, caption)
         // as one; the body has early returns, so wrap it here. Selection
@@ -565,14 +583,14 @@ final class BoardRenderer {
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
                             simplified: simplified, captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            captionObstacles: captionObstacles, edgeID: edgeID)
             context.endTransparencyLayer()
             context.restoreGState()
         } else {
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
                             simplified: simplified, captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            captionObstacles: captionObstacles, edgeID: edgeID)
         }
     }
 
@@ -585,7 +603,8 @@ final class BoardRenderer {
         isDangling: Bool,
         simplified: Bool,
         captionFraction: Double,
-        captionObstacles: ((Rect) -> [Rect])?
+        captionObstacles: ((Rect) -> [Rect])?,
+        edgeID: ElementID?
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
@@ -657,7 +676,19 @@ final class BoardRenderer {
         // the route and nudging perpendicular on dense boards.
         if viewport.scale >= Self.textVisibilityScale {
             var center = route.point(atFraction: captionFraction)
-            if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
+            if let edgeID {
+                // Settled: solve collision-avoided placement (scale-independent
+                // pill size) and cache it. In flight: reuse the cached world
+                // center so the caption just scales instead of jittering (B2).
+                if captionsResolve, let obstacles = captionObstacles, let pillWorld = worldCaptionPillSize(for: edge) {
+                    center = captionPlacer.place(
+                        preferred: captionFraction, route: route,
+                        pillSize: pillWorld, obstacles: obstacles)
+                    captionCenters[edgeID] = center
+                } else if let cached = captionCenters[edgeID] {
+                    center = cached
+                }
+            } else if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
                 center = captionPlacer.place(
                     preferred: captionFraction,
                     route: route,

@@ -41,6 +41,7 @@ public final class CanvasView: NSView {
                 return element.id
             })
             selection.formIntersection(Set(board.elements.keys))
+            captionsDirty = true // routes changed → caption layout must re-solve (B2)
             needsDisplay = true
             // Broken-link validity needs a filesystem scan — never do it inline
             // in the frame path; coalesce it to just after this change (F4).
@@ -153,12 +154,30 @@ public final class CanvasView: NSView {
             needsDisplay = true
             if viewport.scale != oldValue.scale {
                 viewportScaleChanged?(viewport.scale)
+                // Re-solve caption placement only AFTER the zoom settles (B2):
+                // debounce so a continuous pinch reuses cached centers.
+                scheduleCaptionSettle()
             }
         }
     }
 
     /// Fires when the zoom level changes (P1: the zoom HUD tracks it).
     public var viewportScaleChanged: ((Double) -> Void)?
+
+    /// True when connector caption placement needs re-solving (B2). Set on
+    /// board changes and ~100 ms after a zoom stops; cleared on the solve frame.
+    private var captionsDirty = true
+    private var captionSettleWork: DispatchWorkItem?
+
+    private func scheduleCaptionSettle() {
+        captionSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.captionsDirty = true
+            self?.needsDisplay = true
+        }
+        captionSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
+    }
 
     public private(set) var selection: Set<ElementID> = [] {
         didSet {
@@ -577,7 +596,12 @@ public final class CanvasView: NSView {
             // Connector captions dodge blocks AND each other; the spatial
             // index answers the pill-rect probes, the renderer's caption
             // pass tracks pill-vs-pill.
-            renderer.beginCaptionPass()
+            // Only re-solve caption placement on a SETTLED viewport (no camera
+            // animation, and the debounce after the last zoom fired) — otherwise
+            // reuse cached centers so captions don't jitter mid-zoom (B2).
+            let resolveCaptions = captionsDirty && cameraAnimation == nil
+            renderer.beginCaptionPass(resolve: resolveCaptions)
+            if resolveCaptions { captionsDirty = false }
             let captionObstacles: (Rect) -> [Rect] = { [spatialIndex, board] rect in
                 spatialIndex.query(rect).compactMap { board.elements[$0]?.node?.frame }
             }
@@ -592,7 +616,8 @@ public final class CanvasView: NSView {
                                 isSelected: selection.contains(element.id),
                                 isDangling: danglingEdgeIDs.contains(element.id),
                                 captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5,
-                                captionObstacles: captionObstacles
+                                captionObstacles: captionObstacles,
+                                edgeID: element.id
                             )
                         }
                     } else {
@@ -1111,6 +1136,7 @@ public final class CanvasView: NSView {
                 let done = animation.completion
                 self.cameraAnimation = nil
                 self.viewport = animation.target
+                self.captionsDirty = true // re-solve captions now the camera settled (B2)
                 done?()
             }
         }
