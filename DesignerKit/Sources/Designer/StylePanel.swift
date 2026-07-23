@@ -137,6 +137,7 @@ struct StylePanel: View {
         case .shape: return "next shape"
         case .selection: return "selected"
         case .connector: return "selected"
+        case .image: return "selected"
         }
     }
 }

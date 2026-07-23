@@ -86,18 +86,19 @@ public enum StrokeRecognizer {
         // sit near 0.785, triangles near 0.6, so 0.82 cleanly separates
         // "round" from "cornered". (Straight-edged shapes fail this and are
         // classified by corner count below.)
+        //
+        // NOTE: the v0.10 B5 attempt to rescue wobbly circles by also gating on
+        // the convex hull's circularity was reverted — on the jittered-shape
+        // corpus a wobbly rectangle's/diamond's hull rounds off into the same
+        // 0.80–0.88 band as a real circle (and corner counts overlap too), so
+        // no hull threshold separates them without swallowing the angular
+        // shapes (recognition rate fell to 56%). A robust "hand-drawn circle"
+        // rescue needs a different signal (e.g. turning-angle uniformity), not
+        // a circularity threshold; see docs.
         let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
         let area = polygonArea(points)
         let circularity = perimeter > 0 ? 4 * .pi * area / (perimeter * perimeter) : 0
-        // The convex hull is jitter-free, so its circularity is a far more
-        // reliable roundness measure for a wobbly hand-drawn circle, whose raw
-        // perimeter is inflated by tremor — that inflation pushed real circles
-        // below the gate and misfiled them as rectangles (B5).
-        let hullPerimeter = hull.count > 1
-            ? pathLength(hull) + distance(hull[hull.count - 1], hull[0]) : perimeter
-        let hullCircularity = hullPerimeter > 0
-            ? 4 * .pi * polygonArea(hull) / (hullPerimeter * hullPerimeter) : 0
-        if max(circularity, hullCircularity) > 0.80 {
+        if circularity > 0.82 {
             return .ellipse(bounds)
         }
 
@@ -130,11 +131,9 @@ public enum StrokeRecognizer {
             return toMidpoints < toBoxCorners ? .diamond(bounds) : .rectangle(bounds)
 
         default:
-            // Many small segments that never resolved into 3/4 clean corners
-            // is the signature of a round blob, not a box — prefer an ellipse
-            // when the (jitter-free) hull reads round-ish. Only genuinely
-            // cornered sloppy shapes fall through to a rectangle (B5).
-            return hullCircularity > 0.70 ? .ellipse(bounds) : .rectangle(bounds)
+            // Solid and cornered but not a clean triangle/quad (sloppy box,
+            // hexagon-ish): default to a rectangle block.
+            return .rectangle(bounds)
         }
     }
 
