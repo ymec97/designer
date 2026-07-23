@@ -526,15 +526,17 @@ final class BoardRenderer {
         isSelected: Bool, suppressText: Bool
     ) {
         let rect = viewport.toView(frame)
-        if isSelected {
-            let path = CGPath(rect: rect.insetBy(dx: -2, dy: -2), transform: nil)
-            strokeSelection(path: path, in: context, viewport: viewport)
-        }
+        // A text box shows NO outline/box — not even a selection ring (I3); the
+        // resize handles (drawn separately when selected) are the only chrome,
+        // so it reads as pure text you click into and type.
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !note.text.isEmpty {
             drawText(
                 note.text,
+                // The font tracks the box HEIGHT, so drag-resizing a text box
+                // scales the text itself (I2); S/M/L/XL still nudges via the
+                // multiplier, and clampedLabelFontSize shrinks to fit the width.
                 fontSize: clampedLabelFontSize(
-                    base: 12, multiplier: note.style.effectiveTextMultiplier,
+                    base: CGFloat(max(frame.height * 0.55, 6)), multiplier: note.style.effectiveTextMultiplier,
                     text: note.text, frameView: rect, viewport: viewport),
                 color: Palette.noteText,
                 in: rect,

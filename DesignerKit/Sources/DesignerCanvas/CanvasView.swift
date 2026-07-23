@@ -43,6 +43,7 @@ public final class CanvasView: NSView {
             })
             selection.formIntersection(Set(board.elements.keys))
             captionsDirty = true // routes changed → caption layout must re-solve (B2)
+            refreshLabelEditorFontIfEditing() // live text-box size while editing (I3c)
             needsDisplay = true
             // Broken-link validity needs a filesystem scan — never do it inline
             // in the frame path; coalesce it to just after this change (F4).
@@ -2722,6 +2723,35 @@ public final class CanvasView: NSView {
         context.restoreGState()
     }
 
+    /// The editor font for `element`. For a text box (`.note`) it tracks the box
+    /// HEIGHT (× textSize) so the field matches the on-canvas text and scales
+    /// with a resize (I2/I3); other elements use the fixed zoom-scaled size.
+    /// Clamped to keep the field legible and (at high zoom) from ballooning over
+    /// the toolbar.
+    private func labelEditorFont(for element: Element, frame: Rect) -> NSFont {
+        let raw: CGFloat
+        let cap: CGFloat
+        if isNote(element), case .note(let note) = element.content {
+            raw = CGFloat(max(frame.height * 0.55, 6))
+                * CGFloat(note.style.effectiveTextMultiplier) * CGFloat(viewport.scale)
+            cap = 120
+        } else {
+            raw = 13 * CGFloat(viewport.scale)
+            cap = 26
+        }
+        return .systemFont(ofSize: min(max(raw, 11), cap), weight: .medium)
+    }
+
+    /// Keep the live editor font in sync when the element being edited changes
+    /// size (text-size control or a resize during edit) so you SEE the text
+    /// change size while typing (I3c). Called from `board` didSet.
+    private func refreshLabelEditorFontIfEditing() {
+        guard let field = labelEditor, let id = editingElementID,
+              let element = board.elements[id],
+              let frame = SpatialIndex.boundingRect(of: element) else { return }
+        field.font = labelEditorFont(for: element, frame: frame)
+    }
+
     public func beginLabelEdit(for element: Element) {
         commitLabelEditor()
         guard let frame = SpatialIndex.boundingRect(of: element) else { return }
@@ -2729,16 +2759,17 @@ public final class CanvasView: NSView {
 
         let field = NSTextField(string: currentLabel(of: element))
         field.isBordered = false
-        field.drawsBackground = true
+        // A text box (`.note`) edits as pure text: no background box, no focus
+        // ring — just a caret you type into (I3). Nodes/boundaries keep the
+        // solid field background for legibility over their fill.
+        let isTextBox = isNote(element)
+        field.drawsBackground = !isTextBox
         field.backgroundColor = .textBackgroundColor
+        field.focusRingType = isTextBox ? .none : .default
         field.alignment = .center
-        // B1: the field scales WITH the zoomed node so the font stays legible
-        // — but CLAMPED: at high zoom an unbounded field ballooned to
-        // thousands of points and blanketed the toolbar, swallowing every
-        // click (Layers/Assistant appeared dead). Cap size and keep it below
-        // the toolbar band and inside the view.
-        let fontSize = min(max(13 * viewport.scale, 11), 26)
-        field.font = .systemFont(ofSize: fontSize, weight: .medium)
+        let font = labelEditorFont(for: element, frame: frame)
+        field.font = font
+        let fontSize = font.pointSize
         let fieldHeight = fontSize + 12
         let viewRect = viewport.toView(frame)
         let width = min(max(viewRect.width - 8, 40), 340)
