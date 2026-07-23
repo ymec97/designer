@@ -247,6 +247,9 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// armed, selection when styleable elements are selected — hidden
     /// otherwise.
     func refreshStylePanel() {
+        // Keep the canvas's "left panel showing" signal in sync on every exit
+        // so newly-created elements can auto-pan clear of it (B3).
+        defer { canvasView.leftPanelIsVisible = stylePanelModel.isVisible || inspectorModel.visible }
         if canvasView.isReadOnly {
             stylePanelModel.isVisible = false
             return

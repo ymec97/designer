@@ -230,6 +230,22 @@ public final class CanvasView: NSView {
     // the theme's node background), matching a double-clicked block. Pick the
     // "None" swatch for a hollow grouping-outline shape.
     public var pendingShapeStyle = Style()
+
+    /// Kept in sync by the controller: true when the left style/inspector panel
+    /// is showing, so newly-created elements can auto-pan clear of it (B3).
+    public var leftPanelIsVisible = false
+
+    /// If `frame`'s on-screen rect underlaps the left style-panel band while a
+    /// panel is showing, pan so it clears the band (view x-band ≈ 0…268:
+    /// leading 16 + width 236 + 16 gap). Pure view-state — no board mutation,
+    /// no undo. No-op when the panel is hidden or the element already clears it.
+    private func nudgeClearOfLeftPanel(_ frame: Rect) {
+        guard leftPanelIsVisible else { return }
+        let band: CGFloat = 268
+        let viewRect = viewport.toView(frame)
+        guard viewRect.minX < band else { return }
+        viewport.pan(viewDeltaX: band + 12 - viewRect.minX, viewDeltaY: 0)
+    }
     /// Style applied to NEW ink strokes (pencil settings in the style panel).
     public var pendingInkStyle = Style(strokeWidth: 2)
     /// The shape the shape tool returns to when re-activated via key/palette.
@@ -2019,6 +2035,7 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+        nudgeClearOfLeftPanel(frame)
     }
 
     // MARK: Keyboard
@@ -2427,6 +2444,7 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+        nudgeClearOfLeftPanel(frame)
     }
 
     /// Shape-tool commit: a node at EXACTLY the dragged frame, unlabeled
@@ -2449,6 +2467,7 @@ public final class CanvasView: NSView {
         )
         delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Shape")
         selection = [element.id]
+        nudgeClearOfLeftPanel(worldRect)
     }
 
     /// Shift (or a square/circle picker entry) constrains the drag to equal
