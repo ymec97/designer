@@ -1138,6 +1138,7 @@ final class UITestDriver {
     /// lands as an image block, connector selection styles through the
     /// panel's connector mode.
     private func step28StylePanelPolish() {
+        canvasView.tool = .select // start clean; this step arms the shape tool itself
         guard let controller = window.contentViewController as? CanvasViewController else {
             expect(false, "no controller for style-panel polish"); return
         }
@@ -1188,7 +1189,10 @@ final class UITestDriver {
         document.undoManager?.undo()
         pumpRunLoop()
 
-        // (4) Selecting a connector puts the panel in connector mode.
+        // (4) Selecting a connector puts the panel in connector mode. Back to
+        // the select tool first (the shape tool armed above stays sticky, B6,
+        // and you can only select an existing connector in select mode).
+        canvasView.tool = .select
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "cs-a"),
@@ -1268,6 +1272,7 @@ final class UITestDriver {
     /// (endpoint-spanning) bounding box — a band in the empty diagonal space
     /// a connector crosses used to grab it.
     private func step31RubberBandExcludesDistantConnector() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "rb-a"),
@@ -1280,7 +1285,9 @@ final class UITestDriver {
                                                to: .element(b.id, side: nil, offset: nil))))
         document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(edge)]),
                          actionName: "Rubber-band Graph")
-        canvasView.reveal(worldRect: Rect(x: -40, y: 6850, width: 720, height: 480))
+        // Direct viewport at 1× (not reveal, which unions with all accumulated
+        // content from earlier steps and zooms out, drifting these tiny nodes).
+        canvasView.viewport = CanvasViewport(origin: Point(x: -240, y: 6700), scale: 1)
         pumpRunLoop()
 
         func rubberBand(from w1: Point, to w2: Point) {
@@ -1322,6 +1329,7 @@ final class UITestDriver {
     /// slot (fixed side + offset) rather than the auto (nil) anchor, so it can
     /// be re-placed to de-clutter a busy attachment.
     private func step32EndpointSnapsToDiscreteSlot() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "slot-a"),
@@ -1375,6 +1383,7 @@ final class UITestDriver {
     /// I1: a no-fill (grouping) rectangle's BORDER selects + moves — it must
     /// NOT be hijacked into starting a connector, and no connector is created.
     private func step33NoFillRectBorderMovesNotConnect() {
+        canvasView.tool = .select // the shape tool stays armed after step25/28 (B6)
         let layer = document.board.layers[0].id
         let rectEl = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
             content: .node(Node(semantic: NodeSemantic(name: ""),
@@ -1415,6 +1424,7 @@ final class UITestDriver {
     /// I4: dragging a freehand DRAWING renders the stroke at the moved position
     /// mid-drag (not stuck at the origin with only the snap guides moving).
     private func step34InkDragShowsStrokeMoving() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         var pts: [StrokePoint] = []
         for i in 0...12 {
@@ -1473,6 +1483,7 @@ final class UITestDriver {
     /// I5: dragging a connector endpoint into the HOLLOW interior of a no-fill
     /// grouping rectangle must NOT snap onto that rect (it stays free).
     private func step35EndpointIgnoresNoFillGroupRect() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         func node(_ name: String, _ x: Double) -> Element {
             Element(layerIDs: [layer], sortKey: document.board.topSortKey,
@@ -1528,6 +1539,7 @@ final class UITestDriver {
         guard let controller = window.contentViewController as? CanvasViewController else {
             expect(false, "no controller for linked boards"); return
         }
+        canvasView.tool = .select // clear any sticky shape tool (B6)
 
         // A target board saved into the managed catalog folder.
         var target = Board(title: "UI-Test Linked Target")
