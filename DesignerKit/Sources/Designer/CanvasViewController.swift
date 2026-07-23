@@ -392,16 +392,15 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     }
 
     @objc func recordFlow(_ sender: Any?) {
-        guard canvasView.selection.count == 1, let source = canvasView.selection.first,
-              document.board.elements[source]?.node != nil else {
-            let alert = NSAlert()
-            alert.messageText = "Select a source block first"
-            alert.informativeText = "Click the block the traffic starts from, then Record Flow: you'll walk the journey by clicking each block it visits next."
-            alert.runModal()
-            return
-        }
         if !flowsModel.visible { toggleFlowsPanel(nil) }
-        canvasView.startFlowRecording(from: source)
+        if canvasView.selection.count == 1, let source = canvasView.selection.first,
+           document.board.elements[source]?.node != nil {
+            canvasView.startFlowRecording(from: source)
+        } else {
+            // No source selected: drop into the dimmed canvas and let the user
+            // click the starting block (F10), instead of blocking with an alert.
+            canvasView.beginFlowSourcePick()
+        }
         view.window?.makeFirstResponder(canvasView)
     }
 

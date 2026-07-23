@@ -80,24 +80,48 @@ public struct FlowRecorder {
     public func candidates(in board: Board) -> [Candidate] {
         let origins = reachedNodes
         let recorded = recordedEdges
+        // Which (edge, direction) pairs have already fired — a double-sided
+        // connector is tracked per-direction so it can be walked once each way.
+        let recordedDirected = Set(journal.map { DirectedKey(edge: $0.edge, from: $0.from, to: $0.to) })
+        func directedFree(_ edge: ElementID, _ from: ElementID, _ to: ElementID) -> Bool {
+            !recordedDirected.contains(DirectedKey(edge: edge, from: from, to: to))
+        }
         var result: [Candidate] = []
         for element in board.elementsInZOrder {
-            guard let edge = element.edge, !recorded.contains(element.id),
+            guard let edge = element.edge,
                   let a = edge.from.elementID, let b = edge.to.elementID,
                   board.elements[a]?.node != nil, board.elements[b]?.node != nil else { continue }
             switch edge.semantic.direction {
             case .forward:
-                if origins.contains(a) { result.append(.init(edge: element.id, from: a, to: b)) }
+                if !recorded.contains(element.id), origins.contains(a) {
+                    result.append(.init(edge: element.id, from: a, to: b))
+                }
             case .backward:
-                if origins.contains(b) { result.append(.init(edge: element.id, from: b, to: a)) }
+                if !recorded.contains(element.id), origins.contains(b) {
+                    result.append(.init(edge: element.id, from: b, to: a))
+                }
             case .both:
-                if origins.contains(a) { result.append(.init(edge: element.id, from: a, to: b)) }
-                else if origins.contains(b) { result.append(.init(edge: element.id, from: b, to: a)) }
+                // A double-sided connector can be walked once in EACH direction,
+                // so recording a back-and-forth (A→B→A over the same connector)
+                // works (F12) — but never the same direction twice, which would
+                // loop forever.
+                if origins.contains(a), directedFree(element.id, a, b) {
+                    result.append(.init(edge: element.id, from: a, to: b))
+                }
+                if origins.contains(b), directedFree(element.id, b, a) {
+                    result.append(.init(edge: element.id, from: b, to: a))
+                }
             default:
                 break // .none and unknown carry no flow
             }
         }
         return result
+    }
+
+    private struct DirectedKey: Hashable {
+        let edge: ElementID
+        let from: ElementID
+        let to: ElementID
     }
 
     /// The blocks that can be clicked next: targets of the current

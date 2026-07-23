@@ -616,6 +616,7 @@ public final class CanvasView: NSView {
         drawLinkBadges(in: context)
         drawProposalGhostOverlay(in: context)
         drawSimulationOverlay(in: context)
+        drawFlowSourcePickOverlay(in: context)
         drawFlowRecordingOverlay(in: context)
         drawInFlightGesture(in: context)
         drawTransientHint(in: context)
@@ -1110,16 +1111,40 @@ public final class CanvasView: NSView {
     /// chooser menu resolves into `recordFlowCandidate`.
     private var pendingFlowChoices: [FlowRecorder.Candidate] = []
 
+    /// True while we're waiting for the user to click the source block (F10):
+    /// Record with nothing selected drops straight into the dimmed recording
+    /// canvas and lets them pick the starting block, instead of an alert.
+    public private(set) var isPickingFlowSource = false
+
     @discardableResult
     public func startFlowRecording(from source: ElementID) -> Bool {
         guard board.elements[source]?.node != nil else { return false }
         stopSimulation()
         commitLabelEditor()
+        isPickingFlowSource = false
         flowRecorder = FlowRecorder(source: source)
         select([])
         flowRecordingChanged?(true, 0)
         needsDisplay = true
         return true
+    }
+
+    /// Enter the "pick a source block" step (F10): dim the canvas like a live
+    /// recording and wait for the first block click to become the source.
+    public func beginFlowSourcePick() {
+        stopSimulation()
+        commitLabelEditor()
+        select([])
+        isPickingFlowSource = true
+        flowRecordingChanged?(true, 0)
+        needsDisplay = true
+    }
+
+    public func cancelFlowSourcePick() {
+        guard isPickingFlowSource else { return }
+        isPickingFlowSource = false
+        flowRecordingChanged?(false, 0)
+        needsDisplay = true
     }
 
     public func cancelFlowRecording() {
@@ -1157,7 +1182,10 @@ public final class CanvasView: NSView {
             guard let element = board.elements[id] else { return false }
             return element.layerIDs.contains { !hidden.contains($0) }
         }
-        return visible(candidate.edge) && visible(candidate.to)
+        // Both the connector and the block it delivers to must be on a visible
+        // layer, and so must the origin — an element hidden by its layer must
+        // never appear as an advancement option, even across layers (F13).
+        return visible(candidate.from) && visible(candidate.edge) && visible(candidate.to)
     }
 
     /// A click while recording. The primary gesture is clicking the NEXT
@@ -1264,6 +1292,21 @@ public final class CanvasView: NSView {
     /// path glows in accent; the blocks you can click NEXT re-render normally
     /// with a dashed accent ring, their connectors drawn as usual — so the
     /// choice reads as "which block does the traffic visit next".
+    private func drawFlowSourcePickOverlay(in context: CGContext) {
+        guard isPickingFlowSource else { return }
+        renderer.drawSimulationScrim(bounds, in: context)
+        let hidden = Set(board.layers.filter { !$0.isVisible }.map(\.id))
+        // Lift every visible block above the scrim so the user can see what to
+        // click for the source.
+        for element in board.elementsInZOrder {
+            guard element.node != nil,
+                  element.layerIDs.contains(where: { !hidden.contains($0) }) else { continue }
+            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+        }
+        renderer.drawHintCaption("Click the block the traffic starts from",
+                                 at: CGPoint(x: bounds.midX, y: 40), in: context)
+    }
+
     private func drawFlowRecordingOverlay(in context: CGContext) {
         guard let recorder = flowRecorder else { return }
         let frames = board.frameProvider(overrides: transientFrames)
@@ -1445,6 +1488,15 @@ public final class CanvasView: NSView {
         // Simulation is a read-only mode; ignore edit gestures (pan/zoom still
         // work via scroll/pinch). The transport controls it.
         if isSimulating { return }
+        if isPickingFlowSource {
+            let world = viewport.toWorld(convert(event.locationInWindow, from: nil))
+            if let nodeID = board.elementsInZOrder.reversed().first(where: {
+                $0.node?.frame.contains(world) == true && isEditable(id: $0.id)
+            })?.id {
+                _ = startFlowRecording(from: nodeID) // clears the pick flag
+            }
+            return // clicks on empty canvas just wait for a valid block
+        }
         if isRecordingFlow {
             handleFlowRecordingClick(at: convert(event.locationInWindow, from: nil), event: event)
             return
@@ -1981,6 +2033,10 @@ public final class CanvasView: NSView {
         }
         if isSimulating, event.keyCode == 53 { // escape exits simulation
             stopSimulation()
+            return
+        }
+        if isPickingFlowSource, event.keyCode == 53 { // escape cancels source pick
+            cancelFlowSourcePick()
             return
         }
         if isRecordingFlow {
