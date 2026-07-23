@@ -1814,12 +1814,28 @@ public final class CanvasView: NSView {
             transientBend = (id, waypoints)
             needsDisplay = true
 
-        case .moveEndpoint(let id, let end, _):
+        case .moveEndpoint(let id, let end, let previousTarget):
             let world = viewport.toWorld(point)
             // Highlight the block the endpoint would attach to — anywhere on
             // the other end's block means "cancel", not a self-loop.
             let otherEnd = board.elements[id]?.edge.map { end == .from ? $0.to : $0.from }
-            let candidate = editableNode(at: point)?.id
+            // Fill-aware hit (like the new-connection drag): a no-fill grouping
+            // rectangle is hollow, so its big frame no longer magnetizes the
+            // endpoint — you snap to real blocks, not the group outline (I5).
+            let hit = editableElement(at: point)
+            var candidate: ElementID? = hit?.node != nil ? hit?.id : nil
+            // Hysteresis: if we've drifted just off the previously targeted
+            // SOLID block, keep it rather than thrashing to nothing/another as
+            // the cursor moves a little (I5). A fresh solid hit always wins.
+            if candidate == nil, let previousTarget,
+               let node = board.elements[previousTarget]?.node,
+               node.style.hasFill || node.style.image != nil {
+                let margin = 14 / viewport.scale
+                let f = node.frame
+                let expanded = Rect(x: f.x - margin, y: f.y - margin,
+                                    width: f.width + margin * 2, height: f.height + margin * 2)
+                if expanded.contains(world) { candidate = previousTarget }
+            }
             let targetID = candidate == otherEnd?.elementID ? nil : candidate
             // Over a block: snap to its nearest discrete anchor slot so the
             // endpoint jumps between fixed points. Off a block: dangle free.
