@@ -1920,7 +1920,34 @@ public final class CanvasView: NSView {
                 beginLabelEdit(for: hit)
             }
         } else {
-            createBlock(at: viewport.toWorld(point))
+            // Double-click on empty canvas creates a borderless text box, not
+            // a shape (F5). Shapes come from the shape tool / picker; ⌘B still
+            // adds a block.
+            insertTextNote(at: viewport.toWorld(point))
+        }
+    }
+
+    /// A borderless, background-less text box (a `.note`, which renders as pure
+    /// text) placed at `world`, immediately in label-edit. This is the default
+    /// double-click gesture on empty canvas (F5).
+    private func insertTextNote(at world: Point) {
+        let layerIDs = activeLayerIDs()
+        guard !layerIDs.isEmpty else { return }
+        let factor = creationScaleFactor()
+        let size = CGSize(width: 140 * factor, height: 40 * factor)
+        let frame = Rect(
+            x: world.x - Double(size.width) / 2, y: world.y - Double(size.height) / 2,
+            width: Double(size.width), height: Double(size.height)
+        )
+        let element = Element(
+            layerIDs: layerIDs,
+            sortKey: board.topSortKey,
+            content: .note(Note(text: "", frame: frame, style: Style(fill: Style.noFill)))
+        )
+        delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Text")
+        selection = [element.id]
+        if let inserted = board.elements[element.id] {
+            beginLabelEdit(for: inserted)
         }
     }
 
