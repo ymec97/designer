@@ -19,10 +19,23 @@ public enum TextSize: String, Codable, Sendable, CaseIterable {
         switch self {
         case .small:  return 0.8
         case .medium: return 1.0
-        case .large:  return 1.35
-        case .xl:     return 1.8
+        case .large:  return 1.7
+        case .xl:     return 2.8
         }
     }
+}
+
+/// Background pattern, orthogonal to the fill *color*: `solid` paints a flat
+/// fill, `stripes` paints diagonal hatching over it. nil == solid.
+/// String-backed so unknown future patterns round-trip.
+public enum FillPattern: String, Codable, Sendable, CaseIterable {
+    case solid, stripes
+}
+
+/// Outline style, orthogonal to stroke color/width: `solid` or `dashed`.
+/// nil == solid. String-backed so unknown future styles round-trip.
+public enum OutlineStyle: String, Codable, Sendable, CaseIterable {
+    case solid, dashed
 }
 
 public struct Style: Equatable, Sendable {
@@ -40,6 +53,10 @@ public struct Style: Equatable, Sendable {
     public var image: String?
     /// Presentational label size; nil == medium. See `TextSize`.
     public var textSize: TextSize?
+    /// Background pattern; nil == solid. See `FillPattern`.
+    public var fillPattern: FillPattern?
+    /// Outline style; nil == solid. See `OutlineStyle`.
+    public var outlineStyle: OutlineStyle?
     public var extra: [String: JSONValue]
 
     public init(
@@ -49,6 +66,8 @@ public struct Style: Equatable, Sendable {
         opacity: Double? = nil,
         image: String? = nil,
         textSize: TextSize? = nil,
+        fillPattern: FillPattern? = nil,
+        outlineStyle: OutlineStyle? = nil,
         extra: [String: JSONValue] = [:]
     ) {
         self.fill = fill
@@ -57,6 +76,8 @@ public struct Style: Equatable, Sendable {
         self.opacity = opacity
         self.image = image
         self.textSize = textSize
+        self.fillPattern = fillPattern
+        self.outlineStyle = outlineStyle
         self.extra = extra
     }
 
@@ -66,11 +87,15 @@ public struct Style: Equatable, Sendable {
     public var effectiveOpacity: Double { min(max(opacity ?? 1, 0), 1) }
     /// Label font multiplier (medium when unset).
     public var effectiveTextMultiplier: Double { (textSize ?? .medium).multiplier }
+    /// True when the background should be hatched with diagonal stripes.
+    public var isStriped: Bool { fillPattern == .stripes }
+    /// True when the outline should be dashed.
+    public var isDashed: Bool { outlineStyle == .dashed }
 }
 
 extension Style: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case fill, stroke, strokeWidth, opacity, image, textSize
+        case fill, stroke, strokeWidth, opacity, image, textSize, fillPattern, outlineStyle
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +106,12 @@ extension Style: Codable {
         opacity = try container.decodeIfPresent(Double.self, forKey: .opacity)
         image = try container.decodeIfPresent(String.self, forKey: .image)
         textSize = try container.decodeIfPresent(TextSize.self, forKey: .textSize)
+        // Lenient: an unknown future pattern/style name reads as nil (the
+        // default) rather than failing the whole board's decode.
+        fillPattern = try container.decodeIfPresent(String.self, forKey: .fillPattern)
+            .flatMap(FillPattern.init(rawValue:))
+        outlineStyle = try container.decodeIfPresent(String.self, forKey: .outlineStyle)
+            .flatMap(OutlineStyle.init(rawValue:))
         extra = try decoder.unknownFields(excluding: CodingKeys.knownKeys)
     }
 
@@ -92,6 +123,13 @@ extension Style: Codable {
         try container.encodeIfPresent(opacity, forKey: .opacity)
         try container.encodeIfPresent(image, forKey: .image)
         try container.encodeIfPresent(textSize, forKey: .textSize)
+        // Omit when default so documents stay small and old boards migrate free.
+        if fillPattern != nil, fillPattern != .solid {
+            try container.encode(fillPattern, forKey: .fillPattern)
+        }
+        if outlineStyle != nil, outlineStyle != .solid {
+            try container.encode(outlineStyle, forKey: .outlineStyle)
+        }
         try encoder.encodeUnknownFields(extra)
     }
 }

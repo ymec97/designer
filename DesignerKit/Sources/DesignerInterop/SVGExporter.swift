@@ -84,17 +84,21 @@ public enum SVGExporter {
 
     private static func svgNode(_ node: Node, palette: Palette) -> String {
         let f = node.frame
+        // Dashed outline (precedent: the boundary rect). Stripe fills aren't
+        // exported to SVG yet — they render on canvas and in PNG (via the
+        // renderer); the SVG keeps a solid fill.
+        let dash = node.style.isDashed ? " stroke-dasharray=\"6 4\"" : ""
         let shapeSVG: String
         switch node.shape {
         case .ellipse:
-            shapeSVG = "<ellipse cx=\"\(fmt(f.midX))\" cy=\"\(fmt(f.midY))\" rx=\"\(fmt(f.width / 2))\" ry=\"\(fmt(f.height / 2))\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"/>"
+            shapeSVG = "<ellipse cx=\"\(fmt(f.midX))\" cy=\"\(fmt(f.midY))\" rx=\"\(fmt(f.width / 2))\" ry=\"\(fmt(f.height / 2))\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"\(dash)/>"
         case .diamond:
             let points = "\(fmt(f.midX)),\(fmt(f.y)) \(fmt(f.maxX)),\(fmt(f.midY)) \(fmt(f.midX)),\(fmt(f.maxY)) \(fmt(f.x)),\(fmt(f.midY))"
-            shapeSVG = "<polygon points=\"\(points)\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"/>"
+            shapeSVG = "<polygon points=\"\(points)\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"\(dash)/>"
         case .triangle:
-            shapeSVG = "<polygon points=\"\(trianglePoints(f, node.orientation))\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"/>"
+            shapeSVG = "<polygon points=\"\(trianglePoints(f, node.orientation))\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"\(dash)/>"
         default:
-            shapeSVG = "<rect x=\"\(fmt(f.x))\" y=\"\(fmt(f.y))\" width=\"\(fmt(f.width))\" height=\"\(fmt(f.height))\" rx=\"8\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"/>"
+            shapeSVG = "<rect x=\"\(fmt(f.x))\" y=\"\(fmt(f.y))\" width=\"\(fmt(f.width))\" height=\"\(fmt(f.height))\" rx=\"8\" fill=\"\(fill(node, palette))\" stroke=\"\(palette.nodeStroke)\" stroke-width=\"1.5\"\(dash)/>"
         }
         let label = node.semantic.name.isEmpty ? "" : centeredText(
             node.semantic.name, x: f.midX, y: f.midY, size: 13, weight: "500", color: palette.text

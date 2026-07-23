@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.11.0 — 2026-07-24
+
+Flow Studio, striped/dashed styling, and a broad UX-quality pass.
+
+Flow compositions (Flow Studio)
+- Record several flows, then organize them into a hierarchy that plays some
+  groups **in sequence** and some **at the same time**. The Flows panel gains a
+  Compositions section: create a serial or parallel composition, nest groups,
+  add/reorder flows, flip a group between series↔parallel with one badge, and
+  play the whole thing with its own speed. Each flow keeps its own packet color
+  during parallel playback.
+
+Styling
+- **Striped (diagonal-hatch) fills** and **dashed outlines** for blocks/shapes,
+  in the Style panel and on the agent wire. Dashes stay legible in dark mode;
+  SVG export carries dashed outlines.
+- **Text sizes** are more differentiated (L and XL are meaningfully larger and
+  wrap instead of shrinking to fit), and connectors get their own text-size
+  control (the label sizes; property badges scale with it).
+
+Connectors
+- A connector shows only its **label** by default; **selecting** it (or a
+  **packet flowing through** it during a flow) expands it to every property
+  field, placed collision-avoided, with a ring so it reads as active.
+
+Interaction & rendering fixes
+- Node labels no longer get clipped at the bottom when zoomed out.
+- Red alignment guides now also appear when **resizing** a node, not just moving.
+- A large fresh-eyes UX review fixed connector-caption placement/contrast,
+  dashed-outline contrast, and other polish items.
+- Test integrity: the `--ui-test` end-to-end suite (35 real mouse/keyboard
+  scenarios) is green again after repairing stale assertions left by the
+  double-click→text-box and sticky-shape-tool changes.
+
 ## v0.10.0 — 2026-07-23
 
 Large feedback batch from a working session on a real HLD board: canvas

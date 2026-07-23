@@ -18,6 +18,9 @@ public enum BoardOperation: Equatable, Sendable {
     case insertFlow(Flow, at: Int)
     case removeFlow(FlowID)
     case replaceFlow(Flow)
+    case insertComposition(FlowComposition, at: Int)
+    case removeComposition(FlowCompositionID)
+    case replaceComposition(FlowComposition)
     case insertGroup(Group)
     case removeGroup(GroupID)
     case replaceGroup(Group)
@@ -55,6 +58,9 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
     case flowAlreadyExists(FlowID)
     case flowNotFound(FlowID)
     case flowIndexOutOfRange(Int)
+    case compositionAlreadyExists(FlowCompositionID)
+    case compositionNotFound(FlowCompositionID)
+    case compositionIndexOutOfRange(Int)
     case groupAlreadyExists(GroupID)
     case groupNotFound(GroupID)
 
@@ -71,6 +77,9 @@ public enum BoardOperationError: Error, LocalizedError, Equatable {
         case .flowAlreadyExists(let id): return "A flow with id \(id) already exists."
         case .flowNotFound(let id): return "No flow with id \(id)."
         case .flowIndexOutOfRange(let index): return "Flow index \(index) is out of range."
+        case .compositionAlreadyExists(let id): return "A composition with id \(id) already exists."
+        case .compositionNotFound(let id): return "No composition with id \(id)."
+        case .compositionIndexOutOfRange(let index): return "Composition index \(index) is out of range."
         case .groupAlreadyExists(let id): return "A group with id \(id) already exists."
         case .groupNotFound(let id): return "No group with id \(id)."
         }
@@ -176,6 +185,31 @@ extension Board {
             flows[index] = flow
             return .replaceFlow(old)
 
+        case .insertComposition(let composition, let index):
+            guard !compositions.contains(where: { $0.id == composition.id }) else {
+                throw BoardOperationError.compositionAlreadyExists(composition.id)
+            }
+            guard (0...compositions.count).contains(index) else {
+                throw BoardOperationError.compositionIndexOutOfRange(index)
+            }
+            compositions.insert(composition, at: index)
+            return .removeComposition(composition.id)
+
+        case .removeComposition(let id):
+            guard let index = compositions.firstIndex(where: { $0.id == id }) else {
+                throw BoardOperationError.compositionNotFound(id)
+            }
+            let removed = compositions.remove(at: index)
+            return .insertComposition(removed, at: index)
+
+        case .replaceComposition(let composition):
+            guard let index = compositions.firstIndex(where: { $0.id == composition.id }) else {
+                throw BoardOperationError.compositionNotFound(composition.id)
+            }
+            let old = compositions[index]
+            compositions[index] = composition
+            return .replaceComposition(old)
+
         case .insertGroup(let group):
             guard !groups.contains(where: { $0.id == group.id }) else {
                 throw BoardOperationError.groupAlreadyExists(group.id)
@@ -216,6 +250,7 @@ extension Board {
             elements = replacement.elements
             groups = replacement.groups
             flows = replacement.flows
+            compositions = replacement.compositions
             extra = replacement.extra
             return .replaceBoard(previous)
 

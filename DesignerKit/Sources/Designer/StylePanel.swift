@@ -26,8 +26,9 @@ final class StylePanelModel: ObservableObject {
         /// Fill applies to blocks only — pencil strokes and connectors are
         /// lines, images paint their own pixels.
         var showsFill: Bool { self == .shape || self == .selection }
-        /// Text size applies to anything that renders a label.
-        var showsTextSize: Bool { self == .selection || self == .shape || self == .image }
+        /// Text size applies to anything that renders a label — including
+        /// connectors (sizes the label; property badges scale with it).
+        var showsTextSize: Bool { self == .selection || self == .shape || self == .image || self == .connector }
     }
 
     @Published var isVisible = false
@@ -38,6 +39,10 @@ final class StylePanelModel: ObservableObject {
     @Published var strokeWidth: Double?
     @Published var opacity: Double = 1
     @Published var textSize: TextSize = .medium
+    /// Diagonal-stripe background (blocks/shapes only).
+    @Published var striped = false
+    /// Dashed outline (blocks/shapes only).
+    @Published var dashed = false
     // Z-order clarity (F8): the selection's layer + its position among
     // layer-sharing peers, kept in sync by the controller.
     @Published var layerChipText: String?
@@ -52,7 +57,9 @@ final class StylePanelModel: ObservableObject {
     var style: Style {
         Style(fill: fill, stroke: stroke, strokeWidth: strokeWidth,
               opacity: opacity >= 0.999 ? nil : opacity,
-              textSize: textSize == .medium ? nil : textSize)
+              textSize: textSize == .medium ? nil : textSize,
+              fillPattern: striped ? .stripes : nil,
+              outlineStyle: dashed ? .dashed : nil)
     }
 
     func seed(from style: Style, mode: Mode) {
@@ -63,6 +70,8 @@ final class StylePanelModel: ObservableObject {
         strokeWidth = style.strokeWidth
         opacity = style.effectiveOpacity
         textSize = style.textSize ?? .medium
+        striped = style.isStriped
+        dashed = style.isDashed
         isSeeding = false
     }
 }
@@ -251,6 +260,19 @@ struct StyleControls: View {
                 }
             }
 
+            if model.mode.showsFill {
+                HStack(spacing: 10) {
+                    Toggle(isOn: Binding(get: { model.striped }, set: { model.striped = $0; emit() })) {
+                        Text("Stripes").font(.system(size: 10))
+                    }
+                    Toggle(isOn: Binding(get: { model.dashed }, set: { model.dashed = $0; emit() })) {
+                        Text("Dashed").font(.system(size: 10))
+                    }
+                }
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+            }
+
             if model.mode == .selection || model.mode == .connector || model.mode == .image {
                 VStack(alignment: .leading, spacing: 5) {
                     // Z-order clarity (F8): which layer, and where in the stack
@@ -305,6 +327,8 @@ struct StyleControls: View {
                     model.strokeWidth = nil
                     model.opacity = 1
                     model.textSize = .medium
+                    model.striped = false
+                    model.dashed = false
                     emit()
                 } label: {
                     Label("Remove formatting", systemImage: "paintbrush.slash")

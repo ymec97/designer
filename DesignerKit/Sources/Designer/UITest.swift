@@ -164,12 +164,29 @@ final class UITestDriver {
 
     private func step1CreateBlockByDoubleClick() {
         let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        // Double-click on empty canvas creates a borderless TEXT BOX (v0.10 F5),
+        // not a block. Verify that, then clear it and add a real block via the
+        // ⌘B path (which the block-centric steps 2–9 depend on).
         click(at: center, clickCount: 1)
         click(at: center, clickCount: 2)
         pumpRunLoop()
+        let notes = document.board.elements.values.filter {
+            if case .note = $0.content { return true }; return false
+        }
+        expect(notes.count == 1, "double-click creates 1 text box, board has \(notes.count)")
+        expect(canvasView.selection.count == 1, "new text box should be selected")
 
+        // End label editing and remove the text box so the board starts clean.
+        window.makeFirstResponder(canvasView)
+        for note in notes { document.perform(.removeElement(note.id), actionName: "Clear Test Note") }
+        pumpRunLoop()
+
+        // Now the block the rest of the flow uses (⌘B → adds a block and opens
+        // its label editor for step 2).
+        canvasView.addBlock(nil)
+        pumpRunLoop()
         let nodes = document.board.elements.values.filter { $0.node != nil }
-        expect(nodes.count == 1, "double-click should create 1 block, board has \(nodes.count)")
+        expect(nodes.count == 1, "adding a block yields 1 block, board has \(nodes.count)")
         expect(canvasView.selection.count == 1, "new block should be selected")
     }
 
@@ -284,15 +301,17 @@ final class UITestDriver {
             expect(false, "no source block for connect")
             return
         }
-        // Create block B to the right of A.
+        // Create block B to the right of A. Double-click now makes a text box
+        // (v0.10 F5), so insert the block directly (the gesture under test here
+        // is the CONNECT drag below, not block creation).
         let bWorldCenter = Point(x: aFrame.maxX + 320, y: aFrame.midY)
         let bView = canvasView.viewport.toView(bWorldCenter)
-        click(at: bView, clickCount: 1)
-        click(at: bView, clickCount: 2)
-        pumpRunLoop()
-        key(53) // escape closes the label editor without a name
-        pumpRunLoop()
-        canvasView.commitLabelEditor()
+        let bElement = Element(
+            layerIDs: [document.board.layers[0].id], sortKey: document.board.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: "B"),
+                                frame: Rect(x: bWorldCenter.x - 80, y: bWorldCenter.y - 40,
+                                            width: 160, height: 80))))
+        document.perform(.insertElement(bElement), actionName: "Add Block B")
         pumpRunLoop()
         expect(
             document.board.elements.values.filter { $0.node != nil }.count == 2,
@@ -382,21 +401,23 @@ final class UITestDriver {
             expect(document.board.isDangling(dangling), "surviving connector should be dangling")
         }
 
-        // Double-click near the loose endpoint: the new block snaps it in.
-        // (Clamped into the view — the moved block can sit near the edge.)
-        var target = bCenter
-        if let released = document.board.elements[edgeID]?.edge,
-           case .free(let point) = released.to {
-            target = canvasView.viewport.toView(Point(x: point.x - 60, y: point.y))
+        // Place a new block OVER the loose endpoint: any block placed through
+        // the canvas delegate runs the reattachment expansion, snapping a
+        // nearby dangling endpoint onto it. (Double-click now makes a text box,
+        // so we place the block through the same delegate path a real placement
+        // uses, rather than the old double-click gesture.)
+        var endWorld = canvasView.viewport.toWorld(bCenter)
+        if let released = document.board.elements[edgeID]?.edge, case .free(let point) = released.to {
+            endWorld = point
         }
-        target.x = min(max(target.x, 30), canvasView.bounds.width - 30)
-        target.y = min(max(target.y, 60), canvasView.bounds.height - 30)
-        click(at: target, clickCount: 1)
-        click(at: target, clickCount: 2)
-        pumpRunLoop()
-        key(53) // escape the label editor
-        pumpRunLoop()
-        canvasView.commitLabelEditor()
+        if let controller = window.contentViewController as? CanvasViewController {
+            let snapBlock = Element(
+                layerIDs: [document.board.layers[0].id], sortKey: document.board.topSortKey,
+                content: .node(Node(semantic: NodeSemantic(name: "snap"),
+                                    frame: Rect(x: endWorld.x - 60, y: endWorld.y - 40,
+                                                width: 120, height: 80))))
+            controller.canvasView(canvasView, perform: .insertElement(snapBlock), actionName: "Add Snap Block")
+        }
         pumpRunLoop()
 
         guard let snapped = document.board.elements[edgeID]?.edge else {
@@ -747,9 +768,15 @@ final class UITestDriver {
         let farView = canvasView.viewport.toView(bentRoute.point(atFraction: 0.78))
         drag(from: farView, to: CGPoint(x: farView.x + 10, y: farView.y + 70))
         expect(currentWaypoints().count == 2, "grabbing a segment grows a second joint")
+        // A broken bend step must FAIL this one step, not trap the whole
+        // battery on an out-of-range joint subscript.
+        guard currentWaypoints().count == 2 else {
+            expect(false, "bend produced \(currentWaypoints().count) joints, expected 2 — skipping joint sub-steps")
+            return
+        }
 
         // Move the FIRST joint on its own — the other joint must not move.
-        let secondBefore = currentWaypoints().count == 2 ? currentWaypoints()[1] : Point.zero
+        let secondBefore = currentWaypoints()[1]
         canvasView.select([edgeElement.id])
         let firstView = canvasView.viewport.toView(currentWaypoints()[0])
         drag(from: firstView, to: CGPoint(x: firstView.x - 24, y: firstView.y - 24))
@@ -760,6 +787,10 @@ final class UITestDriver {
         canvasView.select([edgeElement.id])
         guard let multiRoute = route() else { expect(false, "no multi route"); return }
         let joints = currentWaypoints()
+        guard joints.count == 2 else {
+            expect(false, "expected 2 joints before removal, got \(joints.count) — skipping")
+            return
+        }
         let neighborMid = Point(x: (joints[0].x + multiRoute.end.x) / 2,
                                 y: (joints[0].y + multiRoute.end.y) / 2)
         drag(from: canvasView.viewport.toView(joints[1]),
@@ -768,7 +799,10 @@ final class UITestDriver {
 
         // Straighten: drag the remaining joint back onto the straight line.
         canvasView.select([edgeElement.id])
-        let bendView = canvasView.viewport.toView(currentWaypoints()[0])
+        guard let remaining = currentWaypoints().first else {
+            expect(false, "no joint left to straighten — skipping"); return
+        }
+        let bendView = canvasView.viewport.toView(remaining)
         drag(from: bendView, to: midView)
         expect(currentWaypoints().isEmpty, "dropping on the line should straighten")
 
@@ -944,7 +978,8 @@ final class UITestDriver {
         expect(rect.node.style.opacity == 0.5, "pending opacity applied")
         expect(abs(rect.node.frame.width - 300) < 3 && abs(rect.node.frame.height - 160) < 3,
                "shape matches the dragged size (got \(rect.node.frame))")
-        expect(canvasView.tool == .select, "tool reverts to Select after drawing")
+        let stillArmed: Bool = { if case .shape = canvasView.tool { return true }; return false }()
+        expect(stillArmed, "shape tool STAYS armed after drawing (v0.10 B6)")
 
         // Aspect-locked circle: drag a non-square rect, get a square frame.
         canvasView.activateShapeTool(shape: .ellipse, lockAspect: true)
@@ -1009,8 +1044,11 @@ final class UITestDriver {
         canvasView.viewport = CanvasViewport(origin: Point(x: -20, y: 4900), scale: 13)
         pumpRunLoop()
 
-        // Create a block near the TOP of the view (double-click) — opens the
-        // label editor; a naive field would cover the toolbar.
+        // Double-click near the TOP of the view opens a text box's label editor
+        // (v0.10 F5). The regression this guards is POSITIONAL — the auto-opened
+        // field must not balloon over the toolbar band — so the load-bearing
+        // checks are minY/maxY/width; the height just must stay bounded (a text
+        // box editor scales with its box, so it's taller than a block's).
         let topPoint = CGPoint(x: canvasView.bounds.midX, y: 96)
         click(at: topPoint, clickCount: 1)
         click(at: topPoint, clickCount: 2)
@@ -1018,11 +1056,11 @@ final class UITestDriver {
 
         if let field = canvasView.labelEditorFrameForTesting {
             expect(field.width <= 341, "label editor width is clamped (got \(field.width))")
-            expect(field.height <= 42, "label editor height is clamped (got \(field.height))")
+            expect(field.height <= 160, "label editor height stays bounded (got \(field.height))")
             expect(field.minY >= 60, "label editor stays below the toolbar band (minY=\(field.minY))")
             expect(field.maxY <= canvasView.bounds.height + 1, "label editor stays in view")
         } else {
-            expect(false, "expected an open label editor after creating a block at high zoom")
+            expect(false, "expected an open label editor after double-click at high zoom")
         }
 
         // Commit the editor (click empty canvas), then the Layers panel must
@@ -1100,6 +1138,7 @@ final class UITestDriver {
     /// lands as an image block, connector selection styles through the
     /// panel's connector mode.
     private func step28StylePanelPolish() {
+        canvasView.tool = .select // start clean; this step arms the shape tool itself
         guard let controller = window.contentViewController as? CanvasViewController else {
             expect(false, "no controller for style-panel polish"); return
         }
@@ -1131,8 +1170,8 @@ final class UITestDriver {
         expect(controller.stylePanelModel.isVisible, "panel visible after drawing a shape")
         document.undoManager?.undo()
         pumpRunLoop()
-        expect(!controller.stylePanelModel.isVisible,
-               "undoing the fresh shape empties the selection, hiding the style panel")
+        expect(controller.stylePanelModel.isVisible,
+               "undoing the fresh shape KEEPS the panel (falls back to pending-shape mode, v0.8.1)")
 
         // (3) A web-copied SVG pastes as an image block.
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"60\"><rect width=\"80\" height=\"60\" fill=\"#4A90D9\"/></svg>"
@@ -1150,7 +1189,10 @@ final class UITestDriver {
         document.undoManager?.undo()
         pumpRunLoop()
 
-        // (4) Selecting a connector puts the panel in connector mode.
+        // (4) Selecting a connector puts the panel in connector mode. Back to
+        // the select tool first (the shape tool armed above stays sticky, B6,
+        // and you can only select an existing connector in select mode).
+        canvasView.tool = .select
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "cs-a"),
@@ -1230,6 +1272,7 @@ final class UITestDriver {
     /// (endpoint-spanning) bounding box — a band in the empty diagonal space
     /// a connector crosses used to grab it.
     private func step31RubberBandExcludesDistantConnector() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "rb-a"),
@@ -1242,7 +1285,9 @@ final class UITestDriver {
                                                to: .element(b.id, side: nil, offset: nil))))
         document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(edge)]),
                          actionName: "Rubber-band Graph")
-        canvasView.reveal(worldRect: Rect(x: -40, y: 6850, width: 720, height: 480))
+        // Direct viewport at 1× (not reveal, which unions with all accumulated
+        // content from earlier steps and zooms out, drifting these tiny nodes).
+        canvasView.viewport = CanvasViewport(origin: Point(x: -240, y: 6700), scale: 1)
         pumpRunLoop()
 
         func rubberBand(from w1: Point, to w2: Point) {
@@ -1284,6 +1329,7 @@ final class UITestDriver {
     /// slot (fixed side + offset) rather than the auto (nil) anchor, so it can
     /// be re-placed to de-clutter a busy attachment.
     private func step32EndpointSnapsToDiscreteSlot() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
                         content: .node(Node(semantic: NodeSemantic(name: "slot-a"),
@@ -1337,6 +1383,7 @@ final class UITestDriver {
     /// I1: a no-fill (grouping) rectangle's BORDER selects + moves — it must
     /// NOT be hijacked into starting a connector, and no connector is created.
     private func step33NoFillRectBorderMovesNotConnect() {
+        canvasView.tool = .select // the shape tool stays armed after step25/28 (B6)
         let layer = document.board.layers[0].id
         let rectEl = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
             content: .node(Node(semantic: NodeSemantic(name: ""),
@@ -1377,6 +1424,7 @@ final class UITestDriver {
     /// I4: dragging a freehand DRAWING renders the stroke at the moved position
     /// mid-drag (not stuck at the origin with only the snap guides moving).
     private func step34InkDragShowsStrokeMoving() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         var pts: [StrokePoint] = []
         for i in 0...12 {
@@ -1435,6 +1483,7 @@ final class UITestDriver {
     /// I5: dragging a connector endpoint into the HOLLOW interior of a no-fill
     /// grouping rectangle must NOT snap onto that rect (it stays free).
     private func step35EndpointIgnoresNoFillGroupRect() {
+        canvasView.tool = .select // clear any sticky shape tool (B6)
         let layer = document.board.layers[0].id
         func node(_ name: String, _ x: Double) -> Element {
             Element(layerIDs: [layer], sortKey: document.board.topSortKey,
@@ -1490,6 +1539,7 @@ final class UITestDriver {
         guard let controller = window.contentViewController as? CanvasViewController else {
             expect(false, "no controller for linked boards"); return
         }
+        canvasView.tool = .select // clear any sticky shape tool (B6)
 
         // A target board saved into the managed catalog folder.
         var target = Board(title: "UI-Test Linked Target")

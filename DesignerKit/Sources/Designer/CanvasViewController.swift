@@ -439,6 +439,60 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             flowsModel.focusedFlowID = nil
             canvasView.emphasizedElements = nil
         }
+
+        let flowByID = Dictionary(board.flows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        flowsModel.compositions = board.compositions.map { comp in
+            CompositionRowInfo(id: comp.id, name: comp.name, mode: comp.mode,
+                               stale: comp.isStale(in: board),
+                               rows: Self.flatten(comp.children, board: board, flowByID: flowByID))
+        }
+        if let playing = flowsModel.playingCompositionID,
+           !board.compositions.contains(where: { $0.id == playing }) {
+            flowsModel.playingCompositionID = nil
+        }
+    }
+
+    /// Depth-first flatten of a composition tree into indented panel rows.
+    private static func flatten(
+        _ children: [FlowComposition.Child], board: Board,
+        flowByID: [FlowID: Flow], depth: Int = 0, prefix: [Int] = []
+    ) -> [CompositionChildRow] {
+        var rows: [CompositionChildRow] = []
+        for (index, child) in children.enumerated() {
+            let path = prefix + [index]
+            let rowID = path.map(String.init).joined(separator: "/")
+            switch child {
+            case .flow(let id):
+                let flow = flowByID[id]
+                rows.append(CompositionChildRow(
+                    id: rowID, path: path, depth: depth,
+                    kind: .flow(name: flow?.name ?? "· missing flow",
+                                colorIndex: flow?.colorIndex ?? 0,
+                                stale: flow.map { $0.isStale(in: board) } ?? true)))
+            case .group(let mode, let nested):
+                rows.append(CompositionChildRow(id: rowID, path: path, depth: depth, kind: .group(mode: mode)))
+                rows.append(contentsOf: flatten(nested, board: board, flowByID: flowByID, depth: depth + 1, prefix: path))
+            }
+        }
+        return rows
+    }
+
+    /// Load, mutate, and re-persist a composition as one undo step.
+    private func editComposition(_ id: FlowCompositionID, _ actionName: String, _ mutate: (inout FlowComposition) -> Void) {
+        guard var comp = document.board.compositions.first(where: { $0.id == id }) else { return }
+        mutate(&comp)
+        document.perform(.replaceComposition(comp), actionName: actionName)
+    }
+
+    private func playComposition(_ id: FlowCompositionID) {
+        if flowsModel.playingCompositionID == id {
+            canvasView.stopSimulation()
+            return
+        }
+        guard let comp = document.board.compositions.first(where: { $0.id == id }) else { return }
+        canvasView.startCompositionPlayback(comp)
+        canvasView.simulationSpeed = Self.flowBaseSpeed * (flowsModel.compositionSpeeds[id] ?? 1)
+        view.window?.makeFirstResponder(canvasView)
     }
 
     @objc func toggleFlowsPanel(_ sender: Any?) {
@@ -904,7 +958,53 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                     if self.flowsModel.playingFlowID == id {
                         self.canvasView.simulationSpeed = Self.flowBaseSpeed * next
                     }
-                }
+                },
+                createComposition: { [weak self] mode in
+                    guard let self else { return }
+                    let n = self.document.board.compositions.count + 1
+                    let comp = FlowComposition(name: "Composition \(n)", mode: mode)
+                    self.document.perform(.insertComposition(comp, at: self.document.board.compositions.count),
+                                          actionName: "New Composition")
+                    self.flowsModel.expandedCompositions.insert(comp.id)
+                },
+                playComposition: { [weak self] id in self?.playComposition(id) },
+                deleteComposition: { [weak self] id in
+                    guard let self else { return }
+                    if self.flowsModel.playingCompositionID == id { self.canvasView.stopSimulation() }
+                    self.document.perform(.removeComposition(id), actionName: "Delete Composition")
+                },
+                renameComposition: { [weak self] id, name in
+                    guard let self, !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                          let comp = self.document.board.compositions.first(where: { $0.id == id }),
+                          comp.name != name else { return }
+                    self.editComposition(id, "Rename Composition") { $0.name = name }
+                },
+                cycleCompositionSpeed: { [weak self] id in
+                    guard let self else { return }
+                    let ladder: [Double] = [1, 1.5, 2, 0.5]
+                    let current = self.flowsModel.compositionSpeeds[id] ?? 1
+                    let next = ladder[((ladder.firstIndex(of: current) ?? 0) + 1) % ladder.count]
+                    self.flowsModel.compositionSpeeds[id] = next
+                    if self.flowsModel.playingCompositionID == id {
+                        self.canvasView.simulationSpeed = Self.flowBaseSpeed * next
+                    }
+                },
+                toggleGroupMode: { [weak self] id, path in
+                    self?.editComposition(id, "Change Play Mode") { $0.toggleMode(atGroupPath: path) }
+                },
+                addFlowToGroup: { [weak self] id, path, flowID in
+                    self?.editComposition(id, "Add Flow") { $0.appendChild(.flow(flowID), toGroupAt: path) }
+                },
+                addNestedGroup: { [weak self] id, path, mode in
+                    self?.editComposition(id, "Add Group") { $0.appendChild(.group(mode: mode, children: []), toGroupAt: path) }
+                },
+                removeChild: { [weak self] id, path in
+                    self?.editComposition(id, "Remove From Composition") { $0.removeChild(at: path) }
+                },
+                moveChild: { [weak self] id, path, up in
+                    self?.editComposition(id, "Reorder Composition") { $0.moveChild(at: path, up: up) }
+                },
+                availableFlows: { [weak self] in self?.flowsModel.flows ?? [] }
             )
         )
         let host = NSHostingView(rootView: panel)
@@ -941,6 +1041,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         canvasView.simulationStateChanged = { [weak self] active, paused in
             existingHandler?(active, paused)
             self?.flowsModel.playingFlowID = active ? self?.canvasView.playingFlowID : nil
+            self?.flowsModel.playingCompositionID = active ? self?.canvasView.playingCompositionID : nil
         }
     }
 
