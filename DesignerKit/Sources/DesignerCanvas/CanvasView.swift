@@ -712,7 +712,19 @@ public final class CanvasView: NSView {
 
     // MARK: Traffic simulation (F2)
 
-    private var simulator: TrafficSimulator?
+    /// One playback timeline: a scripted simulator that starts `start` seconds
+    /// into the run, in its own color. A single flow or flood is one track; a
+    /// composition is several (serial = staggered starts, parallel = same
+    /// start). One clock drives them all.
+    private struct SimulationTrack {
+        let simulator: TrafficSimulator
+        let start: TimeInterval
+        let color: NSColor
+        let reversedEdges: Set<ElementID>
+    }
+
+    private var simulationTracks: [SimulationTrack] = []
+    private var simulationTotalDuration: TimeInterval = 0
     private var simulationDisplayLink: CADisplayLink?
     private var simulationClock: TimeInterval = 0   // accumulated simulation seconds
     private var lastSimulationTick: CFTimeInterval = 0
@@ -721,7 +733,7 @@ public final class CanvasView: NSView {
     /// Simulation speed multiplier (1 = normal).
     public var simulationSpeed: Double = 1
 
-    public var isSimulating: Bool { simulator != nil }
+    public var isSimulating: Bool { !simulationTracks.isEmpty }
     /// Fires when a simulation starts, pauses/resumes, or ends (so chrome can
     /// show/update the transport). Bool = running (unpaused).
     public var simulationStateChanged: ((_ active: Bool, _ paused: Bool) -> Void)?
@@ -732,15 +744,16 @@ public final class CanvasView: NSView {
         !TrafficSimulation.steps(from: id, in: board).isEmpty
     }
 
-    /// Color of the running simulation's lit path (a flow's color, or the
-    /// accent for flood mode).
-    private var simulationColor: NSColor = Graphite.accent
-    /// The flow being played back, if any (nil = flood mode).
+    /// The flow being played back, if any (nil = flood mode or composition).
     public private(set) var playingFlowID: FlowID?
-    /// Edges traversed opposite to their storage order (a bidirectional edge
-    /// walked to→from, or a backward edge): the packet must fly the traversal
-    /// direction, not the storage direction.
-    public private(set) var reversedSimulationEdges: Set<ElementID> = []
+    /// The composition being played back, if any.
+    public private(set) var playingCompositionID: FlowCompositionID?
+    /// Edges traversed opposite to their storage order, across every running
+    /// track (a bidirectional edge walked to→from, or a backward edge): the
+    /// packet must fly the traversal direction, not the storage direction.
+    public var reversedSimulationEdges: Set<ElementID> {
+        simulationTracks.reduce(into: Set<ElementID>()) { $0.formUnion($1.reversedEdges) }
+    }
 
     /// Derives traversal reversal from delivery: an edge whose step delivers
     /// to its *storage-from* endpoint was walked backwards. Loop-closing edges
@@ -768,10 +781,12 @@ public final class CanvasView: NSView {
         guard board.elements[source]?.node != nil else { return }
         let steps = TrafficSimulation.steps(from: source, in: board)
         guard !steps.isEmpty else { return }
-        simulationColor = Graphite.accent
         playingFlowID = nil
-        reversedSimulationEdges = reversedEdges(in: steps)
-        startSimulator(TrafficSimulator(source: source, steps: steps))
+        playingCompositionID = nil
+        startTracks([SimulationTrack(
+            simulator: TrafficSimulator(source: source, steps: steps),
+            start: 0, color: Graphite.accent, reversedEdges: reversedEdges(in: steps)
+        )])
     }
 
     /// Plays a recorded flow: exactly its steps, in its color, skipping any
@@ -781,14 +796,42 @@ public final class CanvasView: NSView {
         let steps = flow.liveSteps(in: board).map { TrafficSimulation.Step(edges: $0.edges, nodes: $0.nodes) }
         guard !steps.isEmpty else { return }
         cancelFlowRecording()
-        simulationColor = Graphite.flowColors[flow.colorIndex % Graphite.flowColors.count]
         playingFlowID = flow.id
-        reversedSimulationEdges = reversedEdges(in: steps)
-        startSimulator(TrafficSimulator(source: flow.source, steps: steps))
+        playingCompositionID = nil
+        startTracks([SimulationTrack(
+            simulator: TrafficSimulator(source: flow.source, steps: steps),
+            start: 0,
+            color: Graphite.flowColors[flow.colorIndex % Graphite.flowColors.count],
+            reversedEdges: reversedEdges(in: steps)
+        )])
     }
 
-    private func startSimulator(_ sim: TrafficSimulator) {
-        simulator = sim
+    /// Plays a composition: each referenced flow becomes its own timed track
+    /// (serial groups stagger, parallel groups overlap), all under one clock.
+    public func startCompositionPlayback(_ composition: FlowComposition) {
+        let schedule = FlowCompositionSchedule.compile(
+            composition, in: board,
+            edgeDuration: TrafficSimulator.edgeDuration,
+            nodeDwell: TrafficSimulator.nodeDwell
+        )
+        let tracks = schedule.tracks.map { track in
+            SimulationTrack(
+                simulator: TrafficSimulator(source: track.source, steps: track.steps),
+                start: track.start,
+                color: Graphite.flowColors[track.colorIndex % Graphite.flowColors.count],
+                reversedEdges: reversedEdges(in: track.steps)
+            )
+        }
+        guard !tracks.isEmpty else { return }
+        cancelFlowRecording()
+        playingFlowID = nil
+        playingCompositionID = composition.id
+        startTracks(tracks)
+    }
+
+    private func startTracks(_ tracks: [SimulationTrack]) {
+        simulationTracks = tracks
+        simulationTotalDuration = tracks.map { $0.start + $0.simulator.totalDuration }.max() ?? 0
         simulationClock = 0
         simulationPaused = false
         lastSimulationTick = CACurrentMediaTime()
@@ -825,10 +868,11 @@ public final class CanvasView: NSView {
     public func stopSimulation() {
         simulationDisplayLink?.invalidate()
         simulationDisplayLink = nil
-        simulator = nil
+        simulationTracks = []
+        simulationTotalDuration = 0
         simulationPaused = false
         playingFlowID = nil
-        reversedSimulationEdges = []
+        playingCompositionID = nil
         simulationStateChanged?(false, false)
         needsDisplay = true
     }
@@ -837,54 +881,61 @@ public final class CanvasView: NSView {
         let now = CACurrentMediaTime()
         let delta = now - lastSimulationTick
         lastSimulationTick = now
-        guard let sim = simulator, !simulationPaused else { return }
+        guard !simulationTracks.isEmpty, !simulationPaused else { return }
         simulationClock += delta * simulationSpeed
-        // Loop with a short pause at the end so the flow reads as continuous.
-        if simulationClock > sim.totalDuration + 0.9 {
+        // Loop with a short pause at the end so the run reads as continuous.
+        if simulationClock > simulationTotalDuration + 0.9 {
             simulationClock = 0
         }
         needsDisplay = true
     }
 
     private func drawSimulationOverlay(in context: CGContext) {
-        guard let sim = simulator else { return }
-        let frame = sim.frame(at: simulationClock)
+        guard !simulationTracks.isEmpty else { return }
         let frames = board.frameProvider(overrides: transientFrames)
 
         renderer.drawSimulationScrim(bounds, in: context)
 
-        // Lit edges (done first, then active) in the simulation color.
-        for edgeID in frame.doneEdges {
-            guard let route = routeCache[edgeID] else { continue }
-            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false, color: simulationColor)
-        }
-        for active in frame.activeEdges {
-            guard let route = routeCache[active.id] else { continue }
-            renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: true, color: simulationColor)
-        }
+        // Each track paints in its own color at its own offset into the clock.
+        // A track that hasn't started yet (serial successor) renders nothing —
+        // frame(at:0) always lights the source, so the `clock >= start` gate
+        // keeps a not-yet-playing flow dark.
+        for track in simulationTracks where simulationClock >= track.start {
+            let frame = track.simulator.frame(at: simulationClock - track.start)
+            let color = track.color
 
-        // Lit nodes with a glow; source and freshly-reached pulse brightest.
-        for nodeID in frame.litNodes {
-            guard let element = board.elements[nodeID], let node = element.node else { continue }
-            let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
-            renderer.draw(element, in: context, viewport: viewport, isSelected: false)
-            renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 1, color: simulationColor)
-        }
+            // Lit edges (done first, then active).
+            for edgeID in frame.doneEdges {
+                guard let route = routeCache[edgeID] else { continue }
+                renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: false, color: color)
+            }
+            for active in frame.activeEdges {
+                guard let route = routeCache[active.id] else { continue }
+                renderer.drawSimulationEdge(route.points.map { viewport.toView($0) }, in: context, viewport: viewport, active: true, color: color)
+            }
 
-        // Travelling packets at the head of each active edge, with the edge's
-        // condition surfaced while it transits ("only when gRPC"). Reversed
-        // traversals (bidirectional walked to→from, backward edges) fly the
-        // traversal direction, not the storage direction.
-        for active in frame.activeEdges {
-            guard let route = routeCache[active.id] else { continue }
-            let fraction = reversedSimulationEdges.contains(active.id) ? 1 - active.progress : active.progress
-            let world = route.point(atFraction: fraction)
-            let view = viewport.toView(world)
-            renderer.drawSimulationPacket(at: view, in: context, viewport: viewport, color: simulationColor)
-            if let edge = board.elements[active.id]?.edge,
-               let condition = edge.semantic.properties[WellKnownEdgeProperty.condition],
-               !condition.isEmpty {
-                renderer.drawSimulationTag(condition, at: view, in: context, viewport: viewport, color: simulationColor)
+            // Lit nodes with a glow.
+            for nodeID in frame.litNodes {
+                guard let element = board.elements[nodeID], let node = element.node else { continue }
+                let path = nodeGlowPath(for: node, id: nodeID, frames: frames)
+                renderer.draw(element, in: context, viewport: viewport, isSelected: false)
+                renderer.drawSimulationNodeGlow(path, in: context, viewport: viewport, intensity: 1, color: color)
+            }
+
+            // Travelling packets at the head of each active edge, with the
+            // edge's condition surfaced while it transits ("only when gRPC").
+            // Reversed traversals fly the traversal direction, not storage.
+            for active in frame.activeEdges {
+                guard let route = routeCache[active.id] else { continue }
+                let fraction = track.reversedEdges.contains(active.id) ? 1 - active.progress : active.progress
+                let world = route.point(atFraction: fraction)
+                let view = viewport.toView(world)
+                renderer.drawSimulationPacket(at: view, in: context, viewport: viewport, color: color)
+                if let edge = board.elements[active.id]?.edge,
+                   let condition = edge.semantic.properties[WellKnownEdgeProperty.condition],
+                   !condition.isEmpty {
+                    renderer.drawSimulationTag(condition, at: view, in: context, viewport: viewport, color: color)
+                }
             }
         }
     }
