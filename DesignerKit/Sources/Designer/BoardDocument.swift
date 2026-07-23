@@ -35,7 +35,10 @@ final class BoardDocument: NSDocument, ObservableObject {
     override var fileURL: URL? {
         didSet {
             if let url = fileURL, url != oldValue {
-                BoardCatalog.remember(url)
+                // AppKit can set fileURL on a background thread during autosave;
+                // remember() reads/writes small files, so keep it off whatever
+                // thread we're on (and off main) via a background hop.
+                DispatchQueue.global(qos: .utility).async { BoardCatalog.remember(url) }
             }
         }
     }
