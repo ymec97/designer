@@ -355,6 +355,9 @@ extension CanvasViewController {
            let url = Bundle.module.url(forResource: "swoosh", withExtension: "wav") {
             linkedBoardSwoosh = NSSound(contentsOf: url, byReference: true)
         }
+        // The drill-in swoosh was way too loud; keep it as a soft, unobtrusive
+        // cue rather than a startling one.
+        linkedBoardSwoosh?.volume = 0.35
         linkedBoardSwoosh?.stop()
         linkedBoardSwoosh?.play()
     }
