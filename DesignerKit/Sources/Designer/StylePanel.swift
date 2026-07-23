@@ -38,6 +38,12 @@ final class StylePanelModel: ObservableObject {
     @Published var strokeWidth: Double?
     @Published var opacity: Double = 1
     @Published var textSize: TextSize = .medium
+    // Z-order clarity (F8): the selection's layer + its position among
+    // layer-sharing peers, kept in sync by the controller.
+    @Published var layerChipText: String?
+    @Published var zPositionText: String?
+    @Published var canStepForward = false
+    @Published var canStepBackward = false
 
     /// Set while the panel is being programmatically seeded (selection
     /// change) so the seeding doesn't echo back as an edit.
@@ -66,6 +72,8 @@ struct StylePanelActions {
     var styleChanged: (Style) -> Void
     var bringToFront: () -> Void
     var sendToBack: () -> Void
+    var stepForward: () -> Void = {}
+    var stepBackward: () -> Void = {}
     /// Explicit dismiss (the header ✕) — the panel no longer closes itself
     /// on deselection/undo.
     var close: () -> Void = {}
@@ -243,19 +251,45 @@ struct StyleControls: View {
             }
 
             if model.mode == .selection || model.mode == .connector || model.mode == .image {
-                HStack(spacing: 6) {
-                    Button {
-                        actions.sendToBack()
-                    } label: {
-                        Label("To Back", systemImage: "square.3.layers.3d.bottom.filled")
-                            .font(.system(size: 10))
+                VStack(alignment: .leading, spacing: 5) {
+                    // Z-order clarity (F8): which layer, and where in the stack
+                    // among elements sharing that layer.
+                    if let chip = model.layerChipText {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.3.layers.3d")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                            Text(chip).font(.system(size: 10, weight: .medium))
+                            if let z = model.zPositionText {
+                                Text("· \(z)").font(.system(size: 10)).foregroundStyle(.tertiary)
+                            }
+                        }
                     }
-                    .help("Tuck behind other elements — grouping outlines usually live at the back")
-                    Button {
-                        actions.bringToFront()
-                    } label: {
-                        Label("To Front", systemImage: "square.3.layers.3d.top.filled")
-                            .font(.system(size: 10))
+                    HStack(spacing: 6) {
+                        Button { actions.sendToBack() } label: {
+                            Label("To Back", systemImage: "square.3.layers.3d.bottom.filled")
+                                .font(.system(size: 10))
+                        }
+                        .help("Send behind everything")
+                        Button { actions.bringToFront() } label: {
+                            Label("To Front", systemImage: "square.3.layers.3d.top.filled")
+                                .font(.system(size: 10))
+                        }
+                        .help("Bring in front of everything")
+                    }
+                    HStack(spacing: 6) {
+                        Button { actions.stepBackward() } label: {
+                            Label("Backward", systemImage: "chevron.down")
+                                .font(.system(size: 10))
+                        }
+                        .disabled(!model.canStepBackward)
+                        .help("One step back within this layer")
+                        Button { actions.stepForward() } label: {
+                            Label("Forward", systemImage: "chevron.up")
+                                .font(.system(size: 10))
+                        }
+                        .disabled(!model.canStepForward)
+                        .help("One step forward within this layer")
                     }
                 }
                 .buttonStyle(.bordered)

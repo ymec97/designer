@@ -2492,6 +2492,58 @@ public final class CanvasView: NSView {
         reorderSelection(toFront: false)
     }
 
+    /// Peers of `id` for layer-scoped z-order: elements sharing at least one of
+    /// its layers, in back→front draw order (includes `id` itself).
+    private func zPeers(of id: ElementID) -> [Element] {
+        guard let element = board.elements[id] else { return [] }
+        let layers = element.layerIDs
+        return board.elementsInZOrder.filter {
+            $0.id == id || !$0.layerIDs.isDisjoint(with: layers)
+        }
+    }
+
+    /// 1-based rank from the FRONT among layer-sharing peers, and the peer
+    /// count — drives the style panel's "Nth from front of M" readout (F8).
+    public func zPosition(of id: ElementID) -> (rank: Int, total: Int)? {
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return nil }
+        return (rank: peers.count - idx, total: peers.count)
+    }
+
+    public func canStepSelection(forward: Bool) -> Bool {
+        guard selection.count == 1, let id = selection.first else { return false }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return false }
+        return forward ? idx < peers.count - 1 : idx > 0
+    }
+
+    public func stepSelectionForward() { stepSelection(forward: true) }
+    public func stepSelectionBackward() { stepSelection(forward: false) }
+
+    /// Move the single selected element ONE position among its layer-sharing
+    /// peers (not to the global extreme like To Front/Back). One undo step.
+    private func stepSelection(forward: Bool) {
+        guard selection.count == 1, let id = selection.first,
+              let element = board.elements[id] else { return }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return }
+        var moved = element
+        if forward {
+            guard idx < peers.count - 1 else { return } // already frontmost among peers
+            let above = peers[idx + 1]
+            let aboveAbove = idx + 2 < peers.count ? peers[idx + 2].sortKey : nil
+            moved.sortKey = SortKey.between(above.sortKey, aboveAbove)
+        } else {
+            guard idx > 0 else { return } // already backmost among peers
+            let below = peers[idx - 1]
+            let belowBelow = idx - 2 >= 0 ? peers[idx - 2].sortKey : nil
+            moved.sortKey = SortKey.between(belowBelow, below.sortKey)
+        }
+        delegate?.canvasView(self, perform: .replaceElement(moved),
+                             actionName: forward ? "Bring Forward" : "Send Backward")
+        needsDisplay = true
+    }
+
     private func reorderSelection(toFront: Bool) {
         guard !selection.isEmpty else { return }
         var operations: [BoardOperation] = []

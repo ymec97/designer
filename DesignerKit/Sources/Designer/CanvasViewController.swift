@@ -186,8 +186,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             model: stylePanelModel,
             actions: StylePanelActions(
                 styleChanged: { [weak self] style in self?.stylePanelEdited(style) },
-                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront() },
-                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() },
+                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront(); self?.refreshStylePanel() },
+                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack(); self?.refreshStylePanel() },
+                stepForward: { [weak self] in self?.canvasView.stepSelectionForward(); self?.refreshStylePanel() },
+                stepBackward: { [weak self] in self?.canvasView.stepSelectionBackward(); self?.refreshStylePanel() },
                 close: { [weak self] in
                     self?.stylePanelModel.isVisible = false
                     self?.view.window?.makeFirstResponder(self?.canvasView)
@@ -202,6 +204,42 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     /// A style edit lands where the panel's mode points: the pencil, the
     /// pending shape, or the live selection (one undo step per edit).
+    /// Populate the style panel's layer chip + z-position readout (F8) for a
+    /// single non-connector selection; clear it otherwise.
+    private func updateZOrderReadout() {
+        let sel = canvasView.selection
+        guard sel.count == 1, let id = sel.first,
+              let element = document.board.elements[id], element.edge == nil else {
+            stylePanelModel.layerChipText = nil
+            stylePanelModel.zPositionText = nil
+            stylePanelModel.canStepForward = false
+            stylePanelModel.canStepBackward = false
+            return
+        }
+        let layerNames = element.layerIDs.compactMap { lid in
+            document.board.layers.first { $0.id == lid }?.name
+        }
+        stylePanelModel.layerChipText = layerNames.count > 1 ? "Mixed" : (layerNames.first ?? "—")
+        if let z = canvasView.zPosition(of: id) {
+            stylePanelModel.zPositionText = "\(Self.ordinal(z.rank)) from front of \(z.total)"
+        } else {
+            stylePanelModel.zPositionText = nil
+        }
+        stylePanelModel.canStepForward = canvasView.canStepSelection(forward: true)
+        stylePanelModel.canStepBackward = canvasView.canStepSelection(forward: false)
+    }
+
+    private static func ordinal(_ n: Int) -> String {
+        let ones = n % 10, tens = (n / 10) % 10
+        let suffix: String
+        if tens == 1 { suffix = "th" }
+        else if ones == 1 { suffix = "st" }
+        else if ones == 2 { suffix = "nd" }
+        else if ones == 3 { suffix = "rd" }
+        else { suffix = "th" }
+        return "\(n)\(suffix)"
+    }
+
     private func stylePanelEdited(_ style: Style) {
         switch stylePanelModel.mode {
         case .pencil:
@@ -248,8 +286,12 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// otherwise.
     func refreshStylePanel() {
         // Keep the canvas's "left panel showing" signal in sync on every exit
-        // so newly-created elements can auto-pan clear of it (B3).
-        defer { canvasView.leftPanelIsVisible = stylePanelModel.isVisible || inspectorModel.visible }
+        // so newly-created elements can auto-pan clear of it (B3), and refresh
+        // the z-order readout (F8).
+        defer {
+            canvasView.leftPanelIsVisible = stylePanelModel.isVisible || inspectorModel.visible
+            updateZOrderReadout()
+        }
         if canvasView.isReadOnly {
             stylePanelModel.isVisible = false
             return
