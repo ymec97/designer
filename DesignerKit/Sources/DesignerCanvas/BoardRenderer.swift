@@ -359,7 +359,9 @@ final class BoardRenderer {
             }
             drawText(
                 node.semantic.name,
-                fontSize: 13 * viewport.scale,
+                fontSize: clampedLabelFontSize(
+                    base: 13, multiplier: node.style.effectiveTextMultiplier,
+                    text: node.semantic.name, frameView: textRect, viewport: viewport),
                 color: labelColor,
                 centeredIn: textRect,
                 context: context
@@ -484,7 +486,9 @@ final class BoardRenderer {
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !note.text.isEmpty {
             drawText(
                 note.text,
-                fontSize: 12 * viewport.scale,
+                fontSize: clampedLabelFontSize(
+                    base: 12, multiplier: note.style.effectiveTextMultiplier,
+                    text: note.text, frameView: rect, viewport: viewport),
                 color: Palette.noteText,
                 in: rect,
                 context: context
@@ -1322,6 +1326,25 @@ final class BoardRenderer {
         )
         attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Font size for a label: base × the element's textSize multiplier × zoom,
+    /// then clamped so a single measured line of `text` fits inside `frameView`
+    /// (view space) — keeps XL text from spilling out of a small shape (F6).
+    private func clampedLabelFontSize(
+        base: CGFloat, multiplier: Double, text: String,
+        frameView: CGRect, viewport: CanvasViewport
+    ) -> CGFloat {
+        let requested = base * CGFloat(multiplier) * CGFloat(viewport.scale)
+        guard !text.isEmpty else { return requested }
+        let measured = attributedString(text, fontSize: requested, color: .black).size()
+        let maxW = max(frameView.width - 8 * viewport.scale, 1)
+        let maxH = max(frameView.height - 8 * viewport.scale, 1)
+        let widthRatio = measured.width > maxW ? maxW / measured.width : 1
+        let heightRatio = measured.height > maxH ? maxH / measured.height : 1
+        let ratio = min(widthRatio, heightRatio)
+        // Never shrink below the readable floor the renderer already respects.
+        return max(requested * ratio, min(requested, 9))
     }
 
     private func attributedString(

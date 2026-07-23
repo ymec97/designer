@@ -11,6 +11,7 @@ final class StylePanelModel: ObservableObject {
         case shape      // Shape tool: styles the NEXT dragged shape
         case selection  // Select tool: restyles the selected element(s)
         case connector  // Select tool with a connector selected
+        case image      // Select tool with an image/SVG node: layers + text size only
 
         var title: String {
             switch self {
@@ -18,12 +19,15 @@ final class StylePanelModel: ObservableObject {
             case .shape: return "Shape"
             case .selection: return "Style"
             case .connector: return "Connector"
+            case .image: return "Image"
             }
         }
 
         /// Fill applies to blocks only — pencil strokes and connectors are
-        /// lines.
+        /// lines, images paint their own pixels.
         var showsFill: Bool { self == .shape || self == .selection }
+        /// Text size applies to anything that renders a label.
+        var showsTextSize: Bool { self == .selection || self == .shape || self == .image }
     }
 
     @Published var isVisible = false
@@ -33,6 +37,7 @@ final class StylePanelModel: ObservableObject {
     @Published var stroke: String?
     @Published var strokeWidth: Double?
     @Published var opacity: Double = 1
+    @Published var textSize: TextSize = .medium
 
     /// Set while the panel is being programmatically seeded (selection
     /// change) so the seeding doesn't echo back as an edit.
@@ -40,7 +45,8 @@ final class StylePanelModel: ObservableObject {
 
     var style: Style {
         Style(fill: fill, stroke: stroke, strokeWidth: strokeWidth,
-              opacity: opacity >= 0.999 ? nil : opacity)
+              opacity: opacity >= 0.999 ? nil : opacity,
+              textSize: textSize == .medium ? nil : textSize)
     }
 
     func seed(from style: Style, mode: Mode) {
@@ -50,6 +56,7 @@ final class StylePanelModel: ObservableObject {
         stroke = style.stroke
         strokeWidth = style.strokeWidth
         opacity = style.effectiveOpacity
+        textSize = style.textSize ?? .medium
         isSeeding = false
     }
 }
@@ -146,6 +153,9 @@ struct StyleControls: View {
                     emit()
                 }
             }
+            // Image/SVG nodes expose ONLY layers (z-order) and text size (F7),
+            // so the paint controls below are hidden for them.
+            if model.mode != .image {
             swatchRow(title: model.mode.showsFill ? "Outline" : "Color",
                       selected: model.stroke, includeNone: false) { hex in
                 model.stroke = hex
@@ -210,8 +220,29 @@ struct StyleControls: View {
                     .help(String(format: "%.1f pt", currentWidth))
                 }
             }
+            } // end paint controls (hidden for .image)
 
-            if model.mode == .selection || model.mode == .connector {
+            if model.mode.showsTextSize {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Text size")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { model.textSize },
+                        set: { model.textSize = $0; emit() }
+                    )) {
+                        Text("S").tag(TextSize.small)
+                        Text("M").tag(TextSize.medium)
+                        Text("L").tag(TextSize.large)
+                        Text("XL").tag(TextSize.xl)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                }
+            }
+
+            if model.mode == .selection || model.mode == .connector || model.mode == .image {
                 HStack(spacing: 6) {
                     Button {
                         actions.sendToBack()
@@ -231,19 +262,22 @@ struct StyleControls: View {
                 .controlSize(.small)
             }
 
-            Button {
-                // Back to the app defaults for this mode — one click.
-                model.fill = model.mode == .shape ? Style.noFill : nil
-                model.stroke = nil
-                model.strokeWidth = nil
-                model.opacity = 1
-                emit()
-            } label: {
-                Label("Remove formatting", systemImage: "paintbrush.slash")
-                    .font(.system(size: 10))
+            if model.mode != .image {
+                Button {
+                    // Back to the app defaults for this mode — one click.
+                    model.fill = model.mode == .shape ? Style.noFill : nil
+                    model.stroke = nil
+                    model.strokeWidth = nil
+                    model.opacity = 1
+                    model.textSize = .medium
+                    emit()
+                } label: {
+                    Label("Remove formatting", systemImage: "paintbrush.slash")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .help("Reset color, outline, width, and opacity to the defaults")
             }
-            .buttonStyle(.borderless)
-            .help("Reset color, outline, width, and opacity to the defaults")
         }
     }
 

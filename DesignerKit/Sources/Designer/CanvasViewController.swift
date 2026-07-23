@@ -208,12 +208,18 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             canvasView.pendingInkStyle = style
         case .shape:
             canvasView.pendingShapeStyle = style
-        case .selection, .connector:
+        case .selection, .connector, .image:
             let operations = canvasView.selection.compactMap { id -> BoardOperation? in
                 guard var element = document.board.elements[id] else { return nil }
                 switch element.content {
                 case .node(var node):
-                    node.style = style
+                    // The panel never edits the embedded image or the extra
+                    // bag (board links), so preserve them — otherwise editing
+                    // an SVG node's text size would wipe its image.
+                    var newStyle = style
+                    newStyle.image = node.style.image
+                    newStyle.extra = node.style.extra
+                    node.style = newStyle
                     element.content = .node(node)
                 case .ink(var ink):
                     ink.style = style
@@ -266,7 +272,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 }
             }
             if let first = styleable.first {
-                stylePanelModel.seed(from: first, mode: .selection)
+                // A single image/SVG node gets the restricted panel: layers +
+                // text size only (F7).
+                let singleImageNode = canvasView.selection.count == 1 && first.image != nil
+                stylePanelModel.seed(from: first, mode: singleImageNode ? .image : .selection)
                 stylePanelModel.isVisible = true
             } else if let connectorStyle {
                 stylePanelModel.seed(from: connectorStyle, mode: .connector)
