@@ -57,6 +57,24 @@ public struct SpatialIndex {
         return { rect in index.query(rect).compactMap { frames[$0] } }
     }
 
+    /// Obstacle query over LIVE (overridden) node frames — the drag-time analogue
+    /// of `nodeObstacleQuery`, which reads only committed frames. Lets edges
+    /// avoid blocks mid-drag so a dragged route matches the one the drop
+    /// produces, instead of crossing blocks then popping on release (B10).
+    public static func nodeObstacleQuery(
+        for board: Board, overrides: [ElementID: Rect]
+    ) -> (Rect) -> [Rect] {
+        var index = SpatialIndex()
+        var frames: [ElementID: Rect] = [:]
+        for element in board.elements.values {
+            guard let node = element.node else { continue }
+            let frame = overrides[element.id] ?? node.frame
+            frames[element.id] = frame
+            index.insert(element.id, bounds: frame)
+        }
+        return { rect in index.query(rect).compactMap { frames[$0] } }
+    }
+
     public static func resolveRoutes(for board: Board) -> [ElementID: EdgeGeometry.Route] {
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)

@@ -419,6 +419,12 @@ public final class CanvasView: NSView {
         let overrideFrames = transientFrames.isEmpty
             ? nil
             : board.frameProvider(overrides: transientFrames)
+        // Live obstacles over the dragged frames so mid-drag routes avoid blocks
+        // and match the settled route the drop produces — no more "cross then
+        // pop" (B10). Built once per frame, only while a drag is in flight.
+        let dragObstacles: ((Rect) -> [Rect])? = transientFrames.isEmpty
+            ? nil
+            : SpatialIndex.nodeObstacleQuery(for: board, overrides: transientFrames)
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
@@ -426,7 +432,8 @@ public final class CanvasView: NSView {
             if let transientBend, transientBend.id == element.id, var edge = element.edge {
                 edge.waypoints = transientBend.waypoints
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let transientEndpoint, transientEndpoint.id == element.id, var edge = element.edge {
                 switch transientEndpoint.end {
@@ -434,13 +441,15 @@ public final class CanvasView: NSView {
                 case .to: edge.to = .free(transientEndpoint.point)
                 }
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames,
                     parallelOffset: parallelOffsetCache[element.id] ?? 0,
-                    anchorOffsets: anchorSpreadCache[element.id])
+                    anchorOffsets: anchorSpreadCache[element.id],
+                    obstacles: dragObstacles)
             }
             return routeCache[element.id]
         }
