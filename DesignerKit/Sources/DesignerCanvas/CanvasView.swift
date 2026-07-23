@@ -1944,10 +1944,22 @@ public final class CanvasView: NSView {
 
         case .resize(let id, let handle, let original, let startWorld):
             let world = viewport.toWorld(point)
-            transientFrames[id] = handle.resize(
+            var resized = handle.resize(
                 original,
                 byWorldDelta: world.x - startWorld.x, world.y - startWorld.y
             )
+            // Alignment snapping for the moving edges (suppressed while ⌘ is
+            // held), showing the same red guides as a move.
+            snapGuides = []
+            if !event.modifierFlags.contains(.command) {
+                let others = snapCandidates(excluding: [id])
+                let snap = SnapEngine.snapResize(
+                    frame: resized, original: original, others: others,
+                    threshold: 7 / viewport.scale)
+                resized = snap.frame
+                snapGuides = snap.guides
+            }
+            transientFrames[id] = resized
             needsDisplay = true
 
         case .rubberBand(let start, _):

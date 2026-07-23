@@ -76,6 +76,56 @@ public enum SnapEngine {
         }
         return Result(dx: dx, dy: dy, guides: guides)
     }
+
+    /// Snaps a resize: only the edges that actually moved (vs `original`) snap
+    /// to nearby `others'` edges/centers, so dragging a handle shows the same
+    /// red alignment guides as moving. Returns the adjusted frame and guides.
+    public static func snapResize(
+        frame: Rect, original: Rect, others: [Rect], threshold: Double
+    ) -> (frame: Rect, guides: [Guide]) {
+        let eps = 1e-6
+        var left = frame.x, right = frame.maxX, top = frame.y, bottom = frame.maxY
+        var guides: [Guide] = []
+
+        func nearestLine(to value: Double, vertical: Bool) -> (line: Double, other: Rect)? {
+            var best: (d: Double, line: Double, other: Rect)?
+            for other in others {
+                let lines = vertical ? [other.x, other.midX, other.maxX] : [other.y, other.midY, other.maxY]
+                for line in lines {
+                    let d = line - value
+                    if abs(d) <= threshold, abs(d) < abs(best?.d ?? .greatestFiniteMagnitude) {
+                        best = (d, line, other)
+                    }
+                }
+            }
+            return best.map { ($0.line, $0.other) }
+        }
+
+        if abs(frame.x - original.x) > eps, let s = nearestLine(to: frame.x, vertical: true) {
+            left = s.line
+            guides.append(Guide(axis: .vertical, position: s.line,
+                                start: min(frame.y, s.other.y), end: max(frame.maxY, s.other.maxY)))
+        }
+        if abs(frame.maxX - original.maxX) > eps, let s = nearestLine(to: frame.maxX, vertical: true) {
+            right = s.line
+            guides.append(Guide(axis: .vertical, position: s.line,
+                                start: min(frame.y, s.other.y), end: max(frame.maxY, s.other.maxY)))
+        }
+        if abs(frame.y - original.y) > eps, let s = nearestLine(to: frame.y, vertical: false) {
+            top = s.line
+            guides.append(Guide(axis: .horizontal, position: s.line,
+                                start: min(frame.x, s.other.x), end: max(frame.maxX, s.other.maxX)))
+        }
+        if abs(frame.maxY - original.maxY) > eps, let s = nearestLine(to: frame.maxY, vertical: false) {
+            bottom = s.line
+            guides.append(Guide(axis: .horizontal, position: s.line,
+                                start: min(frame.x, s.other.x), end: max(frame.maxX, s.other.maxX)))
+        }
+
+        let snapped = Rect(x: min(left, right), y: min(top, bottom),
+                           width: abs(right - left), height: abs(bottom - top))
+        return (snapped, guides)
+    }
 }
 
 extension Rect {
