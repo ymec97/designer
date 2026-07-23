@@ -69,10 +69,13 @@ final class UITestDriver {
         step30CaptionModeAndDensityNudge()
         step31RubberBandExcludesDistantConnector()
         step32EndpointSnapsToDiscreteSlot()
+        step33NoFillRectBorderMovesNotConnect()
+        step34InkDragShowsStrokeMoving()
+        step35EndpointIgnoresNoFillGroupRect()
         step29LinkedBoards()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish, caption-mode+density-nudge, rubber-band-precise, endpoint-slot-snap, linked-boards verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish, caption-mode+density-nudge, rubber-band-precise, endpoint-slot-snap, nofill-border-moves, ink-drag-visible, endpoint-ignores-group, linked-boards verified")
             exit(0)
         } else {
             for failure in failures {
@@ -1328,6 +1331,155 @@ final class UITestDriver {
         canvasView.select([])
         document.perform(.batch([.removeElement(edge.id), .removeElement(a.id), .removeElement(b.id)]),
                          actionName: "Cleanup Anchor-slot Graph")
+        pumpRunLoop()
+    }
+
+    /// I1: a no-fill (grouping) rectangle's BORDER selects + moves — it must
+    /// NOT be hijacked into starting a connector, and no connector is created.
+    private func step33NoFillRectBorderMovesNotConnect() {
+        let layer = document.board.layers[0].id
+        let rectEl = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: ""),
+                                frame: Rect(x: 100, y: 7000, width: 260, height: 160),
+                                shape: .rectangle, style: Style(fill: Style.noFill))))
+        document.perform(.insertElement(rectEl), actionName: "No-fill Move Test")
+        // 1x viewport, rect mid-screen, clear of the left style panel (view x > 300).
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 6900), scale: 1)
+        canvasView.select([])
+        pumpRunLoop()
+
+        func frame() -> Rect { document.board.elements[rectEl.id]!.node!.frame }
+        let edgesBefore = document.board.elements.values.compactMap(\.edge).count
+        let before = frame()
+        // Mousedown on the TOP BORDER (not the hollow interior), then drag.
+        let border = canvasView.viewport.toView(Point(x: before.midX, y: before.y))
+        let target = CGPoint(x: border.x + 90, y: border.y + 70)
+        send(.leftMouseDown, at: border, clickCount: 1)
+        for step in 1...6 {
+            let t = CGFloat(step) / 6
+            send(.leftMouseDragged, at: CGPoint(x: border.x + (target.x - border.x) * t,
+                                                y: border.y + (target.y - border.y) * t), clickCount: 1)
+        }
+        send(.leftMouseUp, at: target, clickCount: 1)
+        pumpRunLoop()
+
+        expect(frame() != before, "dragging a no-fill rect's border MOVES it (was \(before), now \(frame()))")
+        expect(abs(frame().x - (before.x + 90)) < 8 && abs(frame().y - (before.y + 70)) < 8,
+               "no-fill rect moved by ~the drag delta (got \(frame()))")
+        expect(document.board.elements.values.compactMap(\.edge).count == edgesBefore,
+               "border-drag on a no-fill rect does NOT create a connector")
+
+        document.undoManager?.undo() // move
+        document.undoManager?.undo() // insert
+        pumpRunLoop()
+    }
+
+    /// I4: dragging a freehand DRAWING renders the stroke at the moved position
+    /// mid-drag (not stuck at the origin with only the snap guides moving).
+    private func step34InkDragShowsStrokeMoving() {
+        let layer = document.board.layers[0].id
+        var pts: [StrokePoint] = []
+        for i in 0...12 {
+            let f = Double(i) / 12
+            pts.append(StrokePoint(x: 160 + f * 180, y: 7420 + f * 30))
+        }
+        let inkEl = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .ink(Ink(points: pts, style: Style(stroke: "#D95757", strokeWidth: 4))))
+        document.perform(.insertElement(inkEl), actionName: "Ink Move Test")
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 7320), scale: 1)
+        canvasView.select([inkEl.id]) // selected → movable
+        pumpRunLoop()
+
+        let from = canvasView.viewport.toView(Point(x: 250, y: 7430)) // a point on the stroke
+        let to = CGPoint(x: from.x + 130, y: from.y + 90)
+        send(.leftMouseDown, at: from, clickCount: 1)
+        for step in 1...6 {
+            let t = CGFloat(step) / 6
+            send(.leftMouseDragged, at: CGPoint(x: from.x + (to.x - from.x) * t,
+                                                y: from.y + (to.y - from.y) * t), clickCount: 1)
+        }
+        // Render MID-DRAG (before mouseUp) and assert the stroke is drawn at the
+        // moved position — the I4 fix. Scene is isolated so any non-background
+        // pixel near the dragged point is the stroke.
+        if let bitmap = canvasView.bitmapImageRepForCachingDisplay(in: canvasView.bounds) {
+            canvasView.cacheDisplay(in: canvasView.bounds, to: bitmap)
+            let sx = CGFloat(bitmap.pixelsWide) / canvasView.bounds.width
+            let sy = CGFloat(bitmap.pixelsHigh) / canvasView.bounds.height
+            func px(_ p: CGPoint) -> NSColor? { bitmap.colorAt(x: Int(p.x * sx), y: Int(p.y * sy)) }
+            let bg = px(CGPoint(x: 5, y: 5))
+            func hasStroke(near c: CGPoint, radius: Int) -> Bool {
+                for dx in -radius...radius {
+                    for dy in -radius...radius where px(CGPoint(x: c.x + CGFloat(dx), y: c.y + CGFloat(dy))) != bg {
+                        return true
+                    }
+                }
+                return false
+            }
+            expect(hasStroke(near: to, radius: 9),
+                   "mid-drag: the ink stroke renders at the moved position (I4)")
+        } else {
+            expect(false, "no bitmap for ink-drag render")
+        }
+        send(.leftMouseUp, at: to, clickCount: 1)
+        pumpRunLoop()
+        if case .ink(let ink)? = document.board.elements[inkEl.id]?.content, let first = ink.points.first {
+            expect(first.x > pts[0].x + 60, "ink committed to the moved position (got x=\(first.x))")
+        } else {
+            expect(false, "ink stroke missing after move")
+        }
+        document.undoManager?.undo() // move
+        document.undoManager?.undo() // insert
+        pumpRunLoop()
+    }
+
+    /// I5: dragging a connector endpoint into the HOLLOW interior of a no-fill
+    /// grouping rectangle must NOT snap onto that rect (it stays free).
+    private func step35EndpointIgnoresNoFillGroupRect() {
+        let layer = document.board.layers[0].id
+        func node(_ name: String, _ x: Double) -> Element {
+            Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                    content: .node(Node(semantic: NodeSemantic(name: name),
+                                        frame: Rect(x: x, y: 7900, width: 100, height: 56))))
+        }
+        let a = node("ep-a", 100), b = node("ep-b", 560)
+        let group = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .node(Node(semantic: NodeSemantic(name: ""),
+                                frame: Rect(x: 250, y: 7820, width: 240, height: 220),
+                                shape: .rectangle, style: Style(fill: Style.noFill))))
+        document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(group)]),
+                         actionName: "Endpoint Snap Test")
+        let edge = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+            content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.insertElement(edge), actionName: "Endpoint Snap Edge")
+        canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 7760), scale: 1)
+        canvasView.select([edge.id])
+        pumpRunLoop()
+
+        func currentEdge() -> DesignerModel.Edge? { document.board.elements[edge.id]?.edge }
+        guard let route = EdgeGeometry.route(for: currentEdge()!, frames: document.board.frameProvider()) else {
+            expect(false, "no route for endpoint test"); return
+        }
+        // Drag the 'to' grip into the group rect's hollow interior (away from
+        // a/b and away from the group's own border).
+        let endView = canvasView.viewport.toView(route.end)
+        let intoGroup = canvasView.viewport.toView(Point(x: 370, y: 7930))
+        send(.leftMouseDown, at: endView, clickCount: 1)
+        for step in 1...6 {
+            let t = CGFloat(step) / 6
+            send(.leftMouseDragged, at: CGPoint(x: endView.x + (intoGroup.x - endView.x) * t,
+                                                y: endView.y + (intoGroup.y - endView.y) * t), clickCount: 1)
+        }
+        send(.leftMouseUp, at: intoGroup, clickCount: 1)
+        pumpRunLoop()
+        expect(currentEdge()?.to.elementID != group.id,
+               "endpoint dropped in a no-fill group's interior does NOT attach to the group (I5)")
+        expect(currentEdge()?.to.elementID == nil,
+               "endpoint in the hollow interior stays free/dangling (I5)")
+
+        document.undoManager?.undo() // detach
+        document.undoManager?.undo() // edge insert
+        document.undoManager?.undo() // nodes
         pumpRunLoop()
     }
 
