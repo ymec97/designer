@@ -26,6 +26,20 @@ final class BoardDocument: NSDocument, ObservableObject {
         }
     }
 
+    /// Record every board we open or save into the persisted catalog index
+    /// (B1), so a board saved OUTSIDE the managed folder stays discoverable
+    /// even after the system recent-documents list rotates or resets on an app
+    /// upgrade. `fileURL` is set both on open and on save-as, and `remember`
+    /// reads the board id straight from the file on disk, so this one hook
+    /// covers both cases.
+    override var fileURL: URL? {
+        didSet {
+            if let url = fileURL, url != oldValue {
+                BoardCatalog.remember(url)
+            }
+        }
+    }
+
     /// True while the document lives under its auto-generated "Untitled N"
     /// name in the managed Boards folder and the user never chose a name.
     /// The first explicit ⌘S then PROMPTS (name + location) instead of
