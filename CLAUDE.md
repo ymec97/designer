@@ -85,6 +85,10 @@ Release workflow (branching, tagging, packaging) is codified in
 
 ## Cloud / remote sessions (Claude Code on the web)
 
+- **Finish every cloud work session with the `cloud-handoff` skill**
+  (`.claude/skills/cloud-handoff/SKILL.md`): write/refresh `TEST_PLAN.md`, push
+  it to the feature branch, and print a Mac-agent handoff (branch + change
+  context). The battery can't run in cloud, so this is how a Mac agent picks it up.
 - This is a macOS/AppKit app: the Xcode toolchain is **not** present on the
   Linux cloud runner, so `swift test` / `scripts/build-app.sh` / the `--*-test`
   battery cannot run there. Write the code + tests carefully and run the full
