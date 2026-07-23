@@ -558,20 +558,12 @@ public final class CanvasView: NSView {
             }
             for id in inkElementIDs {
                 guard let element = board.elements[id], isOnVisibleLayer(element) else { continue }
-                // Ink has no frame, so a live move shows up by translating the
-                // stroke points by the transient-frame delta (B13).
-                var drawElement = element
-                if let tf = transientFrames[id], case .ink(var ink) = element.content,
-                   let current = SpatialIndex.boundingRect(of: element) {
-                    let dx = tf.x - current.x, dy = tf.y - current.y
-                    ink.points = ink.points.map {
-                        StrokePoint(x: $0.x + dx, y: $0.y + dy, pressure: $0.pressure, time: $0.time)
-                    }
-                    drawElement.content = .ink(ink)
-                }
+                // A live ink move arrives as `frameOverride` (transient bbox);
+                // renderer.draw translates the stroke for it (I4/B13).
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     renderer.draw(
-                        drawElement, in: context, viewport: viewport,
+                        element, in: context, viewport: viewport,
+                        frameOverride: transientFrames[id],
                         isSelected: selection.contains(id)
                     )
                 }
