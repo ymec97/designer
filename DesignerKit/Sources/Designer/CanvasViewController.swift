@@ -1937,8 +1937,28 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 }
 
 extension CanvasViewController: NSMenuItemValidation {
+    /// Undo/redo are routed through the controller (it sits in the responder
+    /// chain) so we can BLOCK them while a read-only linked-board view is
+    /// showing — otherwise ⌘Z mutates the hidden document board with no visible
+    /// effect, which reads as undo being broken. When editing a text label the
+    /// field editor is earlier in the chain and handles ⌘Z itself, so in-field
+    /// undo is unaffected.
+    @objc func undo(_ sender: Any?) {
+        guard !canvasView.isReadOnly else { NSSound.beep(); return }
+        document.undoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard !canvasView.isReadOnly else { NSSound.beep(); return }
+        document.undoManager?.redo()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case Selector(("undo:")):
+            return !canvasView.isReadOnly && (document.undoManager?.canUndo ?? false)
+        case Selector(("redo:")):
+            return !canvasView.isReadOnly && (document.undoManager?.canRedo ?? false)
         case #selector(structurize(_:)):
             return canvasView.selection.contains { id in
                 if case .ink = document.board.elements[id]?.content { return true }
