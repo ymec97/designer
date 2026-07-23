@@ -89,7 +89,15 @@ public enum StrokeRecognizer {
         let perimeter = pathLength(points) + distance(points[0], points[points.count - 1])
         let area = polygonArea(points)
         let circularity = perimeter > 0 ? 4 * .pi * area / (perimeter * perimeter) : 0
-        if circularity > 0.82 {
+        // The convex hull is jitter-free, so its circularity is a far more
+        // reliable roundness measure for a wobbly hand-drawn circle, whose raw
+        // perimeter is inflated by tremor — that inflation pushed real circles
+        // below the gate and misfiled them as rectangles (B5).
+        let hullPerimeter = hull.count > 1
+            ? pathLength(hull) + distance(hull[hull.count - 1], hull[0]) : perimeter
+        let hullCircularity = hullPerimeter > 0
+            ? 4 * .pi * polygonArea(hull) / (hullPerimeter * hullPerimeter) : 0
+        if max(circularity, hullCircularity) > 0.80 {
             return .ellipse(bounds)
         }
 
@@ -122,9 +130,11 @@ public enum StrokeRecognizer {
             return toMidpoints < toBoxCorners ? .diamond(bounds) : .rectangle(bounds)
 
         default:
-            // Solid and cornered but not a clean triangle/quad (sloppy box,
-            // hexagon-ish): default to a rectangle block.
-            return .rectangle(bounds)
+            // Many small segments that never resolved into 3/4 clean corners
+            // is the signature of a round blob, not a box — prefer an ellipse
+            // when the (jitter-free) hull reads round-ish. Only genuinely
+            // cornered sloppy shapes fall through to a rectangle (B5).
+            return hullCircularity > 0.70 ? .ellipse(bounds) : .rectangle(bounds)
         }
     }
 
