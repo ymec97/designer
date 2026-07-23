@@ -19,6 +19,9 @@ public struct Board: Equatable, Sendable {
     public var groups: [Group]
     /// Recorded traffic journeys (F5), in panel order.
     public var flows: [Flow]
+    /// Flow compositions (serial/parallel hierarchies over `flows`), in panel
+    /// order. User-only — never crosses the agent wire.
+    public var compositions: [FlowComposition]
     public var extra: [String: JSONValue]
 
     public init(
@@ -31,6 +34,7 @@ public struct Board: Equatable, Sendable {
         elements: [Element] = [],
         groups: [Group] = [],
         flows: [Flow] = [],
+        compositions: [FlowComposition] = [],
         extra: [String: JSONValue] = [:]
     ) {
         self.schemaVersion = schemaVersion
@@ -42,6 +46,7 @@ public struct Board: Equatable, Sendable {
         self.elements = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
         self.groups = groups
         self.flows = flows
+        self.compositions = compositions
         self.extra = extra
     }
 
@@ -62,7 +67,7 @@ public struct Board: Equatable, Sendable {
 
 extension Board: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, id, title, createdAt, modifiedAt, layers, elements, groups, flows
+        case schemaVersion, id, title, createdAt, modifiedAt, layers, elements, groups, flows, compositions
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +92,7 @@ extension Board: Codable {
         }
         groups = try container.decodeIfPresent([Group].self, forKey: .groups) ?? []
         flows = try container.decodeIfPresent([Flow].self, forKey: .flows) ?? []
+        compositions = try container.decodeIfPresent([FlowComposition].self, forKey: .compositions) ?? []
         extra = try decoder.unknownFields(excluding: CodingKeys.knownKeys)
     }
 
@@ -102,6 +108,9 @@ extension Board: Codable {
         try container.encode(elements.values.sorted { $0.id < $1.id }, forKey: .elements)
         try container.encode(groups, forKey: .groups)
         try container.encode(flows, forKey: .flows)
+        if !compositions.isEmpty {
+            try container.encode(compositions, forKey: .compositions)
+        }
         try encoder.encodeUnknownFields(extra)
     }
 }
