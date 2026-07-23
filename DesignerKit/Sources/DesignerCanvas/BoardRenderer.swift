@@ -1440,9 +1440,14 @@ final class BoardRenderer {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         let size = attributed.size()
+        // A tight height equal to `size.height` clips glyph descenders (the
+        // bottom of "Cloud") once zoom makes the scale fractional and the line
+        // box rounds down. Give a couple of points of bottom headroom — the
+        // text stays top-anchored at origin.y, so the baseline doesn't shift.
         let rect = CGRect(
             x: origin.x, y: origin.y,
-            width: min(size.width, max(maxWidth, 10)), height: size.height
+            width: min(size.width, max(maxWidth, 10)).rounded(.up),
+            height: size.height.rounded(.up) + 2
         )
         attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
