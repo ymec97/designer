@@ -129,6 +129,18 @@ enum MainMenu {
                      action: #selector(CanvasView.zoomToFit(_:)),
                      keyEquivalent: "9")
         menu.addItem(.separator())
+        let captions = NSMenuItem(title: "Connector Captions", action: nil, keyEquivalent: "")
+        let captionsMenu = NSMenu(title: "Connector Captions")
+        for (title, tag) in [("Always", 0), ("On Focus", 1), ("Off", 2)] {
+            let item = captionsMenu.addItem(
+                withTitle: title,
+                action: Selector(("setCaptionMode:")),
+                keyEquivalent: "")
+            item.tag = tag
+        }
+        captions.submenu = captionsMenu
+        menu.addItem(captions)
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Command Palette",
                      action: Selector(("toggleCommandPalette:")),
                      keyEquivalent: "k")

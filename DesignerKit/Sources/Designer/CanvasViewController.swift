@@ -101,6 +101,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             }
             self.refreshFlowsPanel(board)
             self.refreshInspector()
+            self.evaluateDensitySuggestion(board)
         }
         canvasView.strokeFinished = { [weak self] id in
             self?.strokeFinished(id)
@@ -126,6 +127,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
         refreshVersionsPanel()
         installZoomHUD()
         installLinkedBoards()
+        installDensitySuggestion()
     }
 
     // MARK: Inspector (feature 2)
@@ -178,6 +180,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     var linkedBoardStack: [LinkedBoardFrame] = []
     let linkedViewModel = LinkedViewModel()
+    let densitySuggestionModel = DensitySuggestionModel()
     var linkPickerWindow: NSWindow?
     var linkedBoardSwoosh: NSSound?
 
@@ -271,11 +274,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             } else if let connectorStyle {
                 stylePanelModel.seed(from: connectorStyle, mode: .connector)
                 stylePanelModel.isVisible = true
-            } else if stylePanelModel.isVisible {
-                // An empty selection (deselect click, or ⌘Z removing the
-                // shape you just drew) does NOT slam the panel shut — it
-                // falls back to pending-shape mode. The header ✕ closes it.
-                stylePanelModel.seed(from: canvasView.pendingShapeStyle, mode: .shape)
+            } else {
+                // Nothing stylable is selected: hide the panel rather than
+                // lingering on the last shape's (or connector's) controls.
+                stylePanelModel.isVisible = false
             }
         }
     }
@@ -646,6 +648,30 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
             ),
             actionName: document.board.isSketchy ? "Clean Style" : "Hand-drawn Style"
         )
+    }
+
+    // MARK: Connector caption visibility
+
+    /// Sets the board-wide caption mode (undoable, stored in `extra`). `.always`
+    /// clears the key so the board reads as an unmodified default.
+    func applyCaptionMode(_ mode: Board.CaptionMode) {
+        guard mode != document.board.captionMode else { return }
+        let value: JSONValue? = mode == .always ? nil : .string(mode.rawValue)
+        let name: String
+        switch mode {
+        case .always: name = "Captions: Always"
+        case .onFocus: name = "Captions: On Focus"
+        case .off: name = "Captions: Off"
+        }
+        document.perform(.setExtra(key: Board.captionModeExtraKey, value: value), actionName: name)
+    }
+
+    @objc func setCaptionMode(_ sender: NSMenuItem) {
+        switch sender.tag {
+        case 1: applyCaptionMode(.onFocus)
+        case 2: applyCaptionMode(.off)
+        default: applyCaptionMode(.always)
+        }
     }
 
     // MARK: Zoom HUD (P1)
@@ -1949,6 +1975,10 @@ extension CanvasViewController: NSMenuItemValidation {
             return true
         case #selector(toggleSketchyStyle(_:)):
             menuItem.state = document.board.isSketchy ? .on : .off
+            return true
+        case #selector(setCaptionMode(_:)):
+            let mode: Board.CaptionMode = menuItem.tag == 1 ? .onFocus : (menuItem.tag == 2 ? .off : .always)
+            menuItem.state = document.board.captionMode == mode ? .on : .off
             return true
         case #selector(saveSelectionToLibrary(_:)):
             return !canvasView.selection.isEmpty

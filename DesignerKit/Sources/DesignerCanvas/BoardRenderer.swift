@@ -47,6 +47,21 @@ final class BoardRenderer {
         didSet { if sketchy != oldValue { textCache.removeAll() } }
     }
 
+    /// Board-wide connector caption visibility. `.onFocus` draws a caption
+    /// only for edges the view marks `emphasized` (selected / hovered / flow).
+    /// Mirrors `board.captionMode`; set by the canvas each pass.
+    var captionMode: Board.CaptionMode = .always
+
+    /// Whether an edge's caption should paint this pass, given the mode and
+    /// whether the view considers the edge focused.
+    private func shouldDrawCaption(emphasized: Bool) -> Bool {
+        switch captionMode {
+        case .always: return true
+        case .onFocus: return emphasized
+        case .off: return false
+        }
+    }
+
     /// Collision registry for connector captions — call once before each
     /// full edge pass so labels placed earlier repel the ones after.
     private var captionPlacer = EdgeGeometry.CaptionPlacer()
@@ -542,6 +557,7 @@ final class BoardRenderer {
         isSelected: Bool,
         isDangling: Bool = false,
         simplified: Bool = false,
+        emphasized: Bool = true,
         captionFraction: Double = 0.5,
         captionObstacles: ((Rect) -> [Rect])? = nil
     ) {
@@ -555,14 +571,16 @@ final class BoardRenderer {
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
-                            simplified: simplified, captionFraction: captionFraction,
+                            simplified: simplified, emphasized: emphasized,
+                            captionFraction: captionFraction,
                             captionObstacles: captionObstacles)
             context.endTransparencyLayer()
             context.restoreGState()
         } else {
             drawEdgeContent(edge, route: route, in: context, viewport: viewport,
                             isSelected: isSelected, isDangling: isDangling,
-                            simplified: simplified, captionFraction: captionFraction,
+                            simplified: simplified, emphasized: emphasized,
+                            captionFraction: captionFraction,
                             captionObstacles: captionObstacles)
         }
     }
@@ -575,6 +593,7 @@ final class BoardRenderer {
         isSelected: Bool,
         isDangling: Bool,
         simplified: Bool,
+        emphasized: Bool,
         captionFraction: Double,
         captionObstacles: ((Rect) -> [Rect])?
     ) {
@@ -645,8 +664,9 @@ final class BoardRenderer {
 
         // Label pill + well-known-key badges along the route. Placement is
         // collision-aware: pills dodge blocks AND each other, sliding along
-        // the route and nudging perpendicular on dense boards.
-        if viewport.scale >= Self.textVisibilityScale {
+        // the route and nudging perpendicular on dense boards. The caption
+        // mode can suppress it (Off) or restrict it to focused edges (On Focus).
+        if viewport.scale >= Self.textVisibilityScale, shouldDrawCaption(emphasized: emphasized) {
             var center = route.point(atFraction: captionFraction)
             if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
                 center = captionPlacer.place(
@@ -923,6 +943,24 @@ final class BoardRenderer {
         context.setLineWidth(1.5)
         context.addPath(path)
         context.strokePath()
+    }
+
+    /// Candidate anchor dots shown on a node while a connector endpoint is
+    /// dragged over it. The `selected` index (the slot the endpoint would snap
+    /// to) gets a filled highlight; the rest are small open dots.
+    func drawAnchorSlots(_ viewPoints: [CGPoint], selected: Int?, in context: CGContext) {
+        context.setStrokeColor(Palette.selection.cgColor)
+        context.setLineWidth(1.5)
+        for (index, point) in viewPoints.enumerated() {
+            let isSelected = index == selected
+            let radius: CGFloat = isSelected ? 5 : 3.5
+            let rect = CGRect(
+                x: point.x - radius, y: point.y - radius,
+                width: radius * 2, height: radius * 2)
+            context.setFillColor(isSelected ? Palette.selection.cgColor : Graphite.panel.cgColor)
+            context.fillEllipse(in: rect)
+            context.strokeEllipse(in: rect)
+        }
     }
 
     /// The grab dot on a selected connector (P5 bend affordance).

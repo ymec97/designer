@@ -387,6 +387,21 @@ public enum EdgeGeometry {
         }
     }
 
+    /// Whether a resolved route's polyline actually enters `rect` — as opposed
+    /// to the route's (often very large) bounding box merely overlapping it.
+    /// Rubber-band selection uses this so a connector is only caught when the
+    /// rectangle truly crosses the line, not the empty space it spans.
+    public static func route(_ route: Route, intersects rect: Rect) -> Bool {
+        let points = route.points
+        guard points.count >= 2 else {
+            return points.first.map(rect.contains) ?? false
+        }
+        for index in 0..<(points.count - 1) {
+            if segmentIntersects(rect, points[index], points[index + 1]) { return true }
+        }
+        return false
+    }
+
     private static func segmentIntersects(_ rect: Rect, _ a: Point, _ b: Point) -> Bool {
         // Liang–Barsky clip of segment against rect.
         let dx = b.x - a.x, dy = b.y - a.y
@@ -600,6 +615,47 @@ public enum EdgeGeometry {
         case .right: return Point(x: frame.maxX, y: frame.y + frame.height * t)
         default: return Point(x: frame.midX, y: frame.midY)
         }
+    }
+
+    // MARK: Discrete anchor slots
+
+    /// The normalized offsets (near / mid / far) a connector endpoint can be
+    /// pinned to on each face. Kept small and centralized so hit-testing and
+    /// the drag-feedback dots agree on one layout; tune here to change density.
+    public static let anchorSlotOffsets: [Double] = [0.25, 0.5, 0.75]
+
+    /// Every discrete anchor slot on a node frame — the points a user can drag
+    /// a connector endpoint between to de-clutter a busy attachment.
+    public static func anchorSlots(
+        for frame: Rect
+    ) -> [(side: Anchor.Side, offset: Double, point: Point)] {
+        let sides: [Anchor.Side] = [.top, .right, .bottom, .left]
+        return sides.flatMap { side in
+            anchorSlotOffsets.map { offset in
+                (side: side, offset: offset, point: point(on: frame, side: side, offset: offset))
+            }
+        }
+    }
+
+    /// The discrete anchor slot closest to a world point — used when a user
+    /// drops a dragged endpoint onto a node, so it pins to a fixed point
+    /// (which also opts it out of `anchorSpread` auto-distribution) instead of
+    /// re-auto-picking a face.
+    public static func nearestAnchorSlot(
+        to worldPoint: Point, on frame: Rect
+    ) -> (side: Anchor.Side, offset: Double) {
+        var best: (side: Anchor.Side, offset: Double) = (.right, 0.5)
+        var bestDistance = Double.greatestFiniteMagnitude
+        for slot in anchorSlots(for: frame) {
+            let dx = slot.point.x - worldPoint.x
+            let dy = slot.point.y - worldPoint.y
+            let distance = dx * dx + dy * dy
+            if distance < bestDistance {
+                bestDistance = distance
+                best = (slot.side, slot.offset)
+            }
+        }
+        return best
     }
 
     // MARK: Orthogonal routing

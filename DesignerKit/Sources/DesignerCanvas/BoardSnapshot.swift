@@ -39,6 +39,10 @@ public enum BoardSnapshot {
 
         let renderer = BoardRenderer()
         renderer.sketchy = board.isSketchy
+        // Honor the board's caption mode in exports/thumbnails: Off hides all
+        // captions; On Focus has no interactive focus in a static image, so its
+        // edges (emphasized defaults true) render all captions like Always.
+        renderer.captionMode = board.captionMode
         let frames = board.frameProvider()
         let offsets = EdgeGeometry.parallelOffsets(in: board)
         let spread = EdgeGeometry.anchorSpread(in: board)

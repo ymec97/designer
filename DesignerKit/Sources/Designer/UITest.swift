@@ -66,10 +66,13 @@ final class UITestDriver {
         step26LabelEditorNeverBlanketsToolbar()
         step27SnapOverlapDragByMouse()
         step28StylePanelPolish()
+        step30CaptionModeAndDensityNudge()
+        step31RubberBandExcludesDistantConnector()
+        step32EndpointSnapsToDiscreteSlot()
         step29LinkedBoards()
 
         if failures.isEmpty {
-            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish, linked-boards verified")
+            print("UI-TEST PASS: create, label, drag, render, undo, connect, follow, dangling+snap-in, ink, sketch-to-structure, layers, library, llm+export, simulate, clipboard, agent-proposal, flows, groups+boundaries, inspector, versions, bend, parallel-connect, empty-ghost, space-pan, endpoint-reattach, shapes+styles, editor-clamp, mouse-snap+overlap+drag, style-panel-polish, caption-mode+density-nudge, rubber-band-precise, endpoint-slot-snap, linked-boards verified")
             exit(0)
         } else {
             for failure in failures {
@@ -1106,7 +1109,8 @@ final class UITestDriver {
         pumpRunLoop()
         expect(!controller.shapePickerVisibleForTesting, "'s' toggles the picker closed")
 
-        // (2) Undo after creating a shape keeps the style panel open.
+        // (2) Undo after creating a shape empties the selection, which hides
+        // the style panel (nothing stylable is selected in the select tool).
         canvasView.viewport = CanvasViewport(origin: Point(x: -320, y: 5900), scale: 1)
         canvasView.pendingShapeStyle = Style(fill: Style.noFill)
         canvasView.activateShapeTool(shape: .rectangle, lockAspect: false)
@@ -1124,8 +1128,8 @@ final class UITestDriver {
         expect(controller.stylePanelModel.isVisible, "panel visible after drawing a shape")
         document.undoManager?.undo()
         pumpRunLoop()
-        expect(controller.stylePanelModel.isVisible,
-               "undoing the fresh shape must NOT close the style panel")
+        expect(!controller.stylePanelModel.isVisible,
+               "undoing the fresh shape empties the selection, hiding the style panel")
 
         // (3) A web-copied SVG pastes as an image block.
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"60\"><rect width=\"80\" height=\"60\" fill=\"#4A90D9\"/></svg>"
@@ -1163,7 +1167,167 @@ final class UITestDriver {
         document.undoManager?.undo()
         pumpRunLoop()
         canvasView.select([])
-        controller.stylePanelModel.isVisible = false
+        pumpRunLoop()
+        expect(!controller.stylePanelModel.isVisible,
+               "deselecting a connector hides the style panel (no revert to shape mode)")
+    }
+
+    /// Caption visibility mode (Always / On Focus / Off) plus the one-time
+    /// density nudge that suggests On Focus once a board gets busy.
+    private func step30CaptionModeAndDensityNudge() {
+        guard let controller = window.contentViewController as? CanvasViewController else {
+            expect(false, "no controller for caption/density"); return
+        }
+        let layer = document.board.layers[0].id
+        let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "dense-a"),
+                                            frame: Rect(x: 0, y: 6600, width: 120, height: 60))))
+        let b = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "dense-b"),
+                                            frame: Rect(x: 400, y: 6600, width: 120, height: 60))))
+        var ops: [BoardOperation] = [.insertElement(a), .insertElement(b)]
+        var edgeIDs: [ElementID] = []
+        // One past the threshold — enough to trip the nudge.
+        for _ in 0...CanvasViewController.densitySuggestionThreshold {
+            let e = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                            content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                                to: .element(b.id, side: nil, offset: nil))))
+            edgeIDs.append(e.id)
+            ops.append(.insertElement(e))
+        }
+        document.perform(.batch(ops), actionName: "Dense Graph")
+        pumpRunLoop()
+        expect(controller.densitySuggestionModel.isVisible,
+               "density nudge appears once the connector count crosses the threshold")
+
+        // Dismiss, add one more connector: it must NOT re-fire (shown once).
+        controller.densitySuggestionModel.isVisible = false
+        let extra = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                            content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                                to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.insertElement(extra), actionName: "One More Connector")
+        pumpRunLoop()
+        expect(!controller.densitySuggestionModel.isVisible,
+               "the nudge does not re-fire for every new connector past the threshold")
+
+        // Caption mode cycles through all three states (undoable, via extra).
+        controller.applyCaptionMode(.onFocus)
+        expect(document.board.captionMode == .onFocus, "switch to On Focus")
+        controller.applyCaptionMode(.off)
+        expect(document.board.captionMode == .off, "switch to Off")
+        controller.applyCaptionMode(.always)
+        expect(document.board.captionMode == .always, "back to Always clears the setting")
+
+        let cleanup = (edgeIDs + [extra.id, a.id, b.id]).filter { document.board.elements[$0] != nil }
+        document.perform(.batch(cleanup.map { .removeElement($0) }), actionName: "Cleanup Dense Graph")
+        pumpRunLoop()
+    }
+
+    /// Rubber-band selection must test the connector's actual line, not its
+    /// (endpoint-spanning) bounding box — a band in the empty diagonal space
+    /// a connector crosses used to grab it.
+    private func step31RubberBandExcludesDistantConnector() {
+        let layer = document.board.layers[0].id
+        let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "rb-a"),
+                                            frame: Rect(x: 0, y: 7100, width: 20, height: 20))))
+        let b = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "rb-b"),
+                                            frame: Rect(x: 600, y: 6900, width: 20, height: 20))))
+        let edge = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                           content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                               to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(edge)]),
+                         actionName: "Rubber-band Graph")
+        canvasView.reveal(worldRect: Rect(x: -40, y: 6850, width: 720, height: 480))
+        pumpRunLoop()
+
+        func rubberBand(from w1: Point, to w2: Point) {
+            canvasView.select([])
+            pumpRunLoop()
+            let p1 = canvasView.viewport.toView(w1)
+            let p2 = canvasView.viewport.toView(w2)
+            send(.leftMouseDown, at: p1, clickCount: 1)
+            for step in 1...5 {
+                let t = CGFloat(step) / 5
+                send(.leftMouseDragged, at: CGPoint(
+                    x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t), clickCount: 1)
+            }
+            send(.leftMouseUp, at: p2, clickCount: 1)
+            pumpRunLoop()
+        }
+
+        // A box in the top-left empty space: inside the route's bbox, far from
+        // the line.
+        rubberBand(from: Point(x: 60, y: 6900), to: Point(x: 120, y: 6960))
+        expect(!canvasView.selection.contains(edge.id),
+               "rubber-band over empty diagonal space does NOT grab the connector")
+        // A box straddling the line near its midpoint really crosses it.
+        rubberBand(from: Point(x: 250, y: 6960), to: Point(x: 360, y: 7040))
+        expect(canvasView.selection.contains(edge.id),
+               "rubber-band crossing the connector line selects it")
+        // Nodes still select on partial overlap (intentional, unchanged).
+        rubberBand(from: Point(x: 560, y: 6880), to: Point(x: 612, y: 6912))
+        expect(canvasView.selection.contains(b.id),
+               "rubber-band partially overlapping a node still selects it")
+
+        canvasView.select([])
+        document.perform(.batch([.removeElement(edge.id), .removeElement(a.id), .removeElement(b.id)]),
+                         actionName: "Cleanup Rubber-band Graph")
+        pumpRunLoop()
+    }
+
+    /// Dragging a connector endpoint onto a block pins it to a discrete anchor
+    /// slot (fixed side + offset) rather than the auto (nil) anchor, so it can
+    /// be re-placed to de-clutter a busy attachment.
+    private func step32EndpointSnapsToDiscreteSlot() {
+        let layer = document.board.layers[0].id
+        let a = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "slot-a"),
+                                            frame: Rect(x: 0, y: 7400, width: 120, height: 120))))
+        let b = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                        content: .node(Node(semantic: NodeSemantic(name: "slot-b"),
+                                            frame: Rect(x: 420, y: 7400, width: 120, height: 120))))
+        let edge = Element(layerIDs: [layer], sortKey: document.board.topSortKey,
+                           content: .edge(Edge(from: .element(a.id, side: nil, offset: nil),
+                                               to: .element(b.id, side: nil, offset: nil))))
+        document.perform(.batch([.insertElement(a), .insertElement(b), .insertElement(edge)]),
+                         actionName: "Anchor-slot Graph")
+        canvasView.reveal(worldRect: Rect(x: -40, y: 7350, width: 640, height: 240))
+        canvasView.select([edge.id])
+        pumpRunLoop()
+
+        func currentEdge() -> Edge? { document.board.elements[edge.id]?.edge }
+        guard let route = EdgeGeometry.route(
+            for: currentEdge()!, frames: document.board.frameProvider()) else {
+            expect(false, "no route for anchor-slot edge"); return
+        }
+        // Grab the arrival grip (at b) and drag it up toward b's top edge, so it
+        // snaps to a top-face slot rather than the default facing-side midpoint.
+        let endView = canvasView.viewport.toView(route.end)
+        let target = canvasView.viewport.toView(Point(x: 450, y: 7402))
+        send(.leftMouseDown, at: endView, clickCount: 1)
+        for step in 1...5 {
+            let t = CGFloat(step) / 5
+            send(.leftMouseDragged, at: CGPoint(
+                x: endView.x + (target.x - endView.x) * t,
+                y: endView.y + (target.y - endView.y) * t), clickCount: 1)
+        }
+        send(.leftMouseUp, at: target, clickCount: 1)
+        pumpRunLoop()
+
+        if case .element(let id, let side, let offset)? = currentEdge()?.to {
+            expect(id == b.id, "endpoint stays attached to the target block")
+            expect(side != nil && offset != nil,
+                   "dropping on a block pins the endpoint to a discrete slot (non-nil side+offset)")
+            expect(side == .top, "dragging toward the top edge snaps to the top face")
+        } else {
+            expect(false, "endpoint should remain attached to a block, not detach")
+        }
+
+        canvasView.select([])
+        document.perform(.batch([.removeElement(edge.id), .removeElement(a.id), .removeElement(b.id)]),
+                         actionName: "Cleanup Anchor-slot Graph")
         pumpRunLoop()
     }
 

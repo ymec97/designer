@@ -22,6 +22,7 @@ public final class CanvasView: NSView {
                 dismissLabelEditorWithoutCommit()
             }
             renderer.sketchy = board.isSketchy
+            renderer.captionMode = board.captionMode
             parallelOffsetCache = EdgeGeometry.parallelOffsets(in: board)
             anchorSpreadCache = EdgeGeometry.anchorSpread(in: board)
             routeCache = SpatialIndex.resolveRoutes(for: board)
@@ -309,8 +310,20 @@ public final class CanvasView: NSView {
 
     /// Live waypoint list during a `.bendEdge` drag; committed on up.
     private var transientBend: (id: ElementID, waypoints: [Point])?
-    /// Live endpoint position during a `.moveEndpoint` drag.
-    private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point)?
+    /// Live endpoint position during a `.moveEndpoint` drag. `anchor` is the
+    /// resolved attachment the endpoint would commit to — a discrete node slot
+    /// when hovering a block, else a free (dangling) point.
+    private var transientEndpoint: (id: ElementID, end: EdgeEndpoint, point: Point, anchor: DesignerModel.Anchor)?
+
+    /// The connector under the cursor. Tracked only to reveal its caption in
+    /// On-Focus mode (hover-to-peek); redraws only when it changes and the
+    /// mode cares, so it costs nothing in Always / Off.
+    private var hoveredEdgeID: ElementID? {
+        didSet {
+            guard hoveredEdgeID != oldValue, board.captionMode == .onFocus else { return }
+            needsDisplay = true
+        }
+    }
 
     /// World-space width of the border band that starts a connection drag
     /// instead of a move (in view pixels, so it feels constant at any zoom).
@@ -408,8 +421,8 @@ public final class CanvasView: NSView {
             }
             if let transientEndpoint, transientEndpoint.id == element.id, var edge = element.edge {
                 switch transientEndpoint.end {
-                case .from: edge.from = .free(transientEndpoint.point)
-                case .to: edge.to = .free(transientEndpoint.point)
+                case .from: edge.from = transientEndpoint.anchor
+                case .to: edge.to = transientEndpoint.anchor
                 }
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames ?? board.frameProvider())
@@ -544,11 +557,17 @@ public final class CanvasView: NSView {
                 withFocusAlpha(context, dimmed: isDimmed(element)) {
                     if let edge = element.edge {
                         if let route = routeFor(element) {
+                            // "Focused" for On-Focus captions: selected, part of
+                            // the emphasized flow set, or under the cursor.
+                            let emphasized = selection.contains(element.id)
+                                || (emphasizedElements?.contains(element.id) ?? false)
+                                || hoveredEdgeID == element.id
                             renderer.drawEdge(
                                 edge, route: route,
                                 in: context, viewport: viewport,
                                 isSelected: selection.contains(element.id),
                                 isDangling: danglingEdgeIDs.contains(element.id),
+                                emphasized: emphasized,
                                 captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5,
                                 captionObstacles: captionObstacles
                             )
@@ -1337,6 +1356,15 @@ public final class CanvasView: NSView {
         case .moveEndpoint(_, _, let target):
             if let target, let frame = board.frameProvider(overrides: transientFrames)(target) {
                 renderer.highlightConnectTarget(viewport.toView(frame), in: context)
+                // Show the discrete slots the endpoint can snap to, with the
+                // one it would land on highlighted.
+                let slots = EdgeGeometry.anchorSlots(for: frame)
+                var selected: Int?
+                if case .element(_, let side, let offset)? = transientEndpoint?.anchor {
+                    selected = slots.firstIndex { $0.side == side && $0.offset == offset }
+                }
+                renderer.drawAnchorSlots(
+                    slots.map { viewport.toView($0.point) }, selected: selected, in: context)
             }
 
         case .shapeDraw(let start, let current):
@@ -1602,12 +1630,15 @@ public final class CanvasView: NSView {
 
         case .moveEndpoint(let id, let end, _):
             let world = viewport.toWorld(point)
-            transientEndpoint = (id, end, world)
             // Highlight the block the endpoint would attach to — anywhere on
             // the other end's block means "cancel", not a self-loop.
             let otherEnd = board.elements[id]?.edge.map { end == .from ? $0.to : $0.from }
             let candidate = editableNode(at: point)?.id
             let targetID = candidate == otherEnd?.elementID ? nil : candidate
+            // Over a block: snap to its nearest discrete anchor slot so the
+            // endpoint jumps between fixed points. Off a block: dangle free.
+            let anchor = endpointAnchor(forTarget: targetID, droppedAt: world)
+            transientEndpoint = (id, end, world, anchor)
             gesture = .moveEndpoint(id: id, end: end, target: targetID)
             needsDisplay = true
 
@@ -1718,8 +1749,17 @@ public final class CanvasView: NSView {
                 width: Double(band.width) / viewport.scale,
                 height: Double(band.height) / viewport.scale
             )
-            let hitIDs = board.expandSelectionToGroups(
-                spatialIndex.query(worldBand).filter { isEditable(id: $0) })
+            // The spatial index answers by bounding box; a connector's box
+            // spans both endpoints, so it can overlap the band while the actual
+            // line is nowhere near it. Require the route to truly cross the band
+            // for edges — nodes/ink keep partial-overlap selection (intentional).
+            let candidates = spatialIndex.query(worldBand).filter { isEditable(id: $0) }
+            let precise = candidates.filter { id in
+                guard board.elements[id]?.edge != nil else { return true }
+                guard let route = routeCache[id] else { return false }
+                return EdgeGeometry.route(route, intersects: worldBand)
+            }
+            let hitIDs = board.expandSelectionToGroups(precise)
             if event.modifierFlags.contains(.shift) {
                 selection.formUnion(hitIDs)
             } else {
@@ -1803,12 +1843,9 @@ public final class CanvasView: NSView {
                 // self-loop connector would be meaningless), as is a drop
                 // that never moved.
                 if targetID != otherEnd.elementID {
-                    let anchor: DesignerModel.Anchor
-                    if let targetID {
-                        anchor = .element(targetID, side: nil, offset: nil)
-                    } else {
-                        anchor = .free(dragged.point)
-                    }
+                    // Reuse the anchor resolved during the drag: a discrete
+                    // node slot when over a block, else a free dangling point.
+                    let anchor = dragged.anchor
                     if end == .from { edge.from = anchor } else { edge.to = anchor }
                     element.content = .edge(edge)
                     delegate?.canvasView(
@@ -2597,6 +2634,20 @@ public final class CanvasView: NSView {
         return candidates.max { ($0.sortKey, $0.id) < ($1.sortKey, $1.id) }
     }
 
+    /// The anchor a dragged connector endpoint should commit to: the nearest
+    /// discrete slot on the target block (so it pins to a fixed point the user
+    /// can later re-pick to de-clutter), or a free dangling point off any block.
+    private func endpointAnchor(
+        forTarget targetID: ElementID?, droppedAt world: Point
+    ) -> DesignerModel.Anchor {
+        guard let targetID,
+              let frame = board.frameProvider(overrides: transientFrames)(targetID) else {
+            return .free(world)
+        }
+        let slot = EdgeGeometry.nearestAnchorSlot(to: world, on: frame)
+        return .element(targetID, side: slot.side, offset: slot.offset)
+    }
+
     private func preciseHit(_ element: Element, world: Point, tolerance: Double) -> Bool {
         switch element.content {
         case .node(let node):
@@ -2663,7 +2714,16 @@ public final class CanvasView: NSView {
     // MARK: Cursor feedback
 
     public override func mouseMoved(with event: NSEvent) {
-        updateCursor(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(at: point)
+        // Hover-to-peek captions: only worth a hit-test when the mode reveals
+        // captions on focus; otherwise leave `hoveredEdgeID` untouched/cleared.
+        if board.captionMode == .onFocus {
+            let hit = editableElement(at: point)
+            hoveredEdgeID = hit?.edge != nil ? hit?.id : nil
+        } else if hoveredEdgeID != nil {
+            hoveredEdgeID = nil
+        }
     }
 
     private func updateCursor(at point: CGPoint?) {
