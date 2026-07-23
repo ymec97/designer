@@ -134,7 +134,7 @@ struct StyleControls: View {
 
     /// Graphite-friendly quick colors (fills and strokes share them).
     static let quickColors: [String] = [
-        "#4A90D9", "#5FA55A", "#E8943A", "#9B6BD3",
+        "#FFFFFF", "#4A90D9", "#5FA55A", "#E8943A", "#9B6BD3",
         "#D95757", "#3AAFA9", "#FFF2CC", "#8B95A5",
     ]
 
@@ -180,9 +180,18 @@ struct StyleControls: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.mode == .pencil ? "Width" : "Outline width")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(model.mode == .pencil ? "Width" : "Outline width")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    // Percentage of the slider's full range (0.5…8 pt), so the
+                    // readout matches the Opacity row's "NN%" style.
+                    Text("\(Int((currentWidth - 0.5) / (8 - 0.5) * 100))%")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
                 HStack(spacing: 8) {
                     Slider(value: Binding(
                         get: { currentWidth },
