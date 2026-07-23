@@ -1029,12 +1029,16 @@ public final class CanvasView: NSView {
 
     private var cameraAnimation: (start: CanvasViewport, target: CanvasViewport,
                                   startTime: TimeInterval, duration: TimeInterval,
-                                  completion: (() -> Void)?)?
+                                  anchorWorld: Point?, completion: (() -> Void)?)?
     private var cameraTimer: Timer?
 
     /// Glides the camera to `target` (ease-in-out; scale lerped in log space
-    /// so zooming feels linear). Completion fires exactly at the target.
+    /// so zooming feels linear). Completion fires exactly at the target. When
+    /// `anchorWorld` is given, that world point's on-screen position is
+    /// interpolated directly, so the motion zooms INTO it (used for the
+    /// linked-board dive, so it doesn't drift to the viewport middle first).
     public func animateViewport(to target: CanvasViewport, duration: TimeInterval = 0.32,
+                                anchorWorld: CGPoint? = nil,
                                 completion: (() -> Void)? = nil) {
         cameraTimer?.invalidate()
         guard duration > 0.01 else {
@@ -1042,7 +1046,8 @@ public final class CanvasView: NSView {
             completion?()
             return
         }
-        cameraAnimation = (viewport, target, CACurrentMediaTime(), duration, completion)
+        let anchor = anchorWorld.map { Point(x: Double($0.x), y: Double($0.y)) }
+        cameraAnimation = (viewport, target, CACurrentMediaTime(), duration, anchor, completion)
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
             guard let self, let animation = self.cameraAnimation else {
                 timer.invalidate()
@@ -1054,10 +1059,23 @@ public final class CanvasView: NSView {
             let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
             let logStart = log(animation.start.scale), logEnd = log(animation.target.scale)
             let scale = exp(logStart + (logEnd - logStart) * eased)
-            let origin = Point(
-                x: animation.start.origin.x + (animation.target.origin.x - animation.start.origin.x) * eased,
-                y: animation.start.origin.y + (animation.target.origin.y - animation.start.origin.y) * eased
-            )
+            let origin: Point
+            if let anchor = animation.anchorWorld {
+                // Keep the anchor's screen position moving smoothly from its
+                // start mapping to its target mapping, so the zoom homes in on
+                // the node instead of the camera sliding after a center zoom.
+                let startScreen = animation.start.toView(anchor)
+                let endScreen = animation.target.toView(anchor)
+                let screenX = startScreen.x + (endScreen.x - startScreen.x) * eased
+                let screenY = startScreen.y + (endScreen.y - startScreen.y) * eased
+                origin = Point(x: anchor.x - Double(screenX) / scale,
+                               y: anchor.y - Double(screenY) / scale)
+            } else {
+                origin = Point(
+                    x: animation.start.origin.x + (animation.target.origin.x - animation.start.origin.x) * eased,
+                    y: animation.start.origin.y + (animation.target.origin.y - animation.start.origin.y) * eased
+                )
+            }
             self.viewport = CanvasViewport(origin: origin, scale: scale)
             if t >= 1 {
                 timer.invalidate()

@@ -291,23 +291,28 @@ extension CanvasViewController {
         ))
 
         playSwoosh()
-        // Zoom INTO the node — the camera dives until the block fills the
-        // screen — then the linked board fades in at a fitted camera.
+        // One continuous dive INTO the node: the camera zooms toward the node
+        // center (kept anchored so it doesn't drift to the viewport middle
+        // first), the board is swapped at peak zoom under cover of the motion,
+        // and we continue straight into the linked board's fitted camera — no
+        // stop-and-move. ~30% slower than before for a smoother "wow" moment.
         let dive = viewportDivingInto(node.frame)
-        canvasView.animateViewport(to: dive, duration: 0.34) { [weak self] in
+        let nodeCenter = CGPoint(x: node.frame.midX, y: node.frame.midY)
+        canvasView.animateViewport(to: dive, duration: 0.44, anchorWorld: nodeCenter) { [weak self] in
             guard let self else { return }
             self.canvasView.board = target
             self.canvasView.isReadOnly = true
             var fitted = self.canvasView.viewport
             let content = target.contentBounds() ?? Rect(x: 0, y: 0, width: 800, height: 500)
             fitted.fit(content, in: self.canvasView.bounds.size)
-            // Arrive slightly zoomed-out from the fit, then settle — reads
-            // as "landing inside".
+            // Continue the SAME inward motion: start a touch tighter than the
+            // fit and ease out to it, so it reads as one seamless arrival
+            // rather than a second, separate camera move.
             var from = fitted
-            from.setScale(fitted.scale * 1.35,
+            from.setScale(fitted.scale * 1.18,
                           at: CGPoint(x: self.canvasView.bounds.midX, y: self.canvasView.bounds.midY))
             self.canvasView.viewport = from
-            self.canvasView.animateViewport(to: fitted, duration: 0.22)
+            self.canvasView.animateViewport(to: fitted, duration: 0.29)
             self.linkedViewModel.title = target.title
             self.linkedViewModel.depth = self.linkedBoardStack.count
             self.linkedViewModel.isActive = true
@@ -324,7 +329,10 @@ extension CanvasViewController {
         canvasView.board = poppingToRoot ? document.board : frame.board
         canvasView.isReadOnly = !poppingToRoot
         canvasView.viewport = viewportDivingInto(frame.enteredNodeFrame)
-        canvasView.animateViewport(to: frame.savedViewport, duration: 0.34)
+        // Pull back out FROM the node, anchored on it, ~30% slower to match the
+        // dive — one smooth reverse of the entry.
+        let nodeCenter = CGPoint(x: frame.enteredNodeFrame.midX, y: frame.enteredNodeFrame.midY)
+        canvasView.animateViewport(to: frame.savedViewport, duration: 0.44, anchorWorld: nodeCenter)
         if poppingToRoot {
             linkedViewModel.isActive = false
             linkedViewModel.depth = 0
