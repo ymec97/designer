@@ -1749,8 +1749,13 @@ public final class CanvasView: NSView {
         // The band wins even when a connector lies on top of the border
         // (its anchor sits exactly there — the just-created connector would
         // otherwise swallow the next connection drag as a bend/selection).
+        // BUT only for FILLED / image nodes: a no-fill node (a grouping
+        // outline) is hittable ONLY on its border, so if the connect band
+        // claimed it there'd be no way to select or move it — its border must
+        // select/move instead (I1). Real connections start from solid blocks.
         let bandNode = (hit?.node != nil ? hit : editableNode(at: point))
-        if let bandNode, !event.modifierFlags.contains(.shift),
+        let bandNodeConnectable = bandNode?.node.map { $0.style.hasFill || $0.style.image != nil } ?? false
+        if let bandNode, bandNodeConnectable, !event.modifierFlags.contains(.shift),
            isInConnectBand(point, of: bandNode) {
             gesture = .connect(from: bandNode.id, current: point, target: nil)
             return
@@ -3051,7 +3056,11 @@ public final class CanvasView: NSView {
                $0.rect(around: handleBox).insetBy(dx: -3, dy: -3).contains(point)
            }) {
             handle.cursor.set()
-        } else if let hit = editableElement(at: point), hit.node != nil, isInConnectBand(point, of: hit) {
+        } else if let hit = editableElement(at: point), let node = hit.node,
+                  node.style.hasFill || node.style.image != nil,
+                  isInConnectBand(point, of: hit) {
+            // Only solid blocks show the connect crosshair on their border; a
+            // no-fill outline shows the normal arrow so it reads as movable (I1).
             NSCursor.crosshair.set()
         } else {
             NSCursor.arrow.set()
