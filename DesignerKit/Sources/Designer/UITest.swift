@@ -164,12 +164,29 @@ final class UITestDriver {
 
     private func step1CreateBlockByDoubleClick() {
         let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        // Double-click on empty canvas creates a borderless TEXT BOX (v0.10 F5),
+        // not a block. Verify that, then clear it and add a real block via the
+        // ⌘B path (which the block-centric steps 2–9 depend on).
         click(at: center, clickCount: 1)
         click(at: center, clickCount: 2)
         pumpRunLoop()
+        let notes = document.board.elements.values.filter {
+            if case .note = $0.content { return true }; return false
+        }
+        expect(notes.count == 1, "double-click creates 1 text box, board has \(notes.count)")
+        expect(canvasView.selection.count == 1, "new text box should be selected")
 
+        // End label editing and remove the text box so the board starts clean.
+        window.makeFirstResponder(canvasView)
+        for note in notes { document.perform(.removeElement(note.id), actionName: "Clear Test Note") }
+        pumpRunLoop()
+
+        // Now the block the rest of the flow uses (⌘B → adds a block and opens
+        // its label editor for step 2).
+        canvasView.addBlock(nil)
+        pumpRunLoop()
         let nodes = document.board.elements.values.filter { $0.node != nil }
-        expect(nodes.count == 1, "double-click should create 1 block, board has \(nodes.count)")
+        expect(nodes.count == 1, "adding a block yields 1 block, board has \(nodes.count)")
         expect(canvasView.selection.count == 1, "new block should be selected")
     }
 
