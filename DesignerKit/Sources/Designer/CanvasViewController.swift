@@ -183,14 +183,17 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     let densitySuggestionModel = DensitySuggestionModel()
     var linkPickerWindow: NSWindow?
     var linkedBoardSwoosh: NSSound?
+    var brokenLinkPopover: NSPopover?
 
     private func installStylePanel() {
         let panel = StylePanelContainer(
             model: stylePanelModel,
             actions: StylePanelActions(
                 styleChanged: { [weak self] style in self?.stylePanelEdited(style) },
-                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront() },
-                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack() },
+                bringToFront: { [weak self] in self?.canvasView.bringSelectionToFront(); self?.refreshStylePanel() },
+                sendToBack: { [weak self] in self?.canvasView.sendSelectionToBack(); self?.refreshStylePanel() },
+                stepForward: { [weak self] in self?.canvasView.stepSelectionForward(); self?.refreshStylePanel() },
+                stepBackward: { [weak self] in self?.canvasView.stepSelectionBackward(); self?.refreshStylePanel() },
                 close: { [weak self] in
                     self?.stylePanelModel.isVisible = false
                     self?.view.window?.makeFirstResponder(self?.canvasView)
@@ -205,18 +208,60 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
 
     /// A style edit lands where the panel's mode points: the pencil, the
     /// pending shape, or the live selection (one undo step per edit).
+    /// Populate the style panel's layer chip + z-position readout (F8) for a
+    /// single non-connector selection; clear it otherwise.
+    private func updateZOrderReadout() {
+        let sel = canvasView.selection
+        guard sel.count == 1, let id = sel.first,
+              let element = document.board.elements[id], element.edge == nil else {
+            stylePanelModel.layerChipText = nil
+            stylePanelModel.zPositionText = nil
+            stylePanelModel.canStepForward = false
+            stylePanelModel.canStepBackward = false
+            return
+        }
+        let layerNames = element.layerIDs.compactMap { lid in
+            document.board.layers.first { $0.id == lid }?.name
+        }
+        stylePanelModel.layerChipText = layerNames.count > 1 ? "Mixed" : (layerNames.first ?? "—")
+        if let z = canvasView.zPosition(of: id) {
+            stylePanelModel.zPositionText = "\(Self.ordinal(z.rank)) from front of \(z.total)"
+        } else {
+            stylePanelModel.zPositionText = nil
+        }
+        stylePanelModel.canStepForward = canvasView.canStepSelection(forward: true)
+        stylePanelModel.canStepBackward = canvasView.canStepSelection(forward: false)
+    }
+
+    private static func ordinal(_ n: Int) -> String {
+        let ones = n % 10, tens = (n / 10) % 10
+        let suffix: String
+        if tens == 1 { suffix = "th" }
+        else if ones == 1 { suffix = "st" }
+        else if ones == 2 { suffix = "nd" }
+        else if ones == 3 { suffix = "rd" }
+        else { suffix = "th" }
+        return "\(n)\(suffix)"
+    }
+
     private func stylePanelEdited(_ style: Style) {
         switch stylePanelModel.mode {
         case .pencil:
             canvasView.pendingInkStyle = style
         case .shape:
             canvasView.pendingShapeStyle = style
-        case .selection, .connector:
+        case .selection, .connector, .image:
             let operations = canvasView.selection.compactMap { id -> BoardOperation? in
                 guard var element = document.board.elements[id] else { return nil }
                 switch element.content {
                 case .node(var node):
-                    node.style = style
+                    // The panel never edits the embedded image or the extra
+                    // bag (board links), so preserve them — otherwise editing
+                    // an SVG node's text size would wipe its image.
+                    var newStyle = style
+                    newStyle.image = node.style.image
+                    newStyle.extra = node.style.extra
+                    node.style = newStyle
                     element.content = .node(node)
                 case .ink(var ink):
                     ink.style = style
@@ -244,6 +289,13 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     /// armed, selection when styleable elements are selected — hidden
     /// otherwise.
     func refreshStylePanel() {
+        // Keep the canvas's "left panel showing" signal in sync on every exit
+        // so newly-created elements can auto-pan clear of it (B3), and refresh
+        // the z-order readout (F8).
+        defer {
+            canvasView.leftPanelIsVisible = stylePanelModel.isVisible || inspectorModel.visible
+            updateZOrderReadout()
+        }
         if canvasView.isReadOnly {
             stylePanelModel.isVisible = false
             return
@@ -269,7 +321,10 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
                 }
             }
             if let first = styleable.first {
-                stylePanelModel.seed(from: first, mode: .selection)
+                // A single image/SVG node gets the restricted panel: layers +
+                // text size only (F7).
+                let singleImageNode = canvasView.selection.count == 1 && first.image != nil
+                stylePanelModel.seed(from: first, mode: singleImageNode ? .image : .selection)
                 stylePanelModel.isVisible = true
             } else if let connectorStyle {
                 stylePanelModel.seed(from: connectorStyle, mode: .connector)

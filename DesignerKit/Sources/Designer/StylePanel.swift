@@ -11,6 +11,7 @@ final class StylePanelModel: ObservableObject {
         case shape      // Shape tool: styles the NEXT dragged shape
         case selection  // Select tool: restyles the selected element(s)
         case connector  // Select tool with a connector selected
+        case image      // Select tool with an image/SVG node: layers + text size only
 
         var title: String {
             switch self {
@@ -18,12 +19,15 @@ final class StylePanelModel: ObservableObject {
             case .shape: return "Shape"
             case .selection: return "Style"
             case .connector: return "Connector"
+            case .image: return "Image"
             }
         }
 
         /// Fill applies to blocks only — pencil strokes and connectors are
-        /// lines.
+        /// lines, images paint their own pixels.
         var showsFill: Bool { self == .shape || self == .selection }
+        /// Text size applies to anything that renders a label.
+        var showsTextSize: Bool { self == .selection || self == .shape || self == .image }
     }
 
     @Published var isVisible = false
@@ -33,6 +37,13 @@ final class StylePanelModel: ObservableObject {
     @Published var stroke: String?
     @Published var strokeWidth: Double?
     @Published var opacity: Double = 1
+    @Published var textSize: TextSize = .medium
+    // Z-order clarity (F8): the selection's layer + its position among
+    // layer-sharing peers, kept in sync by the controller.
+    @Published var layerChipText: String?
+    @Published var zPositionText: String?
+    @Published var canStepForward = false
+    @Published var canStepBackward = false
 
     /// Set while the panel is being programmatically seeded (selection
     /// change) so the seeding doesn't echo back as an edit.
@@ -40,7 +51,8 @@ final class StylePanelModel: ObservableObject {
 
     var style: Style {
         Style(fill: fill, stroke: stroke, strokeWidth: strokeWidth,
-              opacity: opacity >= 0.999 ? nil : opacity)
+              opacity: opacity >= 0.999 ? nil : opacity,
+              textSize: textSize == .medium ? nil : textSize)
     }
 
     func seed(from style: Style, mode: Mode) {
@@ -50,6 +62,7 @@ final class StylePanelModel: ObservableObject {
         stroke = style.stroke
         strokeWidth = style.strokeWidth
         opacity = style.effectiveOpacity
+        textSize = style.textSize ?? .medium
         isSeeding = false
     }
 }
@@ -59,6 +72,8 @@ struct StylePanelActions {
     var styleChanged: (Style) -> Void
     var bringToFront: () -> Void
     var sendToBack: () -> Void
+    var stepForward: () -> Void = {}
+    var stepBackward: () -> Void = {}
     /// Explicit dismiss (the header ✕) — the panel no longer closes itself
     /// on deselection/undo.
     var close: () -> Void = {}
@@ -146,6 +161,9 @@ struct StyleControls: View {
                     emit()
                 }
             }
+            // Image/SVG nodes expose ONLY layers (z-order) and text size (F7),
+            // so the paint controls below are hidden for them.
+            if model.mode != .image {
             swatchRow(title: model.mode.showsFill ? "Outline" : "Color",
                       selected: model.stroke, includeNone: false) { hex in
                 model.stroke = hex
@@ -210,40 +228,90 @@ struct StyleControls: View {
                     .help(String(format: "%.1f pt", currentWidth))
                 }
             }
+            } // end paint controls (hidden for .image)
 
-            if model.mode == .selection || model.mode == .connector {
-                HStack(spacing: 6) {
-                    Button {
-                        actions.sendToBack()
-                    } label: {
-                        Label("To Back", systemImage: "square.3.layers.3d.bottom.filled")
-                            .font(.system(size: 10))
+            if model.mode.showsTextSize {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Text size")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { model.textSize },
+                        set: { model.textSize = $0; emit() }
+                    )) {
+                        Text("S").tag(TextSize.small)
+                        Text("M").tag(TextSize.medium)
+                        Text("L").tag(TextSize.large)
+                        Text("XL").tag(TextSize.xl)
                     }
-                    .help("Tuck behind other elements — grouping outlines usually live at the back")
-                    Button {
-                        actions.bringToFront()
-                    } label: {
-                        Label("To Front", systemImage: "square.3.layers.3d.top.filled")
-                            .font(.system(size: 10))
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                }
+            }
+
+            if model.mode == .selection || model.mode == .connector || model.mode == .image {
+                VStack(alignment: .leading, spacing: 5) {
+                    // Z-order clarity (F8): which layer, and where in the stack
+                    // among elements sharing that layer.
+                    if let chip = model.layerChipText {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.3.layers.3d")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                            Text(chip).font(.system(size: 10, weight: .medium))
+                            if let z = model.zPositionText {
+                                Text("· \(z)").font(.system(size: 10)).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        Button { actions.sendToBack() } label: {
+                            Label("To Back", systemImage: "square.3.layers.3d.bottom.filled")
+                                .font(.system(size: 10))
+                        }
+                        .help("Send behind everything")
+                        Button { actions.bringToFront() } label: {
+                            Label("To Front", systemImage: "square.3.layers.3d.top.filled")
+                                .font(.system(size: 10))
+                        }
+                        .help("Bring in front of everything")
+                    }
+                    HStack(spacing: 6) {
+                        Button { actions.stepBackward() } label: {
+                            Label("Backward", systemImage: "chevron.down")
+                                .font(.system(size: 10))
+                        }
+                        .disabled(!model.canStepBackward)
+                        .help("One step back within this layer")
+                        Button { actions.stepForward() } label: {
+                            Label("Forward", systemImage: "chevron.up")
+                                .font(.system(size: 10))
+                        }
+                        .disabled(!model.canStepForward)
+                        .help("One step forward within this layer")
                     }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
 
-            Button {
-                // Back to the app defaults for this mode — one click.
-                model.fill = model.mode == .shape ? Style.noFill : nil
-                model.stroke = nil
-                model.strokeWidth = nil
-                model.opacity = 1
-                emit()
-            } label: {
-                Label("Remove formatting", systemImage: "paintbrush.slash")
-                    .font(.system(size: 10))
+            if model.mode != .image {
+                Button {
+                    // Back to the app defaults for this mode — one click.
+                    model.fill = model.mode == .shape ? Style.noFill : nil
+                    model.stroke = nil
+                    model.strokeWidth = nil
+                    model.opacity = 1
+                    model.textSize = .medium
+                    emit()
+                } label: {
+                    Label("Remove formatting", systemImage: "paintbrush.slash")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .help("Reset color, outline, width, and opacity to the defaults")
             }
-            .buttonStyle(.borderless)
-            .help("Reset color, outline, width, and opacity to the defaults")
         }
     }
 

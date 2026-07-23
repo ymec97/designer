@@ -72,8 +72,25 @@ final class BoardRenderer {
     /// Collision registry for connector captions — call once before each
     /// full edge pass so labels placed earlier repel the ones after.
     private var captionPlacer = EdgeGeometry.CaptionPlacer()
-    func beginCaptionPass() {
-        captionPlacer = EdgeGeometry.CaptionPlacer()
+    /// Resolved world centers per edge, kept between frames so captions stay
+    /// pinned (and just scale) during a zoom instead of re-solving — and
+    /// jittering — every frame (B2). Re-solved only on a settled viewport.
+    private(set) var captionCenters: [ElementID: Point] = [:]
+    private var captionsResolve = true
+    /// `resolve == true` runs the collision-avoiding placement this pass and
+    /// updates `captionCenters`; `false` reuses the cached centers (used while
+    /// a zoom/animation is in flight).
+    func beginCaptionPass(resolve: Bool = true) {
+        captionsResolve = resolve
+        if resolve { captionPlacer = EdgeGeometry.CaptionPlacer() }
+    }
+
+    /// World-space caption pill size measured at scale 1 — stable across zoom,
+    /// so a placement solve doesn't shift as the font rounds at different zooms
+    /// (rendering still measures at the live zoom). B2.
+    private func worldCaptionPillSize(for edge: Edge) -> Size? {
+        guard let content = captionContent(for: edge, viewport: CanvasViewport(scale: 1)) else { return nil }
+        return Size(width: Double(content.pillSize.width), height: Double(content.pillSize.height))
     }
 
     /// Strokes a jittered two-pass version of `viewPoints` (already in view
@@ -374,7 +391,9 @@ final class BoardRenderer {
             }
             drawText(
                 node.semantic.name,
-                fontSize: 13 * viewport.scale,
+                fontSize: clampedLabelFontSize(
+                    base: 13, multiplier: node.style.effectiveTextMultiplier,
+                    text: node.semantic.name, frameView: textRect, viewport: viewport),
                 color: labelColor,
                 centeredIn: textRect,
                 context: context
@@ -499,7 +518,9 @@ final class BoardRenderer {
         if !suppressText, viewport.scale >= Self.textVisibilityScale, !note.text.isEmpty {
             drawText(
                 note.text,
-                fontSize: 12 * viewport.scale,
+                fontSize: clampedLabelFontSize(
+                    base: 12, multiplier: note.style.effectiveTextMultiplier,
+                    text: note.text, frameView: rect, viewport: viewport),
                 color: Palette.noteText,
                 in: rect,
                 context: context
@@ -564,7 +585,8 @@ final class BoardRenderer {
         simplified: Bool = false,
         emphasized: Bool = true,
         captionFraction: Double = 0.5,
-        captionObstacles: ((Rect) -> [Rect])? = nil
+        captionObstacles: ((Rect) -> [Rect])? = nil,
+        edgeID: ElementID? = nil
     ) {
         // Connector opacity: fade the whole edge (line, arrowheads, caption)
         // as one; the body has early returns, so wrap it here. Selection
@@ -578,7 +600,7 @@ final class BoardRenderer {
                             isSelected: isSelected, isDangling: isDangling,
                             simplified: simplified, emphasized: emphasized,
                             captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            captionObstacles: captionObstacles, edgeID: edgeID)
             context.endTransparencyLayer()
             context.restoreGState()
         } else {
@@ -586,7 +608,7 @@ final class BoardRenderer {
                             isSelected: isSelected, isDangling: isDangling,
                             simplified: simplified, emphasized: emphasized,
                             captionFraction: captionFraction,
-                            captionObstacles: captionObstacles)
+                            captionObstacles: captionObstacles, edgeID: edgeID)
         }
     }
 
@@ -600,7 +622,8 @@ final class BoardRenderer {
         simplified: Bool,
         emphasized: Bool,
         captionFraction: Double,
-        captionObstacles: ((Rect) -> [Rect])?
+        captionObstacles: ((Rect) -> [Rect])?,
+        edgeID: ElementID?
     ) {
         let viewPoints = route.points.map { viewport.toView($0) }
         guard viewPoints.count >= 2 else { return }
@@ -673,7 +696,19 @@ final class BoardRenderer {
         // mode can suppress it (Off) or restrict it to focused edges (On Focus).
         if viewport.scale >= Self.textVisibilityScale, shouldDrawCaption(emphasized: emphasized) {
             var center = route.point(atFraction: captionFraction)
-            if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
+            if let edgeID {
+                // Settled: solve collision-avoided placement (scale-independent
+                // pill size) and cache it. In flight: reuse the cached world
+                // center so the caption just scales instead of jittering (B2).
+                if captionsResolve, let obstacles = captionObstacles, let pillWorld = worldCaptionPillSize(for: edge) {
+                    center = captionPlacer.place(
+                        preferred: captionFraction, route: route,
+                        pillSize: pillWorld, obstacles: obstacles)
+                    captionCenters[edgeID] = center
+                } else if let cached = captionCenters[edgeID] {
+                    center = cached
+                }
+            } else if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
                 center = captionPlacer.place(
                     preferred: captionFraction,
                     route: route,
@@ -1187,13 +1222,22 @@ final class BoardRenderer {
 
     /// A linked node's drill-down badge: accent circle with an ↗ arrow at the
     /// node's top-right, OUTSIDE the frame (double-click to enter the board).
-    func drawLinkBadge(in rect: CGRect, context: CGContext) {
+    func drawLinkBadge(in rect: CGRect, broken: Bool = false, context: CGContext) {
         context.saveGState()
-        context.setFillColor(Graphite.accent.cgColor)
+        // Broken links (target board missing) wear an amber "!" instead of the
+        // accent ↗, so it's obvious the drill-down won't work (F4).
+        let amber = NSColor(hexString: "#E8943A") ?? Graphite.accent
+        context.setFillColor((broken ? amber : Graphite.accent).cgColor)
         context.setShadow(offset: CGSize(width: 0, height: 1), blur: 2,
                           color: Graphite.shadowColor.cgColor)
         context.fillEllipse(in: rect)
         context.setShadow(offset: .zero, blur: 0, color: nil)
+        if broken {
+            drawText("!", fontSize: rect.height * 0.72, color: .white,
+                     centeredIn: rect, context: context)
+            context.restoreGState()
+            return
+        }
         context.setStrokeColor(NSColor.white.cgColor)
         context.setLineWidth(max(rect.width * 0.11, 1.1))
         context.setLineCap(.round)
@@ -1360,6 +1404,25 @@ final class BoardRenderer {
         )
         attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Font size for a label: base × the element's textSize multiplier × zoom,
+    /// then clamped so a single measured line of `text` fits inside `frameView`
+    /// (view space) — keeps XL text from spilling out of a small shape (F6).
+    private func clampedLabelFontSize(
+        base: CGFloat, multiplier: Double, text: String,
+        frameView: CGRect, viewport: CanvasViewport
+    ) -> CGFloat {
+        let requested = base * CGFloat(multiplier) * CGFloat(viewport.scale)
+        guard !text.isEmpty else { return requested }
+        let measured = attributedString(text, fontSize: requested, color: .black).size()
+        let maxW = max(frameView.width - 8 * viewport.scale, 1)
+        let maxH = max(frameView.height - 8 * viewport.scale, 1)
+        let widthRatio = measured.width > maxW ? maxW / measured.width : 1
+        let heightRatio = measured.height > maxH ? maxH / measured.height : 1
+        let ratio = min(widthRatio, heightRatio)
+        // Never shrink below the readable floor the renderer already respects.
+        return max(requested * ratio, min(requested, 9))
     }
 
     private func attributedString(

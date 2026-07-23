@@ -138,29 +138,48 @@ public enum LLMInterchange {
     /// while the agent's explicit fill/stroke/opacity override.
     private static func inheritingStyles(_ board: Board, from current: Board) -> Board {
         var styleForSlug: [String: Style] = [:]
+        var extraForSlug: [String: [String: JSONValue]] = [:]
         for element in current.elementsInZOrder {
             guard let node = element.node else { continue }
             let key = WireBoard.slug(node.semantic.name.isEmpty
                                      ? node.semantic.kind.rawValue : node.semantic.name)
-            if !key.isEmpty, styleForSlug[key] == nil {
-                styleForSlug[key] = node.style
+            guard !key.isEmpty else { continue }
+            if styleForSlug[key] == nil { styleForSlug[key] = node.style }
+            if extraForSlug[key] == nil, !node.semantic.extra.isEmpty {
+                extraForSlug[key] = node.semantic.extra
             }
         }
-        guard !styleForSlug.isEmpty else { return board }
+        guard !styleForSlug.isEmpty || !extraForSlug.isEmpty else { return board }
 
         var updated = board
         for element in board.elements.values {
             guard var node = element.node else { continue }
             let key = WireBoard.slug(node.semantic.name.isEmpty
                                      ? node.semantic.kind.rawValue : node.semantic.name)
-            guard let inherited = styleForSlug[key] else { continue }
-            var merged = inherited
-            // Agent-set appearance (parsed from the wire) wins field by field.
-            if node.style.fill != nil { merged.fill = node.style.fill }
-            if node.style.stroke != nil { merged.stroke = node.style.stroke }
-            if node.style.opacity != nil { merged.opacity = node.style.opacity }
-            guard merged != node.style else { continue }
-            node.style = merged
+            var changed = false
+            if let inherited = styleForSlug[key] {
+                var merged = inherited
+                // Agent-set appearance (parsed from the wire) wins field by field.
+                if node.style.fill != nil { merged.fill = node.style.fill }
+                if node.style.stroke != nil { merged.stroke = node.style.stroke }
+                if node.style.opacity != nil { merged.opacity = node.style.opacity }
+                if merged != node.style { node.style = merged; changed = true }
+            }
+            // Board links (and any other agent-invisible data) live in
+            // NodeSemantic.extra, which never crosses the wire — so a matched
+            // node comes back with an empty extra bag. Restore the current
+            // node's extra so accepting a proposal can't WIPE a node's board
+            // link (the v0.9 no-wipe guarantee). Any agent-set key would win,
+            // but the wire carries none today.
+            if let inheritedExtra = extraForSlug[key] {
+                var mergedExtra = inheritedExtra
+                for (k, v) in node.semantic.extra { mergedExtra[k] = v }
+                if mergedExtra != node.semantic.extra {
+                    node.semantic.extra = mergedExtra
+                    changed = true
+                }
+            }
+            guard changed else { continue }
             var replaced = element
             replaced.content = .node(node)
             try? updated.apply(.replaceElement(replaced))

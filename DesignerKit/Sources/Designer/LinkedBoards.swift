@@ -143,6 +143,25 @@ extension CanvasViewController {
         canvasView.nodeContextMenu = { [weak self] nodeID in
             self?.buildNodeContextMenu(for: nodeID)
         }
+        // Broken-link resolution + affordances (F4). Resolution is a catalog
+        // (filesystem) scan, injected so the canvas needn't know BoardCatalog.
+        canvasView.resolveLinkValidity = { BoardCatalog.url(forBoardID: $0) != nil }
+        canvasView.brokenLinkHoverChanged = { [weak self] id, rect in
+            self?.showBrokenLinkPopover(for: id, at: rect)
+        }
+        canvasView.brokenLinkActivated = { [weak self] id in
+            guard let self, let frame = self.canvasView.board.elements[id]?.node?.frame else { return }
+            self.showBrokenLinkPopover(for: id, at: self.canvasView.linkBadgeRect(forNodeFrame: frame))
+        }
+        canvasView.refreshBrokenLinks()
+        // The catalog can change in another window; re-check on focus + on our
+        // own catalog-change notification.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.canvasView.refreshBrokenLinks() }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("DesignerCatalogChanged"), object: nil, queue: .main
+        ) { [weak self] _ in self?.canvasView.refreshBrokenLinks() }
 
         let banner = LinkedViewBanner(
             model: linkedViewModel,
@@ -210,6 +229,25 @@ extension CanvasViewController {
         view.window?.beginSheet(sheetWindow)
     }
 
+    /// Show (id != nil) or dismiss (id == nil) the broken-link explanation
+    /// popover anchored to the badge rect (F4).
+    func showBrokenLinkPopover(for id: ElementID?, at rect: CGRect) {
+        brokenLinkPopover?.performClose(nil)
+        brokenLinkPopover = nil
+        guard let id else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView:
+            BrokenLinkPopover(relink: { [weak self] in
+                self?.brokenLinkPopover?.performClose(nil)
+                self?.brokenLinkPopover = nil
+                self?.presentLinkPicker(for: id)
+            })
+        )
+        popover.show(relativeTo: rect, of: canvasView, preferredEdge: .maxY)
+        brokenLinkPopover = popover
+    }
+
     private func dismissLinkPicker() {
         if let sheet = linkPickerWindow {
             view.window?.endSheet(sheet)
@@ -242,6 +280,7 @@ extension CanvasViewController {
             return
         }
         setLink(newBoard.id, on: nodeID)
+        NotificationCenter.default.post(name: Notification.Name("DesignerCatalogChanged"), object: nil)
         AppActions.open(url)
     }
 
@@ -368,6 +407,30 @@ extension CanvasViewController {
         linkedBoardSwoosh?.volume = 0.35
         linkedBoardSwoosh?.stop()
         linkedBoardSwoosh?.play()
+    }
+}
+
+/// Hover explanation for a broken board link (F4): the target board isn't in
+/// the catalog anymore, with a one-click path to re-link.
+struct BrokenLinkPopover: View {
+    let relink: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color(nsColor: NSColor(hexString: "#E8943A") ?? .systemOrange))
+                Text("Broken board link").font(.system(size: 12, weight: .semibold))
+            }
+            Text("This block links to a board that isn't in your catalog anymore — it may have been moved, renamed, or deleted, or it was never shared alongside this board.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Re-link…", action: relink)
+                .font(.system(size: 11))
+        }
+        .padding(12)
+        .frame(width: 260)
     }
 }
 

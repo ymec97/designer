@@ -42,7 +42,11 @@ public final class CanvasView: NSView {
                 return element.id
             })
             selection.formIntersection(Set(board.elements.keys))
+            captionsDirty = true // routes changed → caption layout must re-solve (B2)
             needsDisplay = true
+            // Broken-link validity needs a filesystem scan — never do it inline
+            // in the frame path; coalesce it to just after this change (F4).
+            DispatchQueue.main.async { [weak self] in self?.refreshBrokenLinks() }
         }
     }
 
@@ -151,12 +155,30 @@ public final class CanvasView: NSView {
             needsDisplay = true
             if viewport.scale != oldValue.scale {
                 viewportScaleChanged?(viewport.scale)
+                // Re-solve caption placement only AFTER the zoom settles (B2):
+                // debounce so a continuous pinch reuses cached centers.
+                scheduleCaptionSettle()
             }
         }
     }
 
     /// Fires when the zoom level changes (P1: the zoom HUD tracks it).
     public var viewportScaleChanged: ((Double) -> Void)?
+
+    /// True when connector caption placement needs re-solving (B2). Set on
+    /// board changes and ~100 ms after a zoom stops; cleared on the solve frame.
+    private var captionsDirty = true
+    private var captionSettleWork: DispatchWorkItem?
+
+    private func scheduleCaptionSettle() {
+        captionSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.captionsDirty = true
+            self?.needsDisplay = true
+        }
+        captionSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
+    }
 
     public private(set) var selection: Set<ElementID> = [] {
         didSet {
@@ -231,6 +253,22 @@ public final class CanvasView: NSView {
     // the theme's node background), matching a double-clicked block. Pick the
     // "None" swatch for a hollow grouping-outline shape.
     public var pendingShapeStyle = Style()
+
+    /// Kept in sync by the controller: true when the left style/inspector panel
+    /// is showing, so newly-created elements can auto-pan clear of it (B3).
+    public var leftPanelIsVisible = false
+
+    /// If `frame`'s on-screen rect underlaps the left style-panel band while a
+    /// panel is showing, pan so it clears the band (view x-band ≈ 0…268:
+    /// leading 16 + width 236 + 16 gap). Pure view-state — no board mutation,
+    /// no undo. No-op when the panel is hidden or the element already clears it.
+    private func nudgeClearOfLeftPanel(_ frame: Rect) {
+        guard leftPanelIsVisible else { return }
+        let band: CGFloat = 268
+        let viewRect = viewport.toView(frame)
+        guard viewRect.minX < band else { return }
+        viewport.pan(viewDeltaX: band + 12 - viewRect.minX, viewDeltaY: 0)
+    }
     /// Style applied to NEW ink strokes (pencil settings in the style panel).
     public var pendingInkStyle = Style(strokeWidth: 2)
     /// The shape the shape tool returns to when re-activated via key/palette.
@@ -413,6 +451,12 @@ public final class CanvasView: NSView {
         let overrideFrames = transientFrames.isEmpty
             ? nil
             : board.frameProvider(overrides: transientFrames)
+        // Live obstacles over the dragged frames so mid-drag routes avoid blocks
+        // and match the settled route the drop produces — no more "cross then
+        // pop" (B10). Built once per frame, only while a drag is in flight.
+        let dragObstacles: ((Rect) -> [Rect])? = transientFrames.isEmpty
+            ? nil
+            : SpatialIndex.nodeObstacleQuery(for: board, overrides: transientFrames)
         // Routes come from the per-board-revision cache except for the few
         // edges tracking an in-flight drag — resolving 4k routes per frame
         // was the difference between 45ms and 16ms frames at fit zoom.
@@ -420,7 +464,8 @@ public final class CanvasView: NSView {
             if let transientBend, transientBend.id == element.id, var edge = element.edge {
                 edge.waypoints = transientBend.waypoints
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let transientEndpoint, transientEndpoint.id == element.id, var edge = element.edge {
                 switch transientEndpoint.end {
@@ -428,13 +473,15 @@ public final class CanvasView: NSView {
                 case .to: edge.to = transientEndpoint.anchor
                 }
                 return EdgeGeometry.route(
-                    for: edge, frames: overrideFrames ?? board.frameProvider())
+                    for: edge, frames: overrideFrames ?? board.frameProvider(),
+                    obstacles: dragObstacles)
             }
             if let overrideFrames, dragAffectedEdges.contains(element.id), let edge = element.edge {
                 return EdgeGeometry.route(
                     for: edge, frames: overrideFrames,
                     parallelOffset: parallelOffsetCache[element.id] ?? 0,
-                    anchorOffsets: anchorSpreadCache[element.id])
+                    anchorOffsets: anchorSpreadCache[element.id],
+                    obstacles: dragObstacles)
             }
             return routeCache[element.id]
         }
@@ -562,7 +609,12 @@ public final class CanvasView: NSView {
             // Connector captions dodge blocks AND each other; the spatial
             // index answers the pill-rect probes, the renderer's caption
             // pass tracks pill-vs-pill.
-            renderer.beginCaptionPass()
+            // Only re-solve caption placement on a SETTLED viewport (no camera
+            // animation, and the debounce after the last zoom fired) — otherwise
+            // reuse cached centers so captions don't jitter mid-zoom (B2).
+            let resolveCaptions = captionsDirty && cameraAnimation == nil
+            renderer.beginCaptionPass(resolve: resolveCaptions)
+            if resolveCaptions { captionsDirty = false }
             let captionObstacles: (Rect) -> [Rect] = { [spatialIndex, board] rect in
                 spatialIndex.query(rect).compactMap { board.elements[$0]?.node?.frame }
             }
@@ -583,7 +635,8 @@ public final class CanvasView: NSView {
                                 isDangling: danglingEdgeIDs.contains(element.id),
                                 emphasized: emphasized,
                                 captionFraction: anchorSpreadCache[element.id]?.captionT ?? 0.5,
-                                captionObstacles: captionObstacles
+                                captionObstacles: captionObstacles,
+                                edgeID: element.id
                             )
                         }
                     } else {
@@ -1102,6 +1155,7 @@ public final class CanvasView: NSView {
                 let done = animation.completion
                 self.cameraAnimation = nil
                 self.viewport = animation.target
+                self.captionsDirty = true // re-solve captions now the camera settled (B2)
                 done?()
             }
         }
@@ -1134,8 +1188,56 @@ public final class CanvasView: NSView {
         for element in zOrderedElements {
             guard let node = element.node, node.semantic.linkedBoardID != nil,
                   element.layerIDs.contains(where: { !hiddenLayers.contains($0) }) else { continue }
-            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame), context: context)
+            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame),
+                                   broken: brokenLinkIDs.contains(element.id), context: context)
         }
+    }
+
+    // MARK: Broken board links (F4)
+
+    /// Nodes whose linked board can't be resolved to a file. Recomputed off the
+    /// hot path (never per frame — resolution is a filesystem scan).
+    public private(set) var brokenLinkIDs: Set<ElementID> = []
+    /// Injected by the controller so the canvas needn't depend on BoardCatalog.
+    public var resolveLinkValidity: ((BoardID) -> Bool)?
+    /// Fires when the hovered broken-link badge changes (id, its view rect).
+    public var brokenLinkHoverChanged: ((ElementID?, CGRect) -> Void)?
+    /// Fires when a broken link's badge is clicked (explain instead of navigate).
+    public var brokenLinkActivated: ((ElementID) -> Void)?
+    private var hoveredBrokenLink: ElementID?
+
+    /// Re-resolve every link's validity. Runs the filesystem scan ONCE,
+    /// deduped by board id — call from board changes (async), window focus,
+    /// or catalog-change notifications, never per frame.
+    public func refreshBrokenLinks() {
+        guard let resolve = resolveLinkValidity else {
+            if !brokenLinkIDs.isEmpty { brokenLinkIDs = []; needsDisplay = true }
+            return
+        }
+        var broken: Set<ElementID> = []
+        var cache: [BoardID: Bool] = [:]
+        for element in zOrderedElements {
+            guard let linkID = element.node?.semantic.linkedBoardID else { continue }
+            let ok: Bool
+            if let cached = cache[linkID] { ok = cached }
+            else { ok = resolve(linkID); cache[linkID] = ok }
+            if !ok { broken.insert(element.id) }
+        }
+        if broken != brokenLinkIDs { brokenLinkIDs = broken; needsDisplay = true }
+    }
+
+    /// Broken-link hover hit-test — call from mouseMoved. Cheap: only iterates
+    /// the (usually empty) broken set.
+    private func updateBrokenLinkHover(at point: CGPoint) {
+        let hit = brokenLinkIDs.first { id in
+            guard let frame = board.elements[id]?.node?.frame else { return false }
+            return linkBadgeRect(forNodeFrame: frame).insetBy(dx: -3, dy: -3).contains(point)
+        }
+        guard hit != hoveredBrokenLink else { return }
+        hoveredBrokenLink = hit
+        let rect = hit.flatMap { board.elements[$0]?.node?.frame }
+            .map { linkBadgeRect(forNodeFrame: $0) } ?? .zero
+        brokenLinkHoverChanged?(hit, rect)
     }
 
     // MARK: Flow recording (F5)
@@ -1555,6 +1657,7 @@ public final class CanvasView: NSView {
         // would mutate is cut off before it starts.
         if isReadOnly {
             if event.clickCount == 2, let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -1586,6 +1689,7 @@ public final class CanvasView: NSView {
             // The link badge sits OUTSIDE node frames — check it explicitly
             // before normal double-click handling (label edit / create).
             if let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -2056,6 +2160,7 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+        nudgeClearOfLeftPanel(frame)
     }
 
     // MARK: Keyboard
@@ -2464,6 +2569,7 @@ public final class CanvasView: NSView {
         if let inserted = board.elements[element.id] {
             beginLabelEdit(for: inserted)
         }
+        nudgeClearOfLeftPanel(frame)
     }
 
     /// Shape-tool commit: a node at EXACTLY the dragged frame, unlabeled
@@ -2486,6 +2592,7 @@ public final class CanvasView: NSView {
         )
         delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Shape")
         selection = [element.id]
+        nudgeClearOfLeftPanel(worldRect)
     }
 
     /// Shift (or a square/circle picker entry) constrains the drag to equal
@@ -2508,6 +2615,58 @@ public final class CanvasView: NSView {
 
     public func sendSelectionToBack() {
         reorderSelection(toFront: false)
+    }
+
+    /// Peers of `id` for layer-scoped z-order: elements sharing at least one of
+    /// its layers, in back→front draw order (includes `id` itself).
+    private func zPeers(of id: ElementID) -> [Element] {
+        guard let element = board.elements[id] else { return [] }
+        let layers = element.layerIDs
+        return board.elementsInZOrder.filter {
+            $0.id == id || !$0.layerIDs.isDisjoint(with: layers)
+        }
+    }
+
+    /// 1-based rank from the FRONT among layer-sharing peers, and the peer
+    /// count — drives the style panel's "Nth from front of M" readout (F8).
+    public func zPosition(of id: ElementID) -> (rank: Int, total: Int)? {
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return nil }
+        return (rank: peers.count - idx, total: peers.count)
+    }
+
+    public func canStepSelection(forward: Bool) -> Bool {
+        guard selection.count == 1, let id = selection.first else { return false }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return false }
+        return forward ? idx < peers.count - 1 : idx > 0
+    }
+
+    public func stepSelectionForward() { stepSelection(forward: true) }
+    public func stepSelectionBackward() { stepSelection(forward: false) }
+
+    /// Move the single selected element ONE position among its layer-sharing
+    /// peers (not to the global extreme like To Front/Back). One undo step.
+    private func stepSelection(forward: Bool) {
+        guard selection.count == 1, let id = selection.first,
+              let element = board.elements[id] else { return }
+        let peers = zPeers(of: id)
+        guard let idx = peers.firstIndex(where: { $0.id == id }) else { return }
+        var moved = element
+        if forward {
+            guard idx < peers.count - 1 else { return } // already frontmost among peers
+            let above = peers[idx + 1]
+            let aboveAbove = idx + 2 < peers.count ? peers[idx + 2].sortKey : nil
+            moved.sortKey = SortKey.between(above.sortKey, aboveAbove)
+        } else {
+            guard idx > 0 else { return } // already backmost among peers
+            let below = peers[idx - 1]
+            let belowBelow = idx - 2 >= 0 ? peers[idx - 2].sortKey : nil
+            moved.sortKey = SortKey.between(belowBelow, below.sortKey)
+        }
+        delegate?.canvasView(self, perform: .replaceElement(moved),
+                             actionName: forward ? "Bring Forward" : "Send Backward")
+        needsDisplay = true
     }
 
     private func reorderSelection(toFront: Bool) {
@@ -2875,6 +3034,7 @@ public final class CanvasView: NSView {
         } else if hoveredEdgeID != nil {
             hoveredEdgeID = nil
         }
+        updateBrokenLinkHover(at: point)
     }
 
     private func updateCursor(at point: CGPoint?) {
