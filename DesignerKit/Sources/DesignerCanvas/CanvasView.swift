@@ -42,6 +42,9 @@ public final class CanvasView: NSView {
             })
             selection.formIntersection(Set(board.elements.keys))
             needsDisplay = true
+            // Broken-link validity needs a filesystem scan — never do it inline
+            // in the frame path; coalesce it to just after this change (F4).
+            DispatchQueue.main.async { [weak self] in self?.refreshBrokenLinks() }
         }
     }
 
@@ -1131,8 +1134,56 @@ public final class CanvasView: NSView {
         for element in zOrderedElements {
             guard let node = element.node, node.semantic.linkedBoardID != nil,
                   element.layerIDs.contains(where: { !hiddenLayers.contains($0) }) else { continue }
-            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame), context: context)
+            renderer.drawLinkBadge(in: linkBadgeRect(forNodeFrame: node.frame),
+                                   broken: brokenLinkIDs.contains(element.id), context: context)
         }
+    }
+
+    // MARK: Broken board links (F4)
+
+    /// Nodes whose linked board can't be resolved to a file. Recomputed off the
+    /// hot path (never per frame — resolution is a filesystem scan).
+    public private(set) var brokenLinkIDs: Set<ElementID> = []
+    /// Injected by the controller so the canvas needn't depend on BoardCatalog.
+    public var resolveLinkValidity: ((BoardID) -> Bool)?
+    /// Fires when the hovered broken-link badge changes (id, its view rect).
+    public var brokenLinkHoverChanged: ((ElementID?, CGRect) -> Void)?
+    /// Fires when a broken link's badge is clicked (explain instead of navigate).
+    public var brokenLinkActivated: ((ElementID) -> Void)?
+    private var hoveredBrokenLink: ElementID?
+
+    /// Re-resolve every link's validity. Runs the filesystem scan ONCE,
+    /// deduped by board id — call from board changes (async), window focus,
+    /// or catalog-change notifications, never per frame.
+    public func refreshBrokenLinks() {
+        guard let resolve = resolveLinkValidity else {
+            if !brokenLinkIDs.isEmpty { brokenLinkIDs = []; needsDisplay = true }
+            return
+        }
+        var broken: Set<ElementID> = []
+        var cache: [BoardID: Bool] = [:]
+        for element in zOrderedElements {
+            guard let linkID = element.node?.semantic.linkedBoardID else { continue }
+            let ok: Bool
+            if let cached = cache[linkID] { ok = cached }
+            else { ok = resolve(linkID); cache[linkID] = ok }
+            if !ok { broken.insert(element.id) }
+        }
+        if broken != brokenLinkIDs { brokenLinkIDs = broken; needsDisplay = true }
+    }
+
+    /// Broken-link hover hit-test — call from mouseMoved. Cheap: only iterates
+    /// the (usually empty) broken set.
+    private func updateBrokenLinkHover(at point: CGPoint) {
+        let hit = brokenLinkIDs.first { id in
+            guard let frame = board.elements[id]?.node?.frame else { return false }
+            return linkBadgeRect(forNodeFrame: frame).insetBy(dx: -3, dy: -3).contains(point)
+        }
+        guard hit != hoveredBrokenLink else { return }
+        hoveredBrokenLink = hit
+        let rect = hit.flatMap { board.elements[$0]?.node?.frame }
+            .map { linkBadgeRect(forNodeFrame: $0) } ?? .zero
+        brokenLinkHoverChanged?(hit, rect)
     }
 
     // MARK: Flow recording (F5)
@@ -1543,6 +1594,7 @@ public final class CanvasView: NSView {
         // would mutate is cut off before it starts.
         if isReadOnly {
             if event.clickCount == 2, let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -1574,6 +1626,7 @@ public final class CanvasView: NSView {
             // The link badge sits OUTSIDE node frames — check it explicitly
             // before normal double-click handling (label edit / create).
             if let linked = linkBadgeHit(at: point) {
+                if brokenLinkIDs.contains(linked) { brokenLinkActivated?(linked); return }
                 linkActivated?(linked)
                 return
             }
@@ -2885,7 +2938,9 @@ public final class CanvasView: NSView {
     // MARK: Cursor feedback
 
     public override func mouseMoved(with event: NSEvent) {
-        updateCursor(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(at: point)
+        updateBrokenLinkHover(at: point)
     }
 
     private func updateCursor(at point: CGPoint?) {

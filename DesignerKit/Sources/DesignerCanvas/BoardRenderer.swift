@@ -1153,13 +1153,22 @@ final class BoardRenderer {
 
     /// A linked node's drill-down badge: accent circle with an ↗ arrow at the
     /// node's top-right, OUTSIDE the frame (double-click to enter the board).
-    func drawLinkBadge(in rect: CGRect, context: CGContext) {
+    func drawLinkBadge(in rect: CGRect, broken: Bool = false, context: CGContext) {
         context.saveGState()
-        context.setFillColor(Graphite.accent.cgColor)
+        // Broken links (target board missing) wear an amber "!" instead of the
+        // accent ↗, so it's obvious the drill-down won't work (F4).
+        let amber = NSColor(hexString: "#E8943A") ?? Graphite.accent
+        context.setFillColor((broken ? amber : Graphite.accent).cgColor)
         context.setShadow(offset: CGSize(width: 0, height: 1), blur: 2,
                           color: Graphite.shadowColor.cgColor)
         context.fillEllipse(in: rect)
         context.setShadow(offset: .zero, blur: 0, color: nil)
+        if broken {
+            drawText("!", fontSize: rect.height * 0.72, color: .white,
+                     centeredIn: rect, context: context)
+            context.restoreGState()
+            return
+        }
         context.setStrokeColor(NSColor.white.cgColor)
         context.setLineWidth(max(rect.width * 0.11, 1.1))
         context.setLineCap(.round)

@@ -180,6 +180,7 @@ final class CanvasViewController: NSViewController, CanvasViewDelegate {
     let linkedViewModel = LinkedViewModel()
     var linkPickerWindow: NSWindow?
     var linkedBoardSwoosh: NSSound?
+    var brokenLinkPopover: NSPopover?
 
     private func installStylePanel() {
         let panel = StylePanelContainer(
