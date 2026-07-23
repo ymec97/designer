@@ -2606,7 +2606,27 @@ public final class CanvasView: NSView {
     private func preciseHit(_ element: Element, world: Point, tolerance: Double) -> Bool {
         switch element.content {
         case .node(let node):
-            return node.frame.contains(world)
+            guard node.frame.contains(world) else { return false }
+            // A filled node (or one showing an image) is solid everywhere. A
+            // no-fill shape (hollow outline / grouping rectangle) is empty
+            // inside — a click in the interior should fall through to whatever
+            // sits behind it; only its border and its own label are "solid".
+            if node.style.hasFill || node.style.image != nil { return true }
+            func inset(_ rect: Rect, by amount: Double) -> Rect {
+                Rect(x: rect.x + amount, y: rect.y + amount,
+                     width: max(rect.width - amount * 2, 0), height: max(rect.height - amount * 2, 0))
+            }
+            let band = max(8 / viewport.scale, tolerance)
+            if !inset(node.frame, by: band).contains(world) { return true } // on the border
+            if !node.semantic.name.isEmpty {
+                // The centered label area stays clickable so a titled outline
+                // (or a text box inside a shape) can still be grabbed.
+                let labelHeight = min(node.frame.height, 28)
+                let labelBox = Rect(x: node.frame.x, y: node.frame.midY - labelHeight / 2,
+                                    width: node.frame.width, height: labelHeight)
+                if labelBox.contains(world) { return true }
+            }
+            return false
         case .note(let note):
             return note.frame.contains(world)
         case .ink(let ink):
