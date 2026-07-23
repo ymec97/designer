@@ -8,6 +8,13 @@ final class BoardRenderer {
     /// is both an LOD optimization and better visual noise behavior.
     static let textVisibilityScale: Double = 0.35
 
+    /// Must match `CanvasView.dimmedAlpha` — the focus-mode dim strength. Used
+    /// to fold dimming into image draws that don't inherit the context alpha.
+    static let dimmedFraction: CGFloat = 0.22
+    /// Legibility floor for a dimmed node's label: the rest of the element
+    /// recedes at `dimmedFraction`, but the text stays readable.
+    static let dimmedLabelFloor: CGFloat = 0.6
+
     private struct TextCacheKey: Hashable {
         let text: String
         let fontSize: CGFloat
@@ -109,14 +116,15 @@ final class BoardRenderer {
         viewport: CanvasViewport,
         frameOverride: Rect? = nil,
         isSelected: Bool,
-        suppressText: Bool = false
+        suppressText: Bool = false,
+        dimmed: Bool = false
     ) {
         switch element.content {
         case .node(let node):
             drawNode(
                 node, frame: frameOverride ?? node.frame,
                 in: context, viewport: viewport,
-                isSelected: isSelected, suppressText: suppressText
+                isSelected: isSelected, suppressText: suppressText, dimmed: dimmed
             )
         case .note(let note):
             drawNote(
@@ -174,7 +182,7 @@ final class BoardRenderer {
     private func drawNode(
         _ node: Node, frame: Rect,
         in context: CGContext, viewport: CanvasViewport,
-        isSelected: Bool, suppressText: Bool
+        isSelected: Bool, suppressText: Bool, dimmed: Bool = false
     ) {
         let rect = viewport.toView(frame)
         let path: CGPath
@@ -298,29 +306,6 @@ final class BoardRenderer {
             }
         }
 
-        // The kind dot — one saturated spot of colour, top-left inside the
-        // node. Only on rectangles/ellipses, where it sits cleanly (a diamond
-        // or triangle's corners crowd it). Hollow (no-fill) shapes are
-        // decoration — a saturated dot on them reads as noise.
-        let dottable = (node.shape == .rectangle || node.shape == .ellipse) && node.style.hasFill
-        if elevateNodes, dottable, node.semantic.kind != .generic, viewport.scale >= Self.textVisibilityScale {
-            let r = 3.4 * viewport.scale
-            let inset = 13 * viewport.scale
-            // A rect's top-left inset sits OUTSIDE an ellipse — anchor the
-            // dot along the ellipse's -135° radius instead.
-            let anchor: CGPoint
-            if node.shape == .ellipse {
-                anchor = CGPoint(
-                    x: rect.midX - (rect.width / 2 - inset) * 0.7071,
-                    y: rect.midY - (rect.height / 2 - inset) * 0.7071
-                )
-            } else {
-                anchor = CGPoint(x: rect.minX + inset, y: rect.minY + inset)
-            }
-            context.setFillColor(Palette.kindDot(for: node.semantic.kind).cgColor)
-            context.fillEllipse(in: CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2))
-        }
-
         // Embedded image (imported diagrams): aspect-fit inside the frame,
         // leaving a strip at the bottom for the name when there is one.
         var textRect = rect
@@ -336,9 +321,14 @@ final class BoardRenderer {
                     x: box.midX - drawSize.width / 2, y: box.midY - drawSize.height / 2,
                     width: drawSize.width, height: drawSize.height
                 )
+                // `NSImage.draw` paints through a FRESH NSGraphicsContext, which
+                // does NOT inherit the CGContext's focus-dim `setAlpha` — so an
+                // SVG/raster node would stay full-strength while everything else
+                // dims. Fold the dim into the draw `fraction` explicitly.
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-                image.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1,
+                image.draw(in: drawRect, from: .zero, operation: .sourceOver,
+                           fraction: dimmed ? Self.dimmedFraction : 1,
                            respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
                 NSGraphicsContext.restoreGraphicsState()
                 textRect = CGRect(x: rect.minX, y: rect.maxY - max(labelStrip, 1),
@@ -353,13 +343,28 @@ final class BoardRenderer {
                 textRect = CGRect(x: rect.minX, y: rect.minY + lid,
                                   width: rect.width, height: rect.height - lid)
             }
+            // Focus dimming is a blanket 22% alpha over the whole element, so a
+            // filled node's background collapses toward the canvas ground. The
+            // on-fill contrast colour (dark ink on a light-ish fill) then goes
+            // dark-on-dark and the label vanishes — the reported bug on the
+            // rightmost `#8B95A5` swatch. When dimmed, colour the label against
+            // the GROUND instead and give it a legibility floor so it stays
+            // readable while the rest of the node recedes.
+            let labelColor = dimmed
+                ? Palette.nodeText
+                : (node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText)
+            if dimmed {
+                context.saveGState()
+                context.setAlpha(Self.dimmedLabelFloor)
+            }
             drawText(
                 node.semantic.name,
                 fontSize: 13 * viewport.scale,
-                color: node.style.hasFill ? Self.textColor(onFill: node.style.fill) : Palette.nodeText,
+                color: labelColor,
                 centeredIn: textRect,
                 context: context
             )
+            if dimmed { context.restoreGState() }
         }
 
         if opacity < 1 {

@@ -226,7 +226,10 @@ public final class CanvasView: NSView {
     /// Style applied to the NEXT dragged shape (set by the style panel).
     /// The default is the grouping-outline look the feature exists for:
     /// no background, default stroke.
-    public var pendingShapeStyle = Style(fill: Style.noFill)
+    // Picker shapes default to the standard node fill (fill == nil resolves to
+    // the theme's node background), matching a double-clicked block. Pick the
+    // "None" swatch for a hollow grouping-outline shape.
+    public var pendingShapeStyle = Style()
     /// Style applied to NEW ink strokes (pencil settings in the style panel).
     public var pendingInkStyle = Style(strokeWidth: 2)
     /// The shape the shape tool returns to when re-activated via key/palette.
@@ -560,7 +563,8 @@ public final class CanvasView: NSView {
                             viewport: viewport,
                             frameOverride: transientFrames[element.id],
                             isSelected: selection.contains(element.id),
-                            suppressText: element.id == editingElementID
+                            suppressText: element.id == editingElementID,
+                            dimmed: isDimmed(element)
                         )
                     }
                 }
@@ -2312,7 +2316,10 @@ public final class CanvasView: NSView {
 
     /// Shape-tool commit: a node at EXACTLY the dragged frame, unlabeled
     /// (grouping shapes start nameless — double-click labels later), styled
-    /// by the pending style. The tool reverts to Select, Excalidraw-style.
+    /// by the pending style. The shape tool STAYS armed so you can stamp
+    /// several shapes in a row (Esc / V returns to Select). Because the tool
+    /// is pure view state that undo never touches, ⌘Z removes the shape
+    /// without reverting your pick back to the cursor.
     private func insertShape(worldRect: Rect, shape: NodeShape, style: Style) {
         let layerIDs = activeLayerIDs()
         let element = Element(
@@ -2327,7 +2334,6 @@ public final class CanvasView: NSView {
         )
         delegate?.canvasView(self, perform: .insertElement(element), actionName: "Add Shape")
         selection = [element.id]
-        tool = .select
     }
 
     /// Shift (or a square/circle picker entry) constrains the drag to equal
