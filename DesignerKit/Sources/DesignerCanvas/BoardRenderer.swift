@@ -759,8 +759,26 @@ final class BoardRenderer {
                     obstacles: captionObstacles
                 )
             }
-            drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context)
+            // Selected connectors expand to show every field; unselected ones
+            // (including hovered / flow-focused in On-Focus mode) show only the
+            // label.
+            drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context,
+                            showAllFields: isSelected)
         }
+    }
+
+    /// Draws a connector's full caption (all fields) with a colored ring,
+    /// regardless of the board caption mode — used by the flow overlay so an
+    /// active connector reveals everything while a packet crosses it (F5/B).
+    /// Returns the world caption center so the caller can place it consistently.
+    func drawActiveEdgeCaption(
+        _ edge: Edge, route: EdgeGeometry.Route, edgeID: ElementID,
+        color: NSColor, viewport: CanvasViewport, in context: CGContext
+    ) {
+        guard viewport.scale >= Self.textVisibilityScale else { return }
+        let center = captionCenters[edgeID] ?? route.point(atFraction: 0.5)
+        drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context,
+                        showAllFields: true, spotlightColor: color)
     }
 
     /// The caption pill's rendered size, or nil when the edge has no caption.
@@ -769,8 +787,12 @@ final class BoardRenderer {
         return content.pillSize
     }
 
+    /// Builds a connector's caption. By default only the label paints; the
+    /// property badges (protocol/data/condition) appear only when `showAllFields`
+    /// (the edge is selected, or a packet is flowing through it). The label is
+    /// sized by the edge's own `textSize`; the badges scale proportionally.
     private func captionContent(
-        for edge: Edge, viewport: CanvasViewport
+        for edge: Edge, viewport: CanvasViewport, showAllFields: Bool = false
     ) -> (lines: [NSAttributedString], sizes: [CGSize], pillSize: CGSize)? {
         let label = edge.semantic.label ?? ""
         let badgeKeys = [
@@ -778,22 +800,23 @@ final class BoardRenderer {
             WellKnownEdgeProperty.data,
             WellKnownEdgeProperty.condition,
         ]
-        let badges = badgeKeys.compactMap { key in
+        let badges = showAllFields ? badgeKeys.compactMap { key in
             edge.semantic.properties[key].map { "\(key): \($0)" }
-        }
+        } : []
         guard !label.isEmpty || !badges.isEmpty else { return nil }
         func truncated(_ text: String, to limit: Int) -> String {
             text.count > limit ? String(text.prefix(limit - 1)) + "…" : text
         }
+        let mult = CGFloat(edge.style.effectiveTextMultiplier)
 
         var lines: [NSAttributedString] = []
         if !label.isEmpty {
-            lines.append(attributedString(truncated(label, to: 42), fontSize: 12 * viewport.scale, color: Palette.nodeText))
+            lines.append(attributedString(truncated(label, to: 42), fontSize: 12 * mult * viewport.scale, color: Palette.nodeText))
         }
         if !badges.isEmpty {
             lines.append(attributedString(
                 truncated(badges.joined(separator: "  ·  "), to: 56),
-                fontSize: 10 * viewport.scale,
+                fontSize: 10 * mult * viewport.scale,
                 color: Palette.noteText
             ))
         }
@@ -838,9 +861,10 @@ final class BoardRenderer {
     }
 
     private func drawEdgeCaption(
-        _ edge: Edge, at center: CGPoint, viewport: CanvasViewport, in context: CGContext
+        _ edge: Edge, at center: CGPoint, viewport: CanvasViewport, in context: CGContext,
+        showAllFields: Bool = false, spotlightColor: NSColor? = nil
     ) {
-        guard let content = captionContent(for: edge, viewport: viewport) else { return }
+        guard let content = captionContent(for: edge, viewport: viewport, showAllFields: showAllFields) else { return }
         let (lines, sizes, pillSize) = content
         let padding = 5 * viewport.scale
         let pill = CGRect(
@@ -858,6 +882,14 @@ final class BoardRenderer {
         context.setFillColor(Palette.captionBackground.cgColor)
         context.addPath(path)
         context.fillPath()
+        // A packet flowing through paints a colored ring so the live caption
+        // reads as "this connector is active right now".
+        if let spotlightColor {
+            context.setStrokeColor(spotlightColor.cgColor)
+            context.setLineWidth(max(1.5 * viewport.scale, 1))
+            context.addPath(path)
+            context.strokePath()
+        }
 
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)

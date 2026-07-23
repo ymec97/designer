@@ -26,8 +26,9 @@ final class StylePanelModel: ObservableObject {
         /// Fill applies to blocks only — pencil strokes and connectors are
         /// lines, images paint their own pixels.
         var showsFill: Bool { self == .shape || self == .selection }
-        /// Text size applies to anything that renders a label.
-        var showsTextSize: Bool { self == .selection || self == .shape || self == .image }
+        /// Text size applies to anything that renders a label — including
+        /// connectors (sizes the label; property badges scale with it).
+        var showsTextSize: Bool { self == .selection || self == .shape || self == .image || self == .connector }
     }
 
     @Published var isVisible = false

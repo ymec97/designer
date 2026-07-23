@@ -931,10 +931,12 @@ public final class CanvasView: NSView {
                 let world = route.point(atFraction: fraction)
                 let view = viewport.toView(world)
                 renderer.drawSimulationPacket(at: view, in: context, viewport: viewport, color: color)
-                if let edge = board.elements[active.id]?.edge,
-                   let condition = edge.semantic.properties[WellKnownEdgeProperty.condition],
-                   !condition.isEmpty {
-                    renderer.drawSimulationTag(condition, at: view, in: context, viewport: viewport, color: color)
+                // The connector a packet is crossing reveals ALL its fields with
+                // a colored ring, even when the board caption mode is On-Focus
+                // or Off — you always see what's flowing right now.
+                if let edge = board.elements[active.id]?.edge {
+                    renderer.drawActiveEdgeCaption(edge, route: route, edgeID: active.id,
+                                                   color: color, viewport: viewport, in: context)
                 }
             }
         }
