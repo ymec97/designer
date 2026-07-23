@@ -185,6 +185,13 @@ public final class CanvasView: NSView {
         didSet {
             if selection != oldValue {
                 needsDisplay = true
+                // A connector's caption expands (all fields) when it's selected,
+                // so its placement must re-solve — otherwise the revealed fields
+                // reuse the collapsed slot and overshoot. Only dirty when an edge
+                // entered or left the selection (keeps node clicks cheap).
+                if selection.symmetricDifference(oldValue).contains(where: { board.elements[$0]?.edge != nil }) {
+                    captionsDirty = true
+                }
                 delegate?.canvasViewDidChangeSelection(self)
             }
         }

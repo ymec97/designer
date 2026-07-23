@@ -88,8 +88,8 @@ final class BoardRenderer {
     /// World-space caption pill size measured at scale 1 — stable across zoom,
     /// so a placement solve doesn't shift as the font rounds at different zooms
     /// (rendering still measures at the live zoom). B2.
-    private func worldCaptionPillSize(for edge: Edge) -> Size? {
-        guard let content = captionContent(for: edge, viewport: CanvasViewport(scale: 1)) else { return nil }
+    private func worldCaptionPillSize(for edge: Edge, showAllFields: Bool = false) -> Size? {
+        guard let content = captionContent(for: edge, viewport: CanvasViewport(scale: 1), showAllFields: showAllFields) else { return nil }
         return Size(width: Double(content.pillSize.width), height: Double(content.pillSize.height))
     }
 
@@ -340,7 +340,14 @@ final class BoardRenderer {
             }
         }
 
-        context.setStrokeColor(color(hex: node.style.stroke, fallback: Palette.nodeStroke))
+        // A dashed outline drawn in the default (deliberately quiet) node stroke
+        // is nearly invisible — worst in dark mode, where that stroke ≈ the
+        // ground. When the outline is dashed AND the user hasn't chosen a stroke
+        // color, lift the dash to a higher-contrast token so the pattern reads.
+        let dashedDefault = node.style.isDashed && node.style.stroke == nil
+        context.setStrokeColor(dashedDefault
+            ? Palette.dashedOutline.cgColor
+            : color(hex: node.style.stroke, fallback: Palette.nodeStroke))
         context.setLineWidth(CGFloat(node.style.strokeWidth ?? 1.25) * viewport.scale)
         if node.style.isDashed, !sketchy {
             context.setLineDash(phase: 0, lengths: [6 * viewport.scale, 4 * viewport.scale])
@@ -369,13 +376,14 @@ final class BoardRenderer {
         } else {
             context.addPath(path)
             context.strokePath()
-            context.setLineDash(phase: 0, lengths: []) // clear before rim / next element
             // The cylinder's lid rim is stroke-only decoration — putting it
-            // in the fill path punched a winding hole over the label.
+            // in the fill path punched a winding hole over the label. It shares
+            // the body's dash so a dashed cylinder reads consistently.
             if node.shape == .cylinder {
                 context.addPath(Self.cylinderRimPath(in: rect))
                 context.strokePath()
             }
+            context.setLineDash(phase: 0, lengths: []) // clear before the next element
         }
 
         // Embedded image (imported diagrams): aspect-fit inside the frame,
@@ -429,11 +437,17 @@ final class BoardRenderer {
                 context.saveGState()
                 context.setAlpha(Self.dimmedLabelFloor)
             }
+            // Larger text sizes get a wrap budget so L and XL grow visibly
+            // (wrapping to more lines) instead of both shrinking to one fitted
+            // line; small/medium stay single-line.
+            let mult = node.style.effectiveTextMultiplier
+            let budget = mult >= 1.7 ? 3 : (mult > 1 ? 2 : 1)
             drawText(
                 node.semantic.name,
                 fontSize: clampedLabelFontSize(
-                    base: 13, multiplier: node.style.effectiveTextMultiplier,
-                    text: node.semantic.name, frameView: textRect, viewport: viewport),
+                    base: 13, multiplier: mult,
+                    text: node.semantic.name, frameView: textRect, viewport: viewport,
+                    lineBudget: budget),
                 color: labelColor,
                 centeredIn: textRect,
                 context: context
@@ -742,7 +756,11 @@ final class BoardRenderer {
                 // Settled: solve collision-avoided placement (scale-independent
                 // pill size) and cache it. In flight: reuse the cached world
                 // center so the caption just scales instead of jittering (B2).
-                if captionsResolve, let obstacles = captionObstacles, let pillWorld = worldCaptionPillSize(for: edge) {
+                // Reserve the EXPANDED footprint for a selected edge so its
+                // revealed fields stay collision-avoided (the canvas re-solves
+                // captions when edge selection changes).
+                if captionsResolve, let obstacles = captionObstacles,
+                   let pillWorld = worldCaptionPillSize(for: edge, showAllFields: isSelected) {
                     center = captionPlacer.place(
                         preferred: captionFraction, route: route,
                         pillSize: pillWorld, obstacles: obstacles)
@@ -750,7 +768,7 @@ final class BoardRenderer {
                 } else if let cached = captionCenters[edgeID] {
                     center = cached
                 }
-            } else if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport) {
+            } else if let captionObstacles, let pillView = captionPillSize(for: edge, viewport: viewport, showAllFields: isSelected) {
                 center = captionPlacer.place(
                     preferred: captionFraction,
                     route: route,
@@ -759,31 +777,49 @@ final class BoardRenderer {
                     obstacles: captionObstacles
                 )
             }
-            // Selected connectors expand to show every field; unselected ones
+            // Selected connectors expand to show every field (with an accent
+            // ring so the pill separates from the diagram); unselected ones
             // (including hovered / flow-focused in On-Focus mode) show only the
             // label.
             drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context,
-                            showAllFields: isSelected)
+                            showAllFields: isSelected,
+                            spotlightColor: isSelected ? Palette.selection : nil,
+                            emphasizedFill: isSelected)
         }
     }
 
     /// Draws a connector's full caption (all fields) with a colored ring,
     /// regardless of the board caption mode — used by the flow overlay so an
     /// active connector reveals everything while a packet crosses it (F5/B).
-    /// Returns the world caption center so the caller can place it consistently.
+    /// The pill is nudged just OFF the wire (perpendicular to the route) so its
+    /// two field lines don't sit on top of the connector.
     func drawActiveEdgeCaption(
         _ edge: Edge, route: EdgeGeometry.Route, edgeID: ElementID,
         color: NSColor, viewport: CanvasViewport, in context: CGContext
     ) {
         guard viewport.scale >= Self.textVisibilityScale else { return }
-        let center = captionCenters[edgeID] ?? route.point(atFraction: 0.5)
+        let baseCenter = captionCenters[edgeID] ?? route.point(atFraction: 0.5)
+        // Offset perpendicular to the route by half the expanded pill height so
+        // the wire clears the caption. Normal from two nearby route samples.
+        var center = baseCenter
+        if let pill = worldCaptionPillSize(for: edge, showAllFields: true) {
+            let a = route.point(atFraction: 0.48)
+            let b = route.point(atFraction: 0.52)
+            let dx = b.x - a.x, dy = b.y - a.y
+            let len = (dx * dx + dy * dy).squareRoot()
+            if len > 0.0001 {
+                let nx = -dy / len, ny = dx / len   // unit normal
+                let off = pill.height / 2 + 6
+                center = Point(x: baseCenter.x + nx * off, y: baseCenter.y + ny * off)
+            }
+        }
         drawEdgeCaption(edge, at: viewport.toView(center), viewport: viewport, in: context,
-                        showAllFields: true, spotlightColor: color)
+                        showAllFields: true, spotlightColor: color, emphasizedFill: true)
     }
 
     /// The caption pill's rendered size, or nil when the edge has no caption.
-    private func captionPillSize(for edge: Edge, viewport: CanvasViewport) -> CGSize? {
-        guard let content = captionContent(for: edge, viewport: viewport) else { return nil }
+    private func captionPillSize(for edge: Edge, viewport: CanvasViewport, showAllFields: Bool = false) -> CGSize? {
+        guard let content = captionContent(for: edge, viewport: viewport, showAllFields: showAllFields) else { return nil }
         return content.pillSize
     }
 
@@ -813,9 +849,12 @@ final class BoardRenderer {
         if !label.isEmpty {
             lines.append(attributedString(truncated(label, to: 42), fontSize: 12 * mult * viewport.scale, color: Palette.nodeText))
         }
-        if !badges.isEmpty {
+        // One line PER field (not a single joined+truncated line), each cut
+        // individually — so a selected connector shows every property fully
+        // instead of losing the last one to a global character cap.
+        for badge in badges {
             lines.append(attributedString(
-                truncated(badges.joined(separator: "  ·  "), to: 56),
+                truncated(badge, to: 44),
                 fontSize: 10 * mult * viewport.scale,
                 color: Palette.noteText
             ))
@@ -862,7 +901,7 @@ final class BoardRenderer {
 
     private func drawEdgeCaption(
         _ edge: Edge, at center: CGPoint, viewport: CanvasViewport, in context: CGContext,
-        showAllFields: Bool = false, spotlightColor: NSColor? = nil
+        showAllFields: Bool = false, spotlightColor: NSColor? = nil, emphasizedFill: Bool = false
     ) {
         guard let content = captionContent(for: edge, viewport: viewport, showAllFields: showAllFields) else { return }
         let (lines, sizes, pillSize) = content
@@ -879,11 +918,15 @@ final class BoardRenderer {
             cornerHeight: min(6 * viewport.scale, pill.height / 2),
             transform: nil
         )
-        context.setFillColor(Palette.captionBackground.cgColor)
+        // The collapsed label uses the quiet translucent backing; an EXPANDED
+        // caption (selected / flowing) gets a fully-opaque backing so its field
+        // lines separate from the diagram instead of the connector showing
+        // through them.
+        context.setFillColor((emphasizedFill ? Palette.captionBackgroundStrong : Palette.captionBackground).cgColor)
         context.addPath(path)
         context.fillPath()
-        // A packet flowing through paints a colored ring so the live caption
-        // reads as "this connector is active right now".
+        // A ring so the expanded caption reads as a distinct object: the accent
+        // for a selected connector, the flow color while a packet crosses it.
         if let spotlightColor {
             context.setStrokeColor(spotlightColor.cgColor)
             context.setLineWidth(max(1.5 * viewport.scale, 1))
@@ -1424,7 +1467,7 @@ final class BoardRenderer {
                 .paragraphStyle, value: paragraph,
                 range: NSRange(location: 0, length: wrapped.length)
             )
-            let maxLines = min(3, Int((rect.height - 6) / max(size.height, 1)))
+            let maxLines = min(4, Int((rect.height - 6) / max(size.height, 1)))
             let bounds = wrapped.boundingRect(
                 with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin]
@@ -1490,15 +1533,22 @@ final class BoardRenderer {
     /// (view space) — keeps XL text from spilling out of a small shape (F6).
     private func clampedLabelFontSize(
         base: CGFloat, multiplier: Double, text: String,
-        frameView: CGRect, viewport: CanvasViewport
+        frameView: CGRect, viewport: CanvasViewport, lineBudget: Int = 1
     ) -> CGFloat {
         let requested = base * CGFloat(multiplier) * CGFloat(viewport.scale)
         guard !text.isEmpty else { return requested }
         let measured = attributedString(text, fontSize: requested, color: .black).size()
         let maxW = max(frameView.width - 8 * viewport.scale, 1)
         let maxH = max(frameView.height - 8 * viewport.scale, 1)
-        let widthRatio = measured.width > maxW ? maxW / measured.width : 1
-        let heightRatio = measured.height > maxH ? maxH / measured.height : 1
+        // With a line budget > 1 the label may WRAP instead of shrinking: it
+        // fits if its total advance spans that many lines and those lines fit
+        // the height. This is what lets L and XL actually differ on a node with
+        // vertical room (both used to collapse to the same width-fitted size).
+        let budget = CGFloat(max(lineBudget, 1))
+        let widthRatio = measured.width > maxW * budget ? (maxW * budget) / measured.width : 1
+        let linesNeeded = min(budget, max(1, (measured.width / maxW).rounded(.up)))
+        let stackedHeight = measured.height * linesNeeded
+        let heightRatio = stackedHeight > maxH ? maxH / stackedHeight : 1
         let ratio = min(widthRatio, heightRatio)
         // Never shrink below the readable floor the renderer already respects.
         return max(requested * ratio, min(requested, 9))
@@ -1552,6 +1602,10 @@ enum Palette {
     static let danglingEdge = Graphite.dangling
     static let snapGuide = Graphite.snapGuide
     static let captionBackground = Graphite.captionBackground
+    static let captionBackgroundStrong = Graphite.captionBackgroundStrong
+    /// Higher-contrast outline for a dashed default-stroke node so the dashes
+    /// read in both themes (the quiet nodeStroke vanishes when dashed in dark).
+    static let dashedOutline = Graphite.inkFaint
     static let nodeText = Graphite.nodeText
     static let noteText = Graphite.noteText
     static let inkStroke = Graphite.ink_stroke

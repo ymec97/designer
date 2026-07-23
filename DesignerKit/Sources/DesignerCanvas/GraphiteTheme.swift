@@ -92,6 +92,10 @@ public enum Graphite {
 
     /// Translucent backing so edge captions read over lines without hard boxes.
     public static let captionBackground = dynamic(light: "#FBFBFD", dark: "#16181D").withAlphaComponent(0.9)
+    /// Opaque, slightly lifted backing for an EXPANDED caption (selected /
+    /// flowing) so its field lines separate cleanly from the diagram — a
+    /// notch above the ground instead of blending into it.
+    public static let captionBackgroundStrong = dynamic(light: "#FFFFFF", dark: "#22262E")
 
     /// Node elevation shadow — soft in light, near-invisible-but-present depth
     /// in dark (where a lighter node already lifts off the ground).

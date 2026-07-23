@@ -747,9 +747,15 @@ final class UITestDriver {
         let farView = canvasView.viewport.toView(bentRoute.point(atFraction: 0.78))
         drag(from: farView, to: CGPoint(x: farView.x + 10, y: farView.y + 70))
         expect(currentWaypoints().count == 2, "grabbing a segment grows a second joint")
+        // A broken bend step must FAIL this one step, not trap the whole
+        // battery on an out-of-range joint subscript.
+        guard currentWaypoints().count == 2 else {
+            expect(false, "bend produced \(currentWaypoints().count) joints, expected 2 — skipping joint sub-steps")
+            return
+        }
 
         // Move the FIRST joint on its own — the other joint must not move.
-        let secondBefore = currentWaypoints().count == 2 ? currentWaypoints()[1] : Point.zero
+        let secondBefore = currentWaypoints()[1]
         canvasView.select([edgeElement.id])
         let firstView = canvasView.viewport.toView(currentWaypoints()[0])
         drag(from: firstView, to: CGPoint(x: firstView.x - 24, y: firstView.y - 24))
@@ -760,6 +766,10 @@ final class UITestDriver {
         canvasView.select([edgeElement.id])
         guard let multiRoute = route() else { expect(false, "no multi route"); return }
         let joints = currentWaypoints()
+        guard joints.count == 2 else {
+            expect(false, "expected 2 joints before removal, got \(joints.count) — skipping")
+            return
+        }
         let neighborMid = Point(x: (joints[0].x + multiRoute.end.x) / 2,
                                 y: (joints[0].y + multiRoute.end.y) / 2)
         drag(from: canvasView.viewport.toView(joints[1]),
@@ -768,7 +778,10 @@ final class UITestDriver {
 
         // Straighten: drag the remaining joint back onto the straight line.
         canvasView.select([edgeElement.id])
-        let bendView = canvasView.viewport.toView(currentWaypoints()[0])
+        guard let remaining = currentWaypoints().first else {
+            expect(false, "no joint left to straighten — skipping"); return
+        }
+        let bendView = canvasView.viewport.toView(remaining)
         drag(from: bendView, to: midView)
         expect(currentWaypoints().isEmpty, "dropping on the line should straighten")
 
